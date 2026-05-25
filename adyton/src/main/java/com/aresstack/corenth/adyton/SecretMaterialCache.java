@@ -14,8 +14,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <ul>
  *   <li>RAM-only — never persisted to disk.</li>
  *   <li>Configurable via {@link SecretCachePolicy} (TTL, idle timeout, enabled).</li>
- *   <li>Keyed by a normalized form of the access request identity
- *       (target + principal + purpose + scope + method).</li>
+ *   <li>Keyed by a typed {@link SecretCacheKey} combining credential reference,
+ *       target, principal, purpose, and authentication method.</li>
  *   <li>Entries with different purpose or scope must not share.</li>
  *   <li>Cleared on JVM shutdown and explicit {@link #close()}.</li>
  *   <li>No logging of secret values.</li>
@@ -28,12 +28,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * where two independent caches with different keys and lifecycles caused bugs.
  *
  * @see SecretCachePolicy
+ * @see SecretCacheKey
  * @see SecretMaterial
  */
 public final class SecretMaterialCache implements AutoCloseable {
 
     private final SecretCachePolicy policy;
-    private final Map<String, CacheEntry> entries = new ConcurrentHashMap<>();
+    private final Map<SecretCacheKey, CacheEntry> entries = new ConcurrentHashMap<>();
 
     public SecretMaterialCache(SecretCachePolicy policy) {
         if (policy == null) {
@@ -45,15 +46,15 @@ public final class SecretMaterialCache implements AutoCloseable {
     /**
      * Stores material in the cache if caching is enabled.
      *
-     * @param key      normalized cache key
+     * @param key      typed cache key
      * @param material the secret material to cache
      */
-    void put(String key, SecretMaterial material) {
+    void put(SecretCacheKey key, SecretMaterial material) {
         if (!policy.isEnabled()) {
             return;
         }
-        if (key == null || key.isEmpty()) {
-            throw new IllegalArgumentException("Cache key must not be null or empty");
+        if (key == null) {
+            throw new IllegalArgumentException("Cache key must not be null");
         }
         if (material == null) {
             throw new IllegalArgumentException("Material must not be null");
@@ -66,10 +67,10 @@ public final class SecretMaterialCache implements AutoCloseable {
     /**
      * Retrieves non-expired material from the cache.
      *
-     * @param key the cache key
+     * @param key the typed cache key
      * @return the cached material, or {@code null} if absent, expired, or idle-evicted
      */
-    SecretMaterial get(String key) {
+    SecretMaterial get(SecretCacheKey key) {
         if (!policy.isEnabled()) {
             return null;
         }
@@ -91,14 +92,14 @@ public final class SecretMaterialCache implements AutoCloseable {
         return entry.material;
     }
 
-    /** Removes a specific entry. */
-    void remove(String key) {
+    /** Removes a specific entry by key. */
+    void remove(SecretCacheKey key) {
         entries.remove(key);
     }
 
     /** Removes all entries matching the given target system. */
     void revokeAll(String targetSystem) {
-        entries.entrySet().removeIf(e -> e.getKey().startsWith(targetSystem + ":"));
+        entries.entrySet().removeIf(e -> e.getKey().targetSystem().equals(targetSystem));
     }
 
     /** Returns the current cache size. */

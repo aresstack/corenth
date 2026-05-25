@@ -144,7 +144,7 @@ public final class AccessRequest {
                 && principal.equals(that.principal)
                 && Objects.equals(purpose, that.purpose)
                 && Objects.equals(scope, that.scope)
-                && method == that.method;
+                && method.equals(that.method);
     }
 
     @Override

@@ -86,7 +86,7 @@ public class AccessBrokerContractTest {
         AuthenticationStrategy<TestHandle> strategy = new AuthenticationStrategy<TestHandle>() {
             @Override
             public boolean supports(AuthenticationMethod method) {
-                return method == AuthenticationMethod.FTP_PASSWORD;
+                return AuthenticationMethod.FTP_PASSWORD.equals(method);
             }
 
             @Override
@@ -245,18 +245,93 @@ public class AccessBrokerContractTest {
     @Test
     public void cacheDisabledDoesNotStore() {
         SecretMaterialCache cache = new SecretMaterialCache(SecretCachePolicy.disabled());
-        cache.put("key", new DefaultSecretMaterial("ref"));
-        assertNull(cache.get("key"));
+        SecretCacheKey key = new SecretCacheKey(
+                new SecretRef("ref"), "sys", "user", "purpose",
+                AuthenticationMethod.FTP_PASSWORD);
+        cache.put(key, new DefaultSecretMaterial("ref"));
+        assertNull(cache.get(key));
         assertEquals(0, cache.size());
     }
 
     @Test
     public void cacheClearsOnClose() {
         SecretMaterialCache cache = new SecretMaterialCache(SecretCachePolicy.defaultPolicy());
-        cache.put("key", new DefaultSecretMaterial("ref"));
+        SecretCacheKey key = new SecretCacheKey(
+                new SecretRef("ref"), "sys", "user", "purpose",
+                AuthenticationMethod.FTP_PASSWORD);
+        cache.put(key, new DefaultSecretMaterial("ref"));
         assertEquals(1, cache.size());
         cache.close();
         assertEquals(0, cache.size());
+    }
+
+    // ── SecretCacheKey tests ─────────────────────────────────────────────────
+
+    @Test
+    public void cacheKeyEquality() {
+        SecretCacheKey a = new SecretCacheKey(
+                new SecretRef("keepass://ftp"), "ftp:mainframe", "USER",
+                "nightly", AuthenticationMethod.FTP_PASSWORD);
+        SecretCacheKey b = new SecretCacheKey(
+                new SecretRef("keepass://ftp"), "ftp:mainframe", "USER",
+                "nightly", AuthenticationMethod.FTP_PASSWORD);
+        assertEquals(a, b);
+        assertEquals(a.hashCode(), b.hashCode());
+    }
+
+    @Test
+    public void cacheKeyDiffersByMethod() {
+        SecretCacheKey a = new SecretCacheKey(
+                new SecretRef("ref"), "sys", "user", null,
+                AuthenticationMethod.FTP_PASSWORD);
+        SecretCacheKey b = new SecretCacheKey(
+                new SecretRef("ref"), "sys", "user", null,
+                AuthenticationMethod.HTTP_BASIC);
+        assertNotEquals(a, b);
+    }
+
+    @Test
+    public void cacheKeyDiffersByPurpose() {
+        SecretCacheKey a = new SecretCacheKey(
+                new SecretRef("ref"), "sys", "user", "read",
+                AuthenticationMethod.FTP_PASSWORD);
+        SecretCacheKey b = new SecretCacheKey(
+                new SecretRef("ref"), "sys", "user", "write",
+                AuthenticationMethod.FTP_PASSWORD);
+        assertNotEquals(a, b);
+    }
+
+    @Test
+    public void cacheKeyFromAccessRequest() {
+        AccessRequest req = new AccessRequest(
+                new SecretRef("keepass://wiki"), "wiki:internal",
+                "svc-user", "sync", "read",
+                AuthenticationMethod.MEDIA_WIKI_LOGIN, 60000L);
+        SecretCacheKey key = SecretCacheKey.from(req);
+        assertEquals(new SecretRef("keepass://wiki"), key.credentialRef());
+        assertEquals("wiki:internal", key.targetSystem());
+        assertEquals("svc-user", key.principal());
+        assertEquals("sync", key.purpose());
+        assertEquals(AuthenticationMethod.MEDIA_WIKI_LOGIN, key.method());
+    }
+
+    @Test
+    public void cacheRevokeAllByTarget() {
+        SecretMaterialCache cache = new SecretMaterialCache(SecretCachePolicy.defaultPolicy());
+        SecretCacheKey ftpKey = new SecretCacheKey(
+                new SecretRef("keepass://ftp"), "ftp:mainframe", "USER",
+                "job", AuthenticationMethod.FTP_PASSWORD);
+        SecretCacheKey wikiKey = new SecretCacheKey(
+                new SecretRef("keepass://wiki"), "wiki:internal", "svc",
+                "sync", AuthenticationMethod.MEDIA_WIKI_LOGIN);
+        cache.put(ftpKey, new DefaultSecretMaterial("ftp-ref"));
+        cache.put(wikiKey, new DefaultSecretMaterial("wiki-ref"));
+        assertEquals(2, cache.size());
+
+        cache.revokeAll("ftp:mainframe");
+        assertEquals(1, cache.size());
+        assertNull(cache.get(ftpKey));
+        assertNotNull(cache.get(wikiKey));
     }
 
     // ── AuthenticationMethod tests ───────────────────────────────────────────
@@ -271,6 +346,33 @@ public class AccessBrokerContractTest {
         assertNotNull(AuthenticationMethod.MTLS_CERTIFICATE);
         assertNotNull(AuthenticationMethod.SMB_NET_USE);
         assertNotNull(AuthenticationMethod.SSO);
+    }
+
+    @Test
+    public void authenticationMethodEquality() {
+        assertEquals(AuthenticationMethod.FTP_PASSWORD, AuthenticationMethod.of("ftp-password"));
+        assertEquals(AuthenticationMethod.FTP_PASSWORD.hashCode(),
+                AuthenticationMethod.of("ftp-password").hashCode());
+        assertNotEquals(AuthenticationMethod.FTP_PASSWORD, AuthenticationMethod.NDV_PASSWORD);
+    }
+
+    @Test
+    public void authenticationMethodIsExtensible() {
+        // Adapter modules can introduce new methods without editing adyton core
+        AuthenticationMethod custom = AuthenticationMethod.of("custom-oauth2");
+        assertNotNull(custom);
+        assertEquals("custom-oauth2", custom.name());
+        assertEquals(AuthenticationMethod.of("custom-oauth2"), custom);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void authenticationMethodRejectsNull() {
+        AuthenticationMethod.of(null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void authenticationMethodRejectsEmpty() {
+        AuthenticationMethod.of("");
     }
 
     // ── Exception hierarchy tests ────────────────────────────────────────────
