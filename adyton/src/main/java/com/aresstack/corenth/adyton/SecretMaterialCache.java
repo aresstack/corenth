@@ -15,18 +15,18 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>RAM-only — never persisted to disk.</li>
  *   <li>Configurable via {@link SecretCachePolicy} (TTL, idle timeout, enabled).</li>
  *   <li>Keyed by a typed {@link SecretCacheKey} combining credential reference,
- *       target, principal, purpose, and authentication method.</li>
+ *       target, principal, purpose, scope, and authentication method.</li>
  *   <li>Entries with different purpose or scope must not share.</li>
  *   <li>The broker or runtime must call {@link #close()} during shutdown;
  *       this class does not register a JVM shutdown hook.</li>
  *   <li>No logging of secret values.</li>
  * </ul>
  * <p>
- * <b>Migration note:</b> Replaces both MainframeMate caches
+ * <b>Migration note:</b> Replaces the MainframeMate secret-material cache concepts
  * ({@code CredentialStore.sessionCache} and
  * {@code LoginManager.sessionPasswordCache}) with a single, policy-driven
- * cache that enforces TTL and idle timeout — fixing the structural defects
- * where two independent caches with different keys and lifecycles caused bugs.
+ * secret-material cache that enforces TTL and idle timeout — fixing the structural
+ * defects where two independent caches with different keys and lifecycles caused bugs.
  *
  * @see SecretCachePolicy
  * @see SecretCacheKey
@@ -46,6 +46,9 @@ public final class SecretMaterialCache implements AutoCloseable {
 
     /**
      * Stores material in the cache if caching is enabled.
+     * <p>
+     * If the key already has a cached entry, the replaced material is closed
+     * immediately so stale secret arrays are wiped.
      *
      * @param key      typed cache key
      * @param material the secret material to cache
@@ -62,7 +65,10 @@ public final class SecretMaterialCache implements AutoCloseable {
         }
         long now = System.currentTimeMillis();
         long expiresAt = now + policy.ttlMillis();
-        entries.put(key, new CacheEntry(material, expiresAt, now));
+        CacheEntry replaced = entries.put(key, new CacheEntry(material, expiresAt, now));
+        if (replaced != null) {
+            replaced.material.close();
+        }
     }
 
     /**
@@ -81,14 +87,12 @@ public final class SecretMaterialCache implements AutoCloseable {
         }
         long now = System.currentTimeMillis();
         if (now >= entry.expiresAt) {
-            entries.remove(key);
-            entry.material.close();
+            removeObservedEntry(key, entry);
             return null;
         }
         if (policy.idleTimeoutMillis() > 0
                 && (now - entry.lastAccessedAt) >= policy.idleTimeoutMillis()) {
-            entries.remove(key);
-            entry.material.close();
+            removeObservedEntry(key, entry);
             return null;
         }
         entry.lastAccessedAt = now;
@@ -105,13 +109,11 @@ public final class SecretMaterialCache implements AutoCloseable {
 
     /** Removes all entries matching the given target system, wiping each. */
     void revokeAll(String targetSystem) {
-        entries.entrySet().removeIf(e -> {
-            if (e.getKey().targetSystem().equals(targetSystem)) {
-                e.getValue().material.close();
-                return true;
+        for (Map.Entry<SecretCacheKey, CacheEntry> entry : entries.entrySet()) {
+            if (entry.getKey().targetSystem().equals(targetSystem)) {
+                removeObservedEntry(entry.getKey(), entry.getValue());
             }
-            return false;
-        });
+        }
     }
 
     /** Returns the current cache size. */
@@ -119,18 +121,23 @@ public final class SecretMaterialCache implements AutoCloseable {
         return entries.size();
     }
 
-    /** Clears all cached material, wiping each entry. Called on shutdown and explicit close. */
+    /** Clears all cached material, wiping each entry. Called by explicit close. */
     @Override
     public void close() {
-        for (CacheEntry entry : entries.values()) {
-            entry.material.close();
+        for (Map.Entry<SecretCacheKey, CacheEntry> entry : entries.entrySet()) {
+            removeObservedEntry(entry.getKey(), entry.getValue());
         }
-        entries.clear();
     }
 
     /** Returns the policy governing this cache. */
     public SecretCachePolicy policy() {
         return policy;
+    }
+
+    private void removeObservedEntry(SecretCacheKey key, CacheEntry observed) {
+        if (entries.remove(key, observed)) {
+            observed.material.close();
+        }
     }
 
     private static final class CacheEntry {
