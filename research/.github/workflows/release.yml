@@ -1,0 +1,100 @@
+name: Release Workflow
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '8'
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Print project structure
+        run: ./gradlew projects
+
+      - name: Build project
+        run: ./gradlew clean :app:shadowJar :plugins:excelimport:jar :plugins:webSearch:jar
+
+      - name: Determine version
+        id: version
+        run: |
+          version=$(grep '^version=' gradle.properties | cut -d'=' -f2)
+          echo "current_version=$version" >> $GITHUB_ENV
+          new_version=$(echo "$version" | awk -F. '{
+            $NF += 1
+            for (i = 1; i <= NF; i++) {
+              printf "%s%s", $i, (i == NF ? "" : ".")
+            }
+          }')
+          echo "new_version=$new_version" >> $GITHUB_ENV
+
+      - name: Update version in gradle.properties
+        run: |
+          sed -i "s/^version=.*$/version=$new_version/" gradle.properties
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add gradle.properties
+          git commit -m "Bump version to $new_version" || echo "No version change to commit"
+          git push origin master || echo "No changes pushed"
+
+      - name: Create Git tag
+        run: |
+          git tag "v$new_version" || echo "Tag already exists"
+          git push origin "v$new_version" || echo "Tag push skipped"
+
+      - name: Find JAR file
+        id: find_jar
+        run: |
+          JAR_FILE=$(ls app/build/libs/*-all.jar | grep -v 'sources' | head -n 1)
+          echo "jar_file=$JAR_FILE" >> $GITHUB_ENV
+
+      - name: Find ExcelImport Plugin JAR
+        id: find_plugin
+        run: |
+          PLUGIN_JAR=$(ls plugins/excelimport/build/libs/*.jar | grep -v sources | head -n 1)
+          echo "plugin_jar=$PLUGIN_JAR" >> $GITHUB_ENV
+
+      - name: Find WebSearch Plugin JAR
+        id: find_websearch_plugin
+        run: |
+          WEBSEARCH_PLUGIN_JAR=$(ls plugins/webSearch/build/libs/*.jar | grep -v sources | head -n 1)
+          echo "websearch_plugin_jar=$WEBSEARCH_PLUGIN_JAR" >> $GITHUB_ENV
+
+      - name: Find Core JAR
+        id: find_core
+        run: |
+          CORE_JAR=$(ls core/build/libs/*.jar | grep -v sources | head -n 1)
+          echo "core_jar=$CORE_JAR" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ env.new_version }}"
+          name: "Release v${{ env.new_version }}"
+          draft: false
+          prerelease: false
+          files: |
+            ${{ env.jar_file }}
+            ${{ env.plugin_jar }}
+            ${{ env.websearch_plugin_jar }}
+            ${{ env.core_jar }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

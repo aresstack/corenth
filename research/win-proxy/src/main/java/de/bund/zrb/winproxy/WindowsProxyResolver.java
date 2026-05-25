@@ -1,0 +1,528 @@
+package de.bund.zrb.winproxy;
+
+import java.net.URI;
+import java.util.Locale;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+/**
+ * Detects proxy settings on Windows by reading the Windows Registry and
+ * evaluating PAC/WPAD auto-configuration scripts via GraalJS.
+ * <p>
+ * <b>No PowerShell required.</b> This works on hardened systems where
+ * PowerShell Constrained Language Mode (CLM) blocks .NET method calls
+ * like {@code [System.Net.WebRequest]::GetSystemWebProxy()}.
+ *
+ * <h3>How it works</h3>
+ * <ol>
+ *   <li>Searches <b>all four registry hives</b> (GPO first!) for {@code AutoConfigURL}:
+ *       <ol>
+ *         <li>{@code HKCU\Software\Policies\...\Internet Settings} (User GPO)</li>
+ *         <li>{@code HKLM\Software\Policies\...\Internet Settings} (Machine GPO)</li>
+ *         <li>{@code HKCU\Software\Microsoft\...\Internet Settings} (User settings)</li>
+ *         <li>{@code HKLM\Software\Microsoft\...\Internet Settings} (Machine settings)</li>
+ *       </ol>
+ *       If found, downloads the PAC file and evaluates {@code FindProxyForURL()} via GraalJS.</li>
+ *   <li>Checks the {@code DefaultConnectionSettings} binary blob for an embedded PAC URL
+ *       (flag {@code 0x04}).</li>
+ *   <li>Tries WPAD auto-detect ({@code http://wpad/wpad.dat}) if the auto-detect flag
+ *       ({@code 0x08}) is set in {@code DefaultConnectionSettings}.</li>
+ *   <li>Falls back to static proxy settings ({@code ProxyEnable} + {@code ProxyServer})
+ *       across all four registry hives.</li>
+ *   <li>Respects the {@code ProxyOverride} bypass list (wildcards, {@code <local>}).</li>
+ * </ol>
+ *
+ * <h3>Why GPO keys matter</h3>
+ * On hardened enterprise machines (e.g. Windows 11 with Group Policy), the PAC URL is
+ * typically deployed via GPO and stored in {@code HKCU\Software\Policies\...} or
+ * {@code HKLM\Software\Policies\...}. The normal user-level key
+ * ({@code HKCU\Software\Microsoft\...\Internet Settings}) will be <b>empty</b>.
+ * Only checking the user-level key results in a false DIRECT result.
+ *
+ * <h3>Usage</h3>
+ * <pre>{@code
+ * // Full auto-detection (GPO PAC → user PAC → blob PAC → WPAD → static → DIRECT)
+ * ProxyResult result = WindowsProxyResolver.resolve("https://example.com");
+ *
+ * // Choose PAC URL source explicitly:
+ * ProxyResult r1 = WindowsProxyResolver.resolve(target, PacUrlSource.DIRECT,
+ *     "http://wpad.corp.local/wpad.dat");
+ * ProxyResult r2 = WindowsProxyResolver.resolve(target, PacUrlSource.REGISTRY, null);
+ * ProxyResult r3 = WindowsProxyResolver.resolve(target, PacUrlSource.POWERSHELL, null);
+ *
+ * if (result.isDirect()) {
+ *     connection = url.openConnection();
+ * } else {
+ *     connection = url.openConnection(result.toJavaProxy());
+ * }
+ *
+ * // Just evaluate a specific PAC URL
+ * ProxyResult pac = WindowsProxyResolver.evaluatePac(
+ *     "http://wpad.corp.local/wpad.dat", "https://example.com");
+ *
+ * // Raw registry access
+ * String autoConfig = WindowsProxyResolver.readRegistryValue(
+ *     WindowsProxyResolver.INTERNET_SETTINGS_KEY, "AutoConfigURL");
+ * }</pre>
+ *
+ * <h3>Dependencies</h3>
+ * <ul>
+ *   <li><b>GraalJS 21.2.0</b> ({@code org.graalvm.js:js}) — for PAC script evaluation</li>
+ *   <li><b>reg.exe</b> — ships with every Windows installation</li>
+ * </ul>
+ *
+ * @see ProxyResult
+ */
+public final class WindowsProxyResolver {
+
+    private static final Logger LOG = Logger.getLogger(WindowsProxyResolver.class.getName());
+
+    /** The Windows Registry key containing user-level Internet/proxy settings. */
+    public static final String INTERNET_SETTINGS_KEY =
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+
+    /**
+     * Default PowerShell command to discover the PAC URL from the Windows Registry.
+     * <p>
+     * This works on most machines — including hardened Windows 11 with
+     * PowerShell Constrained Language Mode — because {@code Get-ItemProperty}
+     * is a whitelisted cmdlet even under CLM.
+     * <p>
+     * Used as fallback when {@link PacUrlSource#POWERSHELL} is selected
+     * without a custom script.
+     */
+    public static final String DEFAULT_PAC_DISCOVERY_SCRIPT =
+            "(Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings').AutoConfigURL";
+
+    private WindowsProxyResolver() {}
+
+    // ── Public API ───────────────────────────────────────────────
+
+    /**
+     * Resolves the proxy using the full Windows auto-detection chain (registry-based).
+     * Equivalent to {@code resolve(url, PacUrlSource.REGISTRY, null)}.
+     *
+     * @param url the target URL (e.g. {@code "https://example.com"})
+     * @return a {@link ProxyResult} — never {@code null}
+     * @see #resolve(String, PacUrlSource, String)
+     */
+    public static ProxyResult resolve(String url) {
+        try {
+            // 1) Check all registry hives for AutoConfigURL (GPO keys first!)
+            //    On hardened enterprise machines, the PAC URL is deployed via Group Policy
+            //    and stored under Software\Policies\...\Internet Settings, NOT the normal
+            //    user-level key.
+            String autoConfigUrl = RegistryReader.queryValueFromAllHives("AutoConfigURL");
+            if (autoConfigUrl != null && !autoConfigUrl.isEmpty()) {
+                LOG.fine("[WinProxy] AutoConfigURL = " + autoConfigUrl);
+                ProxyResult pacResult = evaluatePacInternal(autoConfigUrl, url);
+                if (pacResult != null) {
+                    return pacResult;
+                }
+                LOG.fine("[WinProxy] PAC evaluation failed for " + autoConfigUrl + ", falling through");
+            }
+
+            // 2) Check DefaultConnectionSettings blob for embedded PAC URL
+            //    (may contain a PAC URL even when AutoConfigURL is not a separate registry value)
+            String blobPacUrl = RegistryReader.queryAutoConfigUrlFromBlob();
+            if (blobPacUrl != null && !blobPacUrl.equals(autoConfigUrl)) {
+                LOG.fine("[WinProxy] Blob PAC URL = " + blobPacUrl);
+                ProxyResult blobResult = evaluatePacInternal(blobPacUrl, url);
+                if (blobResult != null) {
+                    return blobResult;
+                }
+                LOG.fine("[WinProxy] Blob PAC evaluation failed, falling through");
+            }
+
+            // 3) WPAD auto-detect: if the "Automatically detect settings" flag is set,
+            //    try the standard WPAD URL http://wpad/wpad.dat
+            //    (Windows resolves "wpad" using DNS devolution, appending domain suffixes)
+            if (isWpadAutoDetectEnabled()) {
+                LOG.fine("[WinProxy] WPAD auto-detect is enabled, trying http://wpad/wpad.dat");
+                ProxyResult wpadResult = resolveViaWpad(url);
+                if (wpadResult != null) {
+                    return wpadResult;
+                }
+                LOG.fine("[WinProxy] WPAD evaluation failed or returned null, falling through");
+            }
+
+            // 4) Check static proxy across all registry hives
+            return resolveStatic(url);
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "[WinProxy] Resolution failed", e);
+            return ProxyResult.direct("error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Resolves the proxy for the given URL using the specified {@link PacUrlSource} strategy.
+     * <p>
+     * This is the <b>primary facade method</b> — callers choose how the PAC URL is obtained:
+     * <ul>
+     *   <li>{@link PacUrlSource#DIRECT} — {@code pacUrlOrScript} is the PAC URL itself</li>
+     *   <li>{@link PacUrlSource#REGISTRY} — searches all four registry hives
+     *       (GPO first), falls back to blob/WPAD/static. {@code pacUrlOrScript} is ignored.</li>
+     *   <li>{@link PacUrlSource#POWERSHELL} — runs {@code pacUrlOrScript} as a PowerShell command;
+     *       its stdout is the PAC URL. Falls back to {@link #DEFAULT_PAC_DISCOVERY_SCRIPT}
+     *       if {@code pacUrlOrScript} is {@code null}/empty.</li>
+     * </ul>
+     *
+     * <h4>Example</h4>
+     * <pre>{@code
+     * // User provides the PAC URL directly:
+     * ProxyResult r = WindowsProxyResolver.resolve(target, PacUrlSource.DIRECT,
+     *                     "http://wpad.corp.local/wpad.dat");
+     *
+     * // Auto-detect from registry (same as resolve(target)):
+     * ProxyResult r = WindowsProxyResolver.resolve(target, PacUrlSource.REGISTRY, null);
+     *
+     * // Run default PowerShell discovery command:
+     * ProxyResult r = WindowsProxyResolver.resolve(target, PacUrlSource.POWERSHELL, null);
+     *
+     * // Run custom PowerShell command:
+     * ProxyResult r = WindowsProxyResolver.resolve(target, PacUrlSource.POWERSHELL,
+     *                     "(Get-ItemProperty -Path 'HKCU:\\...').AutoConfigURL");
+     * }</pre>
+     *
+     * @param targetUrl      the URL to resolve the proxy for (e.g. {@code "https://example.com"})
+     * @param source         how to obtain the PAC URL
+     * @param pacUrlOrScript meaning depends on {@code source}: PAC URL, PowerShell command, or {@code null}
+     * @return a {@link ProxyResult} — never {@code null}
+     */
+    public static ProxyResult resolve(String targetUrl, PacUrlSource source, String pacUrlOrScript) {
+        if (source == null) {
+            source = PacUrlSource.REGISTRY;
+        }
+
+        switch (source) {
+            case DIRECT:
+                if (pacUrlOrScript == null || pacUrlOrScript.trim().isEmpty()) {
+                    return ProxyResult.direct("pac-url-empty");
+                }
+                return evaluatePac(pacUrlOrScript.trim(), targetUrl);
+
+            case POWERSHELL:
+                return resolveViaPowerShellScript(targetUrl, pacUrlOrScript);
+
+            case REGISTRY:
+            default:
+                return resolve(targetUrl);
+        }
+    }
+
+    /**
+     * Resolves the proxy using <b>only</b> the static registry settings
+     * ({@code ProxyEnable}, {@code ProxyServer}, {@code ProxyOverride}).
+     * <p>
+     * Searches all four registry hives (GPO first, then user, then machine).
+     * Skips AutoConfigURL / PAC evaluation entirely.
+     *
+     * @param url the target URL
+     * @return a {@link ProxyResult} — never {@code null}
+     */
+    public static ProxyResult resolveStatic(String url) {
+        try {
+            // Search all hives for a ProxyEnable=1 + ProxyServer combination
+            for (String key : RegistryReader.SETTINGS_KEYS) {
+                String proxyEnable = RegistryReader.queryValue(key, "ProxyEnable");
+                if (!"0x1".equals(proxyEnable != null ? proxyEnable.trim() : "")) {
+                    continue;
+                }
+
+                String proxyServer = RegistryReader.queryValue(key, "ProxyServer");
+                if (proxyServer == null || proxyServer.trim().isEmpty()) {
+                    continue;
+                }
+
+                LOG.fine("[WinProxy] Static proxy found in " + key + ": " + proxyServer);
+
+                // Check bypass list (from same hive, then from all hives)
+                String proxyOverride = RegistryReader.queryValue(key, "ProxyOverride");
+                if (proxyOverride == null || proxyOverride.trim().isEmpty()) {
+                    // Also try to find ProxyOverride in other hives
+                    proxyOverride = RegistryReader.queryValueFromAllHives("ProxyOverride");
+                }
+
+                if (proxyOverride != null && !proxyOverride.trim().isEmpty() && url != null) {
+                    try {
+                        String targetHost = URI.create(url).getHost();
+                        if (targetHost != null && isBypassed(targetHost, proxyOverride)) {
+                            return ProxyResult.direct("bypass-match");
+                        }
+                    } catch (Exception ignore) { }
+                }
+
+                String server = proxyServer.trim();
+
+                // Handle protocol-specific format: "http=host:port;https=host:port"
+                if (server.contains("=")) {
+                    String extracted = extractProxyForProtocol(server, url);
+                    if (extracted != null) {
+                        server = extracted;
+                    } else {
+                        continue; // no matching protocol in this hive, try next
+                    }
+                }
+
+                return parseHostPort(server, "static");
+            }
+
+            return ProxyResult.direct("proxy-disabled");
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "[WinProxy] Static resolution failed", e);
+            return ProxyResult.direct("error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Evaluates a PAC auto-configuration script from the given URL.
+     * <p>
+     * Downloads the PAC file (bypassing any proxy) and evaluates
+     * {@code FindProxyForURL(targetUrl, host)} via GraalJS.
+     *
+     * @param pacUrl    the PAC file URL (e.g. {@code "http://wpad.corp.local/wpad.dat"})
+     * @param targetUrl the URL to resolve the proxy for
+     * @return a {@link ProxyResult} — never {@code null}
+     */
+    public static ProxyResult evaluatePac(String pacUrl, String targetUrl) {
+        ProxyResult result = evaluatePacInternal(pacUrl, targetUrl);
+        return result != null ? result : ProxyResult.direct("pac-evaluation-failed");
+    }
+
+    /**
+     * Evaluates a PAC script string (not a URL) against the given target URL.
+     * <p>
+     * Useful for testing PAC scripts without downloading them first.
+     *
+     * @param pacScript the JavaScript PAC script content
+     * @param targetUrl the URL to resolve the proxy for
+     * @return a {@link ProxyResult} — never {@code null}
+     */
+    public static ProxyResult evaluatePacScript(String pacScript, String targetUrl) {
+        try {
+            String pacResult = PacEvaluator.evaluateScript(pacScript, targetUrl);
+            if (pacResult == null) {
+                return ProxyResult.direct("pac-script-null");
+            }
+            return parsePacResult(pacResult.trim());
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "[WinProxy] PAC script evaluation failed", e);
+            return ProxyResult.direct("pac-script-error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Reads a single value from the Windows Registry via {@code reg.exe}.
+     *
+     * @param key       full registry key path (e.g. {@link #INTERNET_SETTINGS_KEY})
+     * @param valueName name of the value to query (e.g. {@code "AutoConfigURL"})
+     * @return the value string, or {@code null} if not found
+     */
+    public static String readRegistryValue(String key, String valueName) {
+        return RegistryReader.queryValue(key, valueName);
+    }
+
+    /**
+     * Searches all four registry hives for the given value name and returns the
+     * first non-empty result. Group Policy keys are checked first.
+     *
+     * @param valueName name of the value to query (e.g. {@code "AutoConfigURL"})
+     * @return the first non-empty value found, or {@code null}
+     * @see RegistryReader#SETTINGS_KEYS
+     */
+    public static String readRegistryValueFromAllHives(String valueName) {
+        return RegistryReader.queryValueFromAllHives(valueName);
+    }
+
+    /**
+     * Checks if a host matches the Windows proxy bypass pattern list.
+     * <p>
+     * Supports:
+     * <ul>
+     *   <li>Exact match: {@code "localhost"}</li>
+     *   <li>Wildcard prefix: {@code "*.corp.local"}</li>
+     *   <li>Wildcard suffix: {@code "10.*"}</li>
+     *   <li>{@code <local>} — matches hostnames without dots</li>
+     * </ul>
+     * Patterns are separated by semicolons, matching is case-insensitive.
+     *
+     * @param host          the target hostname
+     * @param proxyOverride the {@code ProxyOverride} value from the registry
+     * @return {@code true} if the host is bypassed
+     */
+    public static boolean isBypassed(String host, String proxyOverride) {
+        if (host == null || proxyOverride == null) return false;
+        String lowerHost = host.toLowerCase(Locale.ROOT);
+        for (String pattern : proxyOverride.split(";")) {
+            String p = pattern.trim().toLowerCase(Locale.ROOT);
+            if (p.isEmpty()) continue;
+            if ("<local>".equals(p)) {
+                if (!lowerHost.contains(".")) return true;
+                continue;
+            }
+            if (p.startsWith("*")) {
+                if (lowerHost.endsWith(p.substring(1))) return true;
+            } else if (p.endsWith("*")) {
+                if (lowerHost.startsWith(p.substring(0, p.length() - 1))) return true;
+            } else if (lowerHost.equals(p)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns {@code true} if the "Automatically detect settings" (WPAD) flag is enabled
+     * in the Windows connection settings.
+     * <p>
+     * Reads the {@code DefaultConnectionSettings} binary value from
+     * {@code HKCU\...\Internet Settings\Connections} and checks bit 3 (0x08)
+     * of the flags byte at offset 8.
+     */
+    public static boolean isWpadAutoDetectEnabled() {
+        int flags = RegistryReader.queryConnectionFlags();
+        if (flags < 0) return false; // unable to read
+        return (flags & RegistryReader.FLAG_AUTO_DETECT) != 0;
+    }
+
+    /**
+     * Reads the raw connection flags byte from {@code DefaultConnectionSettings}.
+     * Useful for diagnostics. Returns -1 if unreadable.
+     *
+     * @see #isWpadAutoDetectEnabled()
+     */
+    public static int readConnectionFlags() {
+        return RegistryReader.queryConnectionFlags();
+    }
+
+    // ── Internal ─────────────────────────────────────────────────
+
+    /**
+     * Tries WPAD auto-detection by downloading {@code http://wpad/wpad.dat}.
+     * Windows DNS resolver appends configured domain suffixes, so "wpad" typically
+     * resolves to e.g. "wpad.corp.local" automatically.
+     * <p>
+     * Note: This is a last-resort fallback. On enterprise machines, the PAC URL
+     * is usually found in the registry (GPO keys or DefaultConnectionSettings blob).
+     * Pure DHCP option 252 WPAD URLs cannot be read from the registry — only
+     * the native WinHTTP API can discover them.
+     *
+     * @return a {@link ProxyResult}, or {@code null} if WPAD failed
+     */
+    private static ProxyResult resolveViaWpad(String targetUrl) {
+        try {
+            String wpadResult = PacEvaluator.evaluate("http://wpad/wpad.dat", targetUrl);
+            if (wpadResult == null) {
+                return null;
+            }
+            ProxyResult result = parsePacResult(wpadResult.trim());
+            // Re-tag reason with "wpad" prefix so callers can see the source
+            if (result.isDirect()) {
+                return ProxyResult.direct("wpad-direct");
+            } else {
+                return ProxyResult.proxy(result.getHost(), result.getPort(), "wpad");
+            }
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "[WinProxy] WPAD evaluation failed", e);
+            return null;
+        }
+    }
+
+    private static ProxyResult evaluatePacInternal(String pacUrl, String targetUrl) {
+        try {
+            String pacResult = PacEvaluator.evaluate(pacUrl, targetUrl);
+            if (pacResult == null) {
+                return null; // evaluation failed — caller should try fallback
+            }
+            return parsePacResult(pacResult.trim());
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "[WinProxy] PAC evaluation failed for " + pacUrl, e);
+            return null;
+        }
+    }
+
+    /**
+     * Parses a PAC result string like {@code "PROXY 10.0.0.1:3128"},
+     * {@code "PROXY host:port; DIRECT"}, or {@code "DIRECT"}.
+     */
+    static ProxyResult parsePacResult(String pacResult) {
+        if (pacResult == null || pacResult.isEmpty() || "DIRECT".equalsIgnoreCase(pacResult)) {
+            return ProxyResult.direct("pac-direct");
+        }
+
+        for (String entry : pacResult.split(";")) {
+            String trimmed = entry.trim();
+            if (trimmed.toUpperCase(Locale.ROOT).startsWith("PROXY ")) {
+                String hostPort = trimmed.substring(6).trim();
+                ProxyResult parsed = parseHostPort(hostPort, "pac");
+                if (!parsed.isDirect()) {
+                    return parsed;
+                }
+            }
+        }
+        return ProxyResult.direct("pac-direct");
+    }
+
+    private static ProxyResult parseHostPort(String hostPort, String source) {
+        int idx = hostPort.lastIndexOf(':');
+        if (idx > 0 && idx < hostPort.length() - 1) {
+            String host = hostPort.substring(0, idx).trim();
+            String portStr = hostPort.substring(idx + 1).trim().replaceAll("[^0-9]", "");
+            if (!portStr.isEmpty()) {
+                try {
+                    int port = Integer.parseInt(portStr);
+                    if (port > 0 && port <= 65535) {
+                        return ProxyResult.proxy(host, port, source);
+                    }
+                } catch (NumberFormatException ignore) { }
+            }
+        }
+        return ProxyResult.direct(source + "-invalid: " + hostPort);
+    }
+
+    /**
+     * Obtains the PAC URL by running a PowerShell command, then evaluates the PAC file.
+     * Falls back to {@link #DEFAULT_PAC_DISCOVERY_SCRIPT} if no script is provided.
+     */
+    private static ProxyResult resolveViaPowerShellScript(String targetUrl, String script) {
+        String effectiveScript = (script != null && !script.trim().isEmpty())
+                ? script.trim()
+                : DEFAULT_PAC_DISCOVERY_SCRIPT;
+
+        LOG.fine("[WinProxy] Running PAC URL discovery script: " + effectiveScript);
+        String pacUrl = ScriptRunner.executePowerShell(effectiveScript);
+
+        if (pacUrl == null || pacUrl.trim().isEmpty()) {
+            return ProxyResult.direct("pac-script-empty");
+        }
+        pacUrl = pacUrl.trim();
+        LOG.fine("[WinProxy] PAC URL from script: " + pacUrl);
+
+        return evaluatePac(pacUrl, targetUrl);
+    }
+
+    static String extractProxyForProtocol(String proxyServer, String url) {
+        String protocol = "http";
+        if (url != null) {
+            try { protocol = URI.create(url).getScheme(); } catch (Exception ignore) { }
+        }
+        if (protocol == null) protocol = "http";
+
+        for (String entry : proxyServer.split(";")) {
+            String[] kv = entry.split("=", 2);
+            if (kv.length == 2 && protocol.equalsIgnoreCase(kv[0].trim())) {
+                return kv[1].trim();
+            }
+        }
+        // Fallback to http entry
+        if (!"http".equalsIgnoreCase(protocol)) {
+            for (String entry : proxyServer.split(";")) {
+                String[] kv = entry.split("=", 2);
+                if (kv.length == 2 && "http".equalsIgnoreCase(kv[0].trim())) {
+                    return kv[1].trim();
+                }
+            }
+        }
+        return null;
+    }
+}

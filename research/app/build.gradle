@@ -1,0 +1,287 @@
+plugins {
+    id 'java'
+    id 'com.github.johnrengelman.shadow' version '7.1.2'
+    id 'application'
+    id 'antlr'
+}
+
+repositories {
+    mavenCentral()
+}
+
+//def javaToolsJar = file("${System.getenv('JAVA_HOME')}/lib/tools.jar")
+def javaHome = System.properties['java.home']
+def javaToolsJar = file("$javaHome/../lib/tools.jar").canonicalFile
+if (!javaToolsJar.exists()) {
+    throw new GradleException("tools.jar nicht gefunden! Stelle sicher, dass JAVA_HOME auf ein Java 8 JDK zeigt.")
+}
+
+dependencies {
+    implementation project(':core')
+
+    // Toolbar Kit (configurable toolbar with DnD, config dialog, etc.)
+    implementation project(':toolbar-kit')
+
+    // FTP
+    implementation 'commons-net:commons-net:3.9.0'
+
+    // NDV (Natural Development Server) - transitiv über :ndv inkl. ndvserveraccess-JAR und ICU4J
+    implementation project(':ndv')
+
+    // DOS emulator (Java port of em-dosbox)
+    implementation project(':dosbox')
+
+    // BetaView integration
+    implementation project(':betaview-integration')
+
+    // Wiki integration (MediaWiki via JWBF)
+    implementation project(':wiki-integration')
+
+    // JSON
+    implementation 'com.google.code.gson:gson:2.10.1'
+
+    // Windows Key Store
+    implementation 'net.java.dev.jna:jna:5.13.0'
+    implementation 'net.java.dev.jna:jna-platform:5.13.0'
+
+    // Excel
+    implementation 'org.apache.poi:poi:5.2.3'
+    implementation 'org.apache.poi:poi-ooxml:5.2.3'
+
+    // GUI (RSyntaxTextArea)
+    implementation 'com.fifesoft:rsyntaxtextarea:3.3.3'
+
+    // Pretty Print
+    implementation 'com.google.googlejavaformat:google-java-format:1.7'
+
+    // REST (AI)
+    implementation 'com.squareup.okhttp3:okhttp:4.9.3'
+
+    // WebSocket client for KeePassRPC (more compatible than OkHttp's built-in WS)
+    implementation 'org.java-websocket:Java-WebSocket:1.5.2'
+
+    // tools.jar für JavaCompiler (nur Java 8, ab Java 9 JShell verwenden!)
+    implementation files(javaToolsJar)
+
+    // Testing
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+
+    // Video Recording – optional compile-time deps (not bundled; downloaded at runtime if needed)
+    // FFmpeg/JavaCV backend
+    compileOnly 'org.bytedeco:javacv:1.5.10'
+    compileOnly 'org.bytedeco:javacpp:1.5.10'
+    compileOnly 'org.bytedeco:ffmpeg:6.1.1-1.5.10'
+    // JCodec backend (pure Java, no audio) – must be implementation for default backend
+    implementation 'org.jcodec:jcodec-javase:0.2.5'
+    // VLC backend (vlcj 3.x for Java 8)
+    compileOnly 'uk.co.caprica:vlcj:3.12.1'
+
+    // ONNX Runtime – lokale LLM-Inferenz via :onnx Submodul
+    implementation project(':onnx')
+
+    // Browser-Core: wd4j + wd4j-mcp-server for the BrowserService implementation
+    implementation project(':wd4j')
+    implementation project(':wd4j-mcp-server')
+
+    // Eigene Plugins lokal zur Laufzeit verfügbar machen
+    runtimeOnly project(':plugins:excelimport') // weitere Plugins kannst du hier ergänzen
+    runtimeOnly project(':plugins:webSearch')
+
+    // VFS (local) — needs httpcore 4.4+ for org.apache.http.ssl.TrustStrategy
+    implementation 'org.apache.commons:commons-vfs2:2.10.0'
+    implementation 'org.apache.httpcomponents:httpclient:4.5.14'
+    implementation 'org.apache.httpcomponents:httpcore:4.4.16'
+
+    // Document Ingestion - Tika (Type Detection + Fallback Extraction)
+    implementation 'org.apache.tika:tika-core:2.9.1'
+    implementation('org.apache.tika:tika-parsers-standard-package:2.9.1') {
+        // Exclude flexmark (requires Java 11+)
+        exclude group: 'com.vladsch.flexmark'
+    }
+
+    // PDFBox for PDF extraction
+    implementation 'org.apache.pdfbox:pdfbox:2.0.30'
+
+    // PST/OST mail file parsing
+    implementation 'com.pff:java-libpst:0.9.3'
+
+    // jsoup for HTML parsing
+    implementation 'org.jsoup:jsoup:1.17.2'
+
+    // Markdown rendering (commonmark - Java 8 compatible)
+    implementation 'org.commonmark:commonmark:0.21.0'
+    implementation 'org.commonmark:commonmark-ext-gfm-tables:0.21.0'
+
+    // Windows Proxy Resolver (Registry + PAC/WPAD via GraalJS — no PowerShell needed)
+    implementation 'com.aresstack:win-proxy-java:0.1.0-beta.1'
+
+    // Mermaid diagram rendering (JS → SVG via GraalJS) + layout extraction + roundtrip editing
+    implementation project(':mermaid-renderer')
+
+    // Lucene for lexical search (RAG) - 8.11.x is Java 8 compatible
+    implementation 'org.apache.lucene:lucene-core:8.11.3'
+    implementation 'org.apache.lucene:lucene-queryparser:8.11.3'
+    implementation 'org.apache.lucene:lucene-analyzers-common:8.11.3'
+
+    // H2 Embedded Database for Archive system
+    implementation 'com.h2database:h2:2.2.224'
+
+    // ANTLR for JCL parsing (4.9.3 = last Java 8 compatible version)
+    antlr 'org.antlr:antlr4:4.9.3'
+    implementation 'org.antlr:antlr4-runtime:4.9.3'
+
+    // 3270 Terminal Emulator (OpenTerm - LGPL)
+    implementation 'com.ascert.open:openterm:1.7.2'
+}
+
+shadowJar {
+    zip64 = true
+    mergeServiceFiles()
+}
+
+application {
+    mainClass = 'de.bund.zrb.Main'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+task testMermaid(type: JavaExec) {
+    description = 'Interactive Mermaid render test (Swing dialog)'
+    group = 'verification'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'de.bund.zrb.mermaid.MermaidRenderTest'
+    jvmArgs '-Djava.awt.headless=false'
+    maxHeapSize = '2g'
+    standardInput = System.in
+    standardOutput = System.out
+    errorOutput = System.err
+}
+
+task testBatikSmoke(type: JavaExec) {
+    description = 'Smoke test: single Mermaid SVG rendered via Batik in a Swing window'
+    group = 'verification'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'de.bund.zrb.mermaid.BatikSmokeTest'
+    jvmArgs '-Djava.awt.headless=false'
+    maxHeapSize = '2g'
+    standardOutput = System.out
+    errorOutput = System.err
+}
+
+// ANTLR configuration
+generateGrammarSource {
+    arguments += ['-visitor', '-listener', '-package', 'de.bund.zrb.jcl.parser']
+    outputDirectory = file("${project.buildDir}/generated-src/antlr/main/de/bund/zrb/jcl/parser")
+}
+
+sourceSets {
+    main {
+        java {
+            srcDir "${project.buildDir}/generated-src/antlr/main"
+        }
+    }
+}
+
+compileJava.dependsOn generateGrammarSource
+
+// ── Icon Theme: unpack branding icons from app.zip ──────────────────────────
+def iconThemeZip = rootProject.file('app.zip')
+def iconThemeDir = file("${project.buildDir}/generated-resources/icon-theme")
+
+sourceSets.main.resources.srcDir iconThemeDir
+
+task unpackBrandingIcons(type: Copy) {
+    description = 'Entpackt das Branding-Icon-ZIP in die generierten Ressourcen.'
+    from zipTree(iconThemeZip)
+    into iconThemeDir
+    // Deterministic: always clean target first
+    doFirst {
+        if (iconThemeDir.exists()) {
+            delete iconThemeDir
+        }
+    }
+    // Validate required files after unpack
+    doLast {
+        def requiredAppSizes = [16, 24, 32, 48, 64, 128, 256]
+        def variants = ['transparent']
+        def missing = []
+
+        variants.each { variant ->
+            requiredAppSizes.each { size ->
+                def expected = file("${iconThemeDir}/app/mainframemate_hub_${variant}_${size}.png")
+                if (!expected.exists()) {
+                    missing << expected.path
+                }
+            }
+        }
+
+        // Optional: if ui/ folder exists, validate required UI icons
+        def uiDir = file("${iconThemeDir}/ui")
+        if (uiDir.exists()) {
+            def requiredUiIcons = [
+                'optionpane_information_32.png',
+                'optionpane_warning_32.png',
+                'optionpane_error_32.png',
+                'optionpane_question_32.png'
+            ]
+            requiredUiIcons.each { icon ->
+                def expected = file("${uiDir}/${icon}")
+                if (!expected.exists()) {
+                    missing << expected.path
+                }
+            }
+        }
+
+        if (!missing.isEmpty()) {
+            throw new GradleException(
+                "Icon Theme Validation FAILED – missing required files:\n  " +
+                missing.join("\n  ")
+            )
+        }
+        logger.lifecycle("[IconTheme] Validation passed – all required icons present.")
+    }
+}
+
+
+// ── Build Info: inject version from Gradle into runtime properties ───────────
+def buildInfoDir = file("${project.buildDir}/generated-resources/build-info")
+task generateBuildInfo {
+    description = 'Generates version.properties from Gradle project version.'
+    inputs.property('version', project.version)
+    outputs.dir buildInfoDir
+    doLast {
+        buildInfoDir.mkdirs()
+        def propsFile = new File(buildInfoDir, "version.properties")
+        propsFile.text = "app.version=${project.version}\n" +
+                         "app.name=MainframeMate\n" +
+                         "build.timestamp=${new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")}\n"
+        logger.lifecycle("[BuildInfo] Generated ${propsFile} (version=${project.version})")
+    }
+}
+
+// OSS License report (generated by root project task)
+def ossLicenseDir = file("${project.buildDir}/generated-resources/oss-licenses")
+sourceSets.main.resources.srcDir ossLicenseDir
+
+sourceSets.main.resources.srcDir buildInfoDir
+processResources.dependsOn generateBuildInfo
+processResources.dependsOn unpackBrandingIcons
+
+// Ensure all plugins are built and installed when assembling the app
+tasks.named('assemble') {
+    dependsOn ':plugins:excelimport:installPlugin'
+    dependsOn ':plugins:webSearch:installPlugin'
+}
+
+//// Includes the AI driver and license files into the JAR
+//sourceSets {
+//    main {
+//        resources {
+//            srcDir 'src/main/resources'
+//            include '**/*.exe'
+//            include '**/*.txt'
+//        }
+//    }
+//}

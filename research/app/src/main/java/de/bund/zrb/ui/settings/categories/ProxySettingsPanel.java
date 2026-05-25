@@ -1,0 +1,324 @@
+package de.bund.zrb.ui.settings.categories;
+
+import de.bund.zrb.model.Settings;
+import de.bund.zrb.net.ProxyDefaults;
+import de.bund.zrb.net.ProxyResolver;
+import de.bund.zrb.ui.settings.FormBuilder;
+import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
+import org.fife.ui.rtextarea.RTextScrollPane;
+
+import javax.swing.*;
+import java.awt.*;
+import java.util.Objects;
+
+public class ProxySettingsPanel extends AbstractSettingsPanel {
+
+    private final JComboBox<String> proxyModeBox;
+    private final JLabel proxyHostLabel;
+    private final JTextField proxyHostField;
+    private final JLabel proxyPortLabel;
+    private final JSpinner proxyPortSpinner;
+    private final JCheckBox proxyNoProxyLocalBox;
+    private final RSyntaxTextArea proxyPacScriptArea;
+    private final RTextScrollPane pacScrollPane;
+    private final JLabel pacSectionLabel;
+    private final JLabel pacUrlLabel;
+    private final JTextField pacUrlField;
+    private final JCheckBox pacUrlFromScriptBox;
+    private final JTextField proxyTestUrlField;
+    private final JLabel proxyTestUrlLabel;
+    private final JButton proxyTestButton;
+    private final JButton resetScriptButton;
+
+    private final JTextField proxyAuthUsernameField;
+    private final JPasswordField proxyAuthPasswordField;
+    private final JPasswordField proxyE2ePasswordField;
+
+    public ProxySettingsPanel(Component parent) {
+        super("proxy", "Proxy");
+        FormBuilder fb = new FormBuilder();
+
+        fb.addInfo("<html><i>Proxy-Konfiguration für ausgehende Verbindungen. " +
+                "Ob ein Proxy tatsächlich verwendet wird, steuert der Haken " +
+                "\"Proxy\" je Passwort-Eintrag (Einstellungen → Passwörter).</i></html>");
+
+        proxyModeBox = new JComboBox<>(new String[]{"DISABLED", "WINDOWS_PAC", "REGISTRY", "PAC_URL", "MANUAL"});
+        proxyModeBox.setSelectedItem(settings.proxyMode == null ? "REGISTRY" : settings.proxyMode);
+        proxyModeBox.setToolTipText("<html>" +
+                "<b>DISABLED</b> — Kein Proxy. Alle Verbindungen gehen DIRECT.<br>" +
+                "<b>WINDOWS_PAC</b> — PowerShell PAC/WPAD-Script (anpassbar).<br>" +
+                "<b>REGISTRY</b> — Proxy aus der Windows Registry (reg.exe, kein PowerShell nötig).<br>" +
+                "<b>PAC_URL</b> — PAC-Datei von einer expliziten URL laden und auswerten (GraalJS).<br>" +
+                "<b>MANUAL</b> — Fester Proxy-Host und -Port." +
+                "</html>");
+        fb.addRow("Proxy-Modus:", proxyModeBox);
+
+        // ── MANUAL-only: Host / Port ──
+        proxyHostLabel = new JLabel("Proxy Host:");
+        proxyHostField = new JTextField(settings.proxyHost == null ? "" : settings.proxyHost, 24);
+        fb.addRow(proxyHostLabel, proxyHostField);
+
+        proxyPortLabel = new JLabel("Proxy Port:");
+        proxyPortSpinner = new JSpinner(new SpinnerNumberModel(settings.proxyPort, 0, 65535, 1));
+        fb.addRow(proxyPortLabel, proxyPortSpinner);
+
+        proxyNoProxyLocalBox = new JCheckBox("Lokale Ziele niemals über Proxy");
+        proxyNoProxyLocalBox.setSelected(settings.proxyNoProxyLocal);
+        fb.addWide(proxyNoProxyLocalBox);
+
+        // ── PAC_URL-only: Explicit PAC URL ──
+        pacUrlFromScriptBox = new JCheckBox("URL per PowerShell-Script beziehen");
+        pacUrlFromScriptBox.setSelected(settings.proxyPacUrlFromScript);
+
+        // Create text field first (referenced by button listeners below)
+        pacUrlLabel = new JLabel(settings.proxyPacUrlFromScript ? "PAC-URL Script:" : "PAC-URL:");
+        String initialPacUrl = settings.proxyPacUrl;
+        if (initialPacUrl == null || initialPacUrl.isEmpty()) {
+            initialPacUrl = settings.proxyPacUrlFromScript ? ProxyDefaults.DEFAULT_PAC_URL_SCRIPT : "";
+        }
+        pacUrlField = new JTextField(initialPacUrl, 40);
+        updatePacUrlHint();
+
+        JButton resetPacUrlScriptButton = new JButton("Standard-Script");
+        resetPacUrlScriptButton.setToolTipText("Setzt das Script auf den Standard-Befehl zurück");
+        resetPacUrlScriptButton.addActionListener(e -> {
+            pacUrlField.setText(ProxyDefaults.DEFAULT_PAC_URL_SCRIPT);
+            if (!pacUrlFromScriptBox.isSelected()) {
+                pacUrlFromScriptBox.setSelected(true);
+                updatePacUrlHint();
+            }
+        });
+
+        JPanel pacUrlScriptRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        pacUrlScriptRow.add(pacUrlFromScriptBox);
+        pacUrlScriptRow.add(resetPacUrlScriptButton);
+        fb.addWide(pacUrlScriptRow);
+        fb.addRow(pacUrlLabel, pacUrlField);
+
+        pacUrlFromScriptBox.addActionListener(e -> {
+            updatePacUrlHint();
+            if (pacUrlFromScriptBox.isSelected()) {
+                String current = pacUrlField.getText().trim();
+                if (current.isEmpty() || current.startsWith("http://") || current.startsWith("https://")) {
+                    pacUrlField.setText(ProxyDefaults.DEFAULT_PAC_URL_SCRIPT);
+                }
+            }
+        });
+
+        // ── PAC/WPAD-only: Script + Test ──
+        fb.addSeparator();
+        pacSectionLabel = new JLabel("PAC / WPAD Script");
+        pacSectionLabel.setFont(pacSectionLabel.getFont().deriveFont(Font.BOLD, pacSectionLabel.getFont().getSize2D() + 1f));
+        fb.addWide(pacSectionLabel);
+
+        proxyPacScriptArea = new RSyntaxTextArea(12, 60);
+        proxyPacScriptArea.setSyntaxEditingStyle("text/powershell");
+        proxyPacScriptArea.setCodeFoldingEnabled(true);
+        proxyPacScriptArea.setText(settings.proxyPacScript == null ? ProxyDefaults.DEFAULT_PAC_SCRIPT : settings.proxyPacScript);
+        pacScrollPane = new RTextScrollPane(proxyPacScriptArea);
+        fb.addWideGrow(pacScrollPane);
+
+        resetScriptButton = new JButton("Standard-Script laden");
+        resetScriptButton.setToolTipText("Setzt das PAC/WPAD-Script auf die Werkseinstellung zurück");
+        resetScriptButton.addActionListener(e -> {
+            int answer = JOptionPane.showConfirmDialog(parent,
+                    "Das aktuelle Script wird durch das Standard-Script ersetzt.\nFortfahren?",
+                    "Standard-Script laden", JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
+            if (answer == JOptionPane.OK_OPTION) {
+                proxyPacScriptArea.setText(ProxyDefaults.DEFAULT_PAC_SCRIPT);
+            }
+        });
+        fb.addWide(resetScriptButton);
+
+        proxyTestUrlLabel = new JLabel("Test-URL:");
+        proxyTestUrlField = new JTextField(settings.proxyTestUrl == null ? ProxyDefaults.DEFAULT_TEST_URL : settings.proxyTestUrl, 30);
+        proxyTestButton = new JButton("Testen");
+        proxyTestButton.addActionListener(e -> {
+            String testUrl = proxyTestUrlField.getText().trim();
+            if (testUrl.isEmpty()) { JOptionPane.showMessageDialog(parent, "Bitte Test-URL eingeben.", "Proxy Test", JOptionPane.WARNING_MESSAGE); return; }
+
+            String selectedMode = Objects.toString(proxyModeBox.getSelectedItem(), "WINDOWS_PAC");
+            proxyTestButton.setEnabled(false);
+            proxyTestButton.setText("…");
+            new javax.swing.SwingWorker<ProxyResolver.ProxyResolution, Void>() {
+                @Override protected ProxyResolver.ProxyResolution doInBackground() {
+                    if ("REGISTRY".equals(selectedMode)) {
+                        return ProxyResolver.testRegistry(testUrl);
+                    }
+                    if ("PAC_URL".equals(selectedMode)) {
+                        return ProxyResolver.testPacUrl(testUrl, pacUrlField.getText().trim(), pacUrlFromScriptBox.isSelected());
+                    }
+                    return ProxyResolver.testPacScript(testUrl, proxyPacScriptArea.getText());
+                }
+                @Override protected void done() {
+                    proxyTestButton.setEnabled(true);
+                    proxyTestButton.setText("Testen");
+                    try {
+                        ProxyResolver.ProxyResolution result = get();
+                        String detail = result.isDirect()
+                                ? "DIRECT (" + result.getReason() + ")"
+                                : result.getProxy().address() + " (" + result.getReason() + ")";
+                        JOptionPane.showMessageDialog(parent, detail, "Proxy Test — " + selectedMode, JOptionPane.INFORMATION_MESSAGE);
+                    } catch (Exception ex) {
+                        JOptionPane.showMessageDialog(parent, "Fehler: " + ex.getMessage(), "Proxy Test", JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+            }.execute();
+        });
+        // Build test row manually so we keep the label reference
+        JPanel testRowRight = new JPanel(new BorderLayout(4, 0));
+        testRowRight.add(proxyTestUrlField, BorderLayout.CENTER);
+        testRowRight.add(proxyTestButton, BorderLayout.EAST);
+        fb.addRow(proxyTestUrlLabel, testRowRight);
+
+        // Wire mode switch
+        proxyModeBox.addActionListener(e -> updateModeVisibility());
+        updateModeVisibility();
+
+        // ── Proxy-Authentifizierung (Basic Auth, global) ──
+        fb.addSeparator();
+        JLabel authSectionLabel = new JLabel("Proxy-Authentifizierung (Basic Auth)");
+        authSectionLabel.setFont(authSectionLabel.getFont().deriveFont(Font.BOLD,
+                authSectionLabel.getFont().getSize2D() + 1f));
+        fb.addWide(authSectionLabel);
+        fb.addInfo("Basic-Auth Credentials für den HTTPS-Proxy. "
+                + "Aktivierung erfolgt pro KI-Tab (\"Proxy-Auth\"-Checkbox).");
+
+        // Migration: alte aiConfig-Werte übernehmen, wenn globale Felder leer sind.
+        String migratedUsername = settings.proxyAuthUsername;
+        String migratedPassword = settings.proxyAuthPassword;
+        if ((migratedUsername == null || migratedUsername.isEmpty())
+                && settings.aiConfig != null) {
+            migratedUsername = settings.aiConfig.getOrDefault("ollama.proxy.username", "");
+        }
+        if ((migratedPassword == null || migratedPassword.isEmpty())
+                && settings.aiConfig != null) {
+            migratedPassword = settings.aiConfig.getOrDefault("ollama.proxy.password", "");
+        }
+
+        proxyAuthUsernameField = new JTextField(migratedUsername == null ? "" : migratedUsername, 20);
+        fb.addRow("Benutzername:", proxyAuthUsernameField);
+        proxyAuthPasswordField = new JPasswordField(migratedPassword == null ? "" : migratedPassword, 20);
+        JButton authPwToggle = makePasswordToggle(proxyAuthPasswordField);
+        fb.addRowWithButton("Passwort:", proxyAuthPasswordField, authPwToggle);
+
+        // ── Ende-zu-Ende-Verschlüsselung (global) ──
+        fb.addSeparator();
+        JLabel e2eSectionLabel = new JLabel("Ende-zu-Ende-Verschlüsselung");
+        e2eSectionLabel.setFont(e2eSectionLabel.getFont().deriveFont(Font.BOLD,
+                e2eSectionLabel.getFont().getSize2D() + 1f));
+        fb.addWide(e2eSectionLabel);
+        fb.addInfo("AES-256-GCM Verschlüsselung unabhängig von TLS. "
+                + "Das Passwort muss auf beiden Seiten (Client &amp; Proxy) identisch sein "
+                + "und wird nie über das Netzwerk übertragen. "
+                + "Aktivierung erfolgt pro KI-Tab (\"E2E\"-Checkbox).");
+
+        String migratedE2e = settings.proxyE2ePassword;
+        if ((migratedE2e == null || migratedE2e.isEmpty()) && settings.aiConfig != null) {
+            migratedE2e = settings.aiConfig.getOrDefault("ollama.e2e.password", "");
+        }
+        proxyE2ePasswordField = new JPasswordField(migratedE2e == null ? "" : migratedE2e, 30);
+        JButton e2ePwToggle = makePasswordToggle(proxyE2ePasswordField);
+        fb.addRowWithButton("E2E-Passwort:", proxyE2ePasswordField, e2ePwToggle);
+
+        // Proxy scripts & documentation button
+        fb.addSeparator();
+        JButton proxyDocsButton = new JButton("Proxy-Scripte & Dokumentation anzeigen…");
+        proxyDocsButton.setToolTipText("Zeigt die README und alle Proxy-Scripte (JS) in einem Dialog an");
+        proxyDocsButton.addActionListener(e -> {
+            Window win = SwingUtilities.getWindowAncestor(this);
+            new de.bund.zrb.ui.settings.ProxyScriptsDialog(win).setVisible(true);
+        });
+        fb.addWide(proxyDocsButton);
+
+        installPanel(fb);
+    }
+
+    /** Erstellt einen 👁-Toggle-Button, der das Passwort-Echo umschaltet. */
+    private static JButton makePasswordToggle(JPasswordField field) {
+        final char defaultEchoChar = field.getEchoChar();
+        final JButton btn = new JButton("👁");
+        btn.setMargin(new Insets(2, 4, 2, 4));
+        btn.setToolTipText("Passwort anzeigen / verbergen");
+        btn.addActionListener(e -> {
+            if (field.getEchoChar() == (char) 0) {
+                field.setEchoChar(defaultEchoChar);
+            } else {
+                field.setEchoChar((char) 0);
+            }
+        });
+        return btn;
+    }
+
+    /** Updates label and tooltip of the PAC URL field depending on script mode. */
+    private void updatePacUrlHint() {
+        if (pacUrlFromScriptBox.isSelected()) {
+            pacUrlLabel.setText("PAC-URL Script:");
+            pacUrlField.setToolTipText("PowerShell-Befehl, dessen Ausgabe die PAC-URL ist.");
+        } else {
+            pacUrlLabel.setText("PAC-URL:");
+            pacUrlField.setToolTipText("Vollständige URL zur PAC-Datei (wird per GraalJS ausgewertet).");
+        }
+    }
+
+    /**
+     * Enables/disables fields depending on the selected proxy mode.
+     * <ul>
+     *   <li><b>WINDOWS_PAC</b>: PAC script + Test enabled, Host/Port/PAC-URL disabled</li>
+     *   <li><b>REGISTRY</b>: Test-URL + Test enabled, PAC script + Host/Port/PAC-URL disabled</li>
+     *   <li><b>PAC_URL</b>: PAC-URL + Test enabled, PAC script + Host/Port disabled</li>
+     *   <li><b>MANUAL</b>: Host/Port enabled, PAC script + Test + PAC-URL disabled</li>
+     * </ul>
+     */
+    private void updateModeVisibility() {
+        String mode = Objects.toString(proxyModeBox.getSelectedItem(), "REGISTRY");
+        boolean isPac = "WINDOWS_PAC".equals(mode);
+        boolean isRegistry = "REGISTRY".equals(mode);
+        boolean isPacUrl = "PAC_URL".equals(mode);
+        boolean isManual = "MANUAL".equals(mode);
+
+        // MANUAL fields — only in MANUAL mode
+        proxyHostLabel.setEnabled(isManual);
+        proxyHostField.setEnabled(isManual);
+        proxyPortLabel.setEnabled(isManual);
+        proxyPortSpinner.setEnabled(isManual);
+
+        // Explicit PAC URL / Script — only in PAC_URL mode
+        pacUrlLabel.setEnabled(isPacUrl);
+        pacUrlField.setEnabled(isPacUrl);
+        pacUrlFromScriptBox.setEnabled(isPacUrl);
+
+        // PAC/WPAD script — only in WINDOWS_PAC mode
+        pacSectionLabel.setEnabled(isPac);
+        proxyPacScriptArea.setEnabled(isPac);
+        proxyPacScriptArea.setEditable(isPac);
+        resetScriptButton.setEnabled(isPac);
+
+        // Test-URL + Test-Button — for WINDOWS_PAC, REGISTRY, and PAC_URL
+        boolean testable = isPac || isRegistry || isPacUrl;
+        proxyTestUrlLabel.setEnabled(testable);
+        proxyTestUrlField.setEnabled(testable);
+        proxyTestButton.setEnabled(testable);
+    }
+
+    @Override
+    protected void applyToSettings(Settings s) {
+        s.proxyMode = Objects.toString(proxyModeBox.getSelectedItem(), "REGISTRY");
+        s.proxyPacUrl = pacUrlField.getText().trim();
+        s.proxyPacUrlFromScript = pacUrlFromScriptBox.isSelected();
+        s.proxyHost = proxyHostField.getText().trim();
+        s.proxyPort = ((Number) proxyPortSpinner.getValue()).intValue();
+        s.proxyNoProxyLocal = proxyNoProxyLocalBox.isSelected();
+        s.proxyPacScript = proxyPacScriptArea.getText();
+        s.proxyTestUrl = proxyTestUrlField.getText().trim();
+        s.proxyAuthUsername = proxyAuthUsernameField.getText().trim();
+        s.proxyAuthPassword = new String(proxyAuthPasswordField.getPassword()).trim();
+        s.proxyE2ePassword = new String(proxyE2ePasswordField.getPassword()).trim();
+        // Migration: alte aiConfig-Schlüssel räumen, sobald die globalen Felder gesetzt sind.
+        if (s.aiConfig != null) {
+            if (!s.proxyAuthUsername.isEmpty()) s.aiConfig.remove("ollama.proxy.username");
+            if (!s.proxyAuthPassword.isEmpty()) s.aiConfig.remove("ollama.proxy.password");
+            if (!s.proxyE2ePassword.isEmpty()) s.aiConfig.remove("ollama.e2e.password");
+        }
+    }
+}
