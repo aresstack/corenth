@@ -1,4 +1,4 @@
-package com.aresstack.corenth.anagraphai;
+package com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai;
 
 /**
  * A query against the lexical index.

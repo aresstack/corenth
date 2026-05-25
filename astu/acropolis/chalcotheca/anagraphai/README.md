@@ -57,10 +57,21 @@ try (LexicalIndex index = new LuceneLexicalIndex(config)) {
 
 ## Design principles
 
-- **Uses astu resource identity** — no parallel resource ID model. All documents are keyed by `VirtualResourceRef` / `BookmarkUri`.
+- **Uses astu resource identity** — no parallel resource ID model. All documents are keyed by the full `VirtualResourceRef` (URI + kind). Two refs with the same URI but different kinds are treated as distinct index entries.
+- **Explicit commit model** — callers must call `commit()` after write operations. Changes are only visible to `search()` after commit. This keeps `search()` as a pure read operation.
 - **No semantic indexing** — this module handles only classical lexical/keyword search. Embeddings, reranking, and vector search belong in `pinakes`.
 - **Injectable configuration** — index location is supplied via `LexicalIndexConfig`, not global settings.
 - **No singleton lifecycle** — callers manage the index lifecycle explicitly via `Closeable`.
+
+## Package
+
+All classes live in:
+
+```
+com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai
+```
+
+This follows the nested module boundary convention for Corenth.
 
 ## Lucene version
 

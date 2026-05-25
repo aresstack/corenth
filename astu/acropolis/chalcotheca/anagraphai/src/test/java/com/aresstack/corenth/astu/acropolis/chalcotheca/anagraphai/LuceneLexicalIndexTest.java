@@ -1,4 +1,4 @@
-package com.aresstack.corenth.anagraphai;
+package com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai;
 
 import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceKind;
@@ -42,6 +42,7 @@ class LuceneLexicalIndexTest {
         VirtualResourceRef ref = fileRef("file:///docs/readme.txt");
         LexicalDocument doc = LexicalDocument.builder(ref)
                 .title("README")
+                .contentType("text/plain")
                 .fullText("This is a guide for configuring the application server.")
                 .build();
 
@@ -52,6 +53,7 @@ class LuceneLexicalIndexTest {
         assertFalse(results.isEmpty());
         assertEquals(ref, results.get(0).resourceRef());
         assertEquals("README", results.get(0).title());
+        assertEquals("text/plain", results.get(0).contentType());
         assertTrue(results.get(0).score() > 0);
     }
 
@@ -76,6 +78,7 @@ class LuceneLexicalIndexTest {
 
     @Test
     void searchEmptyIndexReturnsEmptyList() throws IOException {
+        index.commit();
         List<LexicalSearchResult> results = index.search(new LexicalQuery("anything"));
         assertNotNull(results);
         assertTrue(results.isEmpty());
@@ -92,6 +95,33 @@ class LuceneLexicalIndexTest {
 
         List<LexicalSearchResult> results = index.search(new LexicalQuery("quantum physics"));
         assertTrue(results.isEmpty());
+    }
+
+    // ── Explicit commit model ───────────────────────────────────────────────────
+
+    @Test
+    void uncommittedChangesNotVisibleToSearch() throws IOException {
+        VirtualResourceRef ref = fileRef("file:///docs/uncommitted.txt");
+        index.index(LexicalDocument.builder(ref)
+                .fullText("Content that has not been committed yet.")
+                .build());
+        // Initial commit to create the index so search can open a reader
+        index.commit();
+
+        // Now add a new document without committing
+        VirtualResourceRef ref2 = fileRef("file:///docs/uncommitted2.txt");
+        index.index(LexicalDocument.builder(ref2)
+                .fullText("This invisible text was added after the last commit.")
+                .build());
+
+        // Search should NOT see the uncommitted document
+        List<LexicalSearchResult> results = index.search(new LexicalQuery("invisible"));
+        assertTrue(results.isEmpty());
+
+        // After commit, it should be visible
+        index.commit();
+        results = index.search(new LexicalQuery("invisible"));
+        assertFalse(results.isEmpty());
     }
 
     // ── Update semantics ────────────────────────────────────────────────────────
@@ -140,6 +170,60 @@ class LuceneLexicalIndexTest {
         index.remove(ref);
         index.commit();
         assertTrue(index.search(new LexicalQuery("removal test")).isEmpty());
+    }
+
+    // ── Resource identity: URI + kind ───────────────────────────────────────────
+
+    @Test
+    void sameUriDifferentKindDoNotCollide() throws IOException {
+        BookmarkUri uri = BookmarkUri.parse("file:///data/items");
+        VirtualResourceRef fileRef = new VirtualResourceRef(uri, VirtualResourceKind.FILE);
+        VirtualResourceRef dirRef = new VirtualResourceRef(uri, VirtualResourceKind.DIRECTORY);
+
+        index.index(LexicalDocument.builder(fileRef)
+                .fullText("File content about architecture.")
+                .build());
+        index.index(LexicalDocument.builder(dirRef)
+                .fullText("Directory listing of modules.")
+                .build());
+        index.commit();
+
+        // Both should be searchable
+        List<LexicalSearchResult> archResults = index.search(new LexicalQuery("architecture"));
+        assertFalse(archResults.isEmpty());
+        assertEquals(VirtualResourceKind.FILE, archResults.get(0).resourceRef().kind());
+
+        List<LexicalSearchResult> dirResults = index.search(new LexicalQuery("directory listing modules"));
+        assertFalse(dirResults.isEmpty());
+        assertEquals(VirtualResourceKind.DIRECTORY, dirResults.get(0).resourceRef().kind());
+    }
+
+    @Test
+    void removeBySameUriDifferentKindDoesNotAffectOther() throws IOException {
+        BookmarkUri uri = BookmarkUri.parse("file:///data/shared");
+        VirtualResourceRef fileRef = new VirtualResourceRef(uri, VirtualResourceKind.FILE);
+        VirtualResourceRef dirRef = new VirtualResourceRef(uri, VirtualResourceKind.DIRECTORY);
+
+        index.index(LexicalDocument.builder(fileRef)
+                .fullText("Shared file content about protocols.")
+                .build());
+        index.index(LexicalDocument.builder(dirRef)
+                .fullText("Shared directory content about services.")
+                .build());
+        index.commit();
+
+        // Remove only the FILE variant
+        index.remove(fileRef);
+        index.commit();
+
+        // FILE content gone
+        List<LexicalSearchResult> fileResults = index.search(new LexicalQuery("protocols"));
+        assertTrue(fileResults.isEmpty());
+
+        // DIRECTORY content still present
+        List<LexicalSearchResult> dirResults = index.search(new LexicalQuery("services"));
+        assertFalse(dirResults.isEmpty());
+        assertEquals(VirtualResourceKind.DIRECTORY, dirResults.get(0).resourceRef().kind());
     }
 
     // ── Multiple documents ──────────────────────────────────────────────────────
@@ -246,6 +330,17 @@ class LuceneLexicalIndexTest {
     @Test
     void lexicalIndexConfigValidation() {
         assertThrows(IllegalArgumentException.class, () -> new LexicalIndexConfig(null));
+    }
+
+    @Test
+    void lexicalSearchResultValidation() {
+        VirtualResourceRef ref = fileRef("file:///docs/test.txt");
+        assertThrows(IllegalArgumentException.class, () ->
+                new LexicalSearchResult(null, 1.0f, 0, "text", null, null));
+        assertThrows(IllegalArgumentException.class, () ->
+                new LexicalSearchResult(ref, 1.0f, -1, "text", null, null));
+        assertThrows(IllegalArgumentException.class, () ->
+                new LexicalSearchResult(ref, 1.0f, 0, null, null, null));
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────

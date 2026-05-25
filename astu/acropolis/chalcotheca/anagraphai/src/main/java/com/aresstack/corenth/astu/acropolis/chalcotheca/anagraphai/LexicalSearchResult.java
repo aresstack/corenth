@@ -1,4 +1,4 @@
-package com.aresstack.corenth.anagraphai;
+package com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai;
 
 import com.aresstack.corenth.astu.VirtualResourceRef;
 
@@ -18,14 +18,26 @@ public final class LexicalSearchResult {
     private final int chunkIndex;
     private final String excerpt;
     private final String title;
+    private final String contentType;
 
     public LexicalSearchResult(VirtualResourceRef resourceRef, float score,
-                               int chunkIndex, String excerpt, String title) {
+                               int chunkIndex, String excerpt, String title,
+                               String contentType) {
+        if (resourceRef == null) {
+            throw new IllegalArgumentException("resourceRef must not be null");
+        }
+        if (chunkIndex < 0) {
+            throw new IllegalArgumentException("chunkIndex must not be negative");
+        }
+        if (excerpt == null) {
+            throw new IllegalArgumentException("excerpt must not be null");
+        }
         this.resourceRef = resourceRef;
         this.score = score;
         this.chunkIndex = chunkIndex;
         this.excerpt = excerpt;
         this.title = title;
+        this.contentType = contentType;
     }
 
     /** Returns the resource reference that this result belongs to. */
@@ -51,6 +63,11 @@ public final class LexicalSearchResult {
     /** Returns the document title, or {@code null} if not indexed. */
     public String title() {
         return title;
+    }
+
+    /** Returns the content type, or {@code null} if not indexed. */
+    public String contentType() {
+        return contentType;
     }
 
     @Override

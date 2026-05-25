@@ -1,4 +1,4 @@
-package com.aresstack.corenth.anagraphai;
+package com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai;
 
 import com.aresstack.corenth.astu.VirtualResourceRef;
 
@@ -13,6 +13,10 @@ import java.util.List;
  * documents. The interface is technology-agnostic — consumers do not need to
  * know whether Lucene, Elasticsearch, or another engine backs the index.
  *
+ * <p>This interface uses an explicit commit model: callers must invoke
+ * {@link #commit()} after write operations before changes become visible
+ * to {@link #search(LexicalQuery)}.
+ *
  * <p>Adapted from MainframeMate's {@code LexicalIndex} port interface, with
  * Corenth resource identity and lifecycle management replacing the original's
  * singleton design.
@@ -23,6 +27,8 @@ public interface LexicalIndex extends Closeable {
      * Indexes a document. If a document with the same resource reference already
      * exists, it is replaced.
      *
+     * <p>Changes are not visible to search until {@link #commit()} is called.
+     *
      * @param document the document to index
      * @throws IOException if the index cannot be written
      */
@@ -30,6 +36,9 @@ public interface LexicalIndex extends Closeable {
 
     /**
      * Searches the index for documents matching the given query.
+     *
+     * <p>Only committed changes are visible. Call {@link #commit()} after
+     * write operations to ensure new/updated documents appear in results.
      *
      * @param query the search query
      * @return a list of results ordered by relevance (highest score first),
@@ -41,13 +50,15 @@ public interface LexicalIndex extends Closeable {
     /**
      * Removes all indexed content for the given resource reference.
      *
+     * <p>Changes are not visible to search until {@link #commit()} is called.
+     *
      * @param resourceRef the resource to remove
      * @throws IOException if the index cannot be written
      */
     void remove(VirtualResourceRef resourceRef) throws IOException;
 
     /**
-     * Commits any pending changes to the index.
+     * Commits any pending changes to the index, making them visible to search.
      *
      * @throws IOException if the commit fails
      */

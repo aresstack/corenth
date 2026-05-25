@@ -1,4 +1,4 @@
-package com.aresstack.corenth.anagraphai;
+package com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai;
 
 import com.aresstack.corenth.astu.VirtualResourceRef;
 
