@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="720" viewBox="0 0 1600 720" role="img" aria-label="Corenth banner with ancient Corinth and Corinthian bronze motifs">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="72%">
+      <stop offset="0%" stop-color="#17263b"/>
+      <stop offset="58%" stop-color="#070b12"/>
+      <stop offset="100%" stop-color="#020307"/>
+    </radialGradient>
+    <linearGradient id="bronze" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#54301f"/>
+      <stop offset="23%" stop-color="#b87333"/>
+      <stop offset="48%" stop-color="#d6a45d"/>
+      <stop offset="64%" stop-color="#f0d7a6"/>
+      <stop offset="82%" stop-color="#8d5a2d"/>
+      <stop offset="100%" stop-color="#392015"/>
+    </linearGradient>
+    <linearGradient id="sea" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#103852" stop-opacity="0.28"/>
+      <stop offset="46%" stop-color="#46b4df" stop-opacity="0.42"/>
+      <stop offset="100%" stop-color="#103852" stop-opacity="0.24"/>
+    </linearGradient>
+    <linearGradient id="code" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2e6f91" stop-opacity="0.08"/>
+      <stop offset="50%" stop-color="#84dfff" stop-opacity="0.48"/>
+      <stop offset="100%" stop-color="#f0d7a6" stop-opacity="0.20"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="58%" r="52%">
+      <stop offset="0%" stop-color="#d6a45d" stop-opacity="0.44"/>
+      <stop offset="58%" stop-color="#b87333" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#020307" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softGlow">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0v48" fill="none" stroke="#b8c8d9" stroke-opacity="0.045"/>
+    </pattern>
+    <pattern id="fine" width="16" height="16" patternUnits="userSpaceOnUse">
+      <path d="M16 0H0v16" fill="none" stroke="#b8c8d9" stroke-opacity="0.026"/>
+    </pattern>
+  </defs>
+
+  <rect width="1600" height="720" fill="url(#bg)"/>
+  <rect width="1600" height="720" fill="url(#grid)"/>
+  <rect width="1600" height="720" fill="url(#fine)" opacity="0.6"/>
+  <ellipse cx="800" cy="500" rx="690" ry="235" fill="url(#glow)"/>
+
+  <g opacity="0.58">
+    <circle cx="92" cy="112" r="1.1" fill="#e8f7ff"/><circle cx="180" cy="258" r="1" fill="#f7d5a3"/><circle cx="302" cy="118" r="1.3" fill="#c2d0dd"/>
+    <circle cx="472" cy="204" r="0.9" fill="#e8f7ff"/><circle cx="642" cy="88" r="1.1" fill="#f7d5a3"/><circle cx="820" cy="176" r="0.9" fill="#c2d0dd"/>
+    <circle cx="1016" cy="92" r="1.3" fill="#e8f7ff"/><circle cx="1214" cy="252" r="1" fill="#f7d5a3"/><circle cx="1398" cy="124" r="1.1" fill="#e8f7ff"/>
+    <circle cx="148" cy="624" r="1" fill="#c2d0dd"/><circle cx="326" cy="666" r="1.2" fill="#f7d5a3"/><circle cx="574" cy="638" r="1" fill="#e8f7ff"/>
+    <circle cx="882" cy="676" r="1.1" fill="#c2d0dd"/><circle cx="1112" cy="632" r="1.4" fill="#f7d5a3"/><circle cx="1448" cy="664" r="1" fill="#e8f7ff"/>
+  </g>
+
+  <path d="M0 550 C230 495 380 555 535 512 C690 468 825 472 960 516 C1120 568 1320 494 1600 540 L1600 720 L0 720 Z" fill="#07131e" opacity="0.98"/>
+  <path d="M0 565 C230 510 380 570 535 527 C690 483 825 487 960 531 C1120 583 1320 509 1600 555" fill="none" stroke="url(#sea)" stroke-width="5"/>
+  <path d="M200 590 C420 562 560 612 750 575 C900 546 1035 588 1190 565 C1320 545 1440 565 1600 535" fill="none" stroke="#86d7ff" stroke-opacity="0.16" stroke-width="1.5"/>
+
+  <path d="M120 545 C260 492 300 422 390 385 C490 343 585 380 690 345 C815 303 930 330 1010 378 C1098 430 1190 418 1288 457 C1390 498 1495 498 1600 468 L1600 720 L120 720 Z" fill="#050912" opacity="0.92"/>
+  <path d="M390 385 C490 343 585 380 690 345 C815 303 930 330 1010 378" fill="none" stroke="#d6a45d" stroke-opacity="0.18" stroke-width="2.2"/>
+
+  <g transform="translate(214 392)" opacity="0.92">
+    <rect x="0" y="116" width="520" height="18" fill="url(#bronze)" opacity="0.72"/>
+    <rect x="34" y="88" width="452" height="20" fill="#0a111a" stroke="#d6a45d" stroke-opacity="0.40"/>
+    <path d="M12 86 L260 0 L508 86 Z" fill="#0a111a" stroke="url(#bronze)" stroke-opacity="0.62" stroke-width="2"/>
+    <path d="M88 86 L260 28 L432 86 Z" fill="none" stroke="#86d7ff" stroke-opacity="0.10" stroke-width="1.4"/>
+    <g fill="none" stroke="url(#bronze)" stroke-opacity="0.72" stroke-width="6">
+      <line x1="80" y1="100" x2="80" y2="230"/><line x1="150" y1="100" x2="150" y2="230"/><line x1="220" y1="100" x2="220" y2="230"/>
+      <line x1="300" y1="100" x2="300" y2="230"/><line x1="370" y1="100" x2="370" y2="230"/><line x1="440" y1="100" x2="440" y2="230"/>
+    </g>
+  </g>
+
+  <g transform="translate(1215 368)" opacity="0.88">
+    <rect x="44" y="112" width="82" height="145" rx="6" fill="#09121e" stroke="url(#bronze)" stroke-opacity="0.65" stroke-width="2"/>
+    <rect x="24" y="92" width="122" height="28" rx="8" fill="#0b1420" stroke="#d6a45d" stroke-opacity="0.48"/>
+    <path d="M28 94 C42 62 66 60 84 84 C102 58 128 62 144 94" fill="none" stroke="url(#bronze)" stroke-opacity="0.68" stroke-width="5" stroke-linecap="round"/>
+    <path d="M42 93 C58 80 70 78 84 93 C100 78 116 80 132 93" fill="none" stroke="#86d7ff" stroke-opacity="0.18" stroke-width="2"/>
+    <rect x="14" y="255" width="144" height="20" fill="url(#bronze)" opacity="0.62"/>
+  </g>
+
+  <g opacity="0.65" filter="url(#softGlow)">
+    <path d="M190 254 C390 214 518 250 666 300" stroke="url(#code)" stroke-width="2.4" fill="none"/>
+    <path d="M902 292 C1060 214 1190 238 1430 190" stroke="url(#code)" stroke-width="2.0" fill="none"/>
+    <path d="M258 640 C465 620 650 632 836 600 C1040 565 1190 596 1455 560" stroke="url(#code)" stroke-width="2.0" fill="none"/>
+    <circle cx="318" cy="240" r="4" fill="#86d7ff" opacity="0.62"/><circle cx="520" cy="268" r="4" fill="#d6a45d" opacity="0.66"/><circle cx="1048" cy="224" r="4" fill="#86d7ff" opacity="0.58"/>
+    <circle cx="1218" cy="220" r="4" fill="#d6a45d" opacity="0.62"/><circle cx="662" cy="618" r="4" fill="#86d7ff" opacity="0.56"/><circle cx="1160" cy="584" r="4" fill="#d6a45d" opacity="0.60"/>
+  </g>
+
+  <g transform="translate(800 292)" text-anchor="middle">
+    <rect x="-360" y="-112" width="720" height="220" rx="28" fill="#050914" opacity="0.68" stroke="#d6a45d" stroke-opacity="0.20"/>
+    <text x="0" y="-18" font-family="Georgia, 'Times New Roman', serif" font-size="112" letter-spacing="7" fill="url(#bronze)" filter="url(#softGlow)">Corenth</text>
+    <text x="0" y="36" font-family="Arial, Helvetica, sans-serif" font-size="22" letter-spacing="5" fill="#d8e9f3" opacity="0.82">JAVA-FIRST LOCAL AI ARCHITECTURE</text>
+    <text x="0" y="78" font-family="Georgia, 'Times New Roman', serif" font-size="20" letter-spacing="4" fill="#f0d7a6" opacity="0.64">CORE · CORINTH · CORINTHIAN BRONZE</text>
+  </g>
+
+  <g transform="translate(805 646)" text-anchor="middle" opacity="0.62">
+    <text x="0" y="0" font-family="Georgia, 'Times New Roman', serif" font-size="19" letter-spacing="3" fill="#f0d7a6">ISTHMUS OF SYSTEMS · ANCIENT CITY · MODERN BOUNDARIES</text>
+  </g>
+
+  <rect x="9" y="9" width="1582" height="702" fill="none" stroke="#ffffff" stroke-opacity="0.045" stroke-width="18"/>
+</svg>
