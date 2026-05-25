@@ -1,1 +1,5 @@
 description = 'Security vault boundary for credentials, keys and delegated access.'
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}
