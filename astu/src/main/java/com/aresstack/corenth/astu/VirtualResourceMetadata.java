@@ -10,18 +10,23 @@ import java.util.Map;
  * <p>Metadata describes properties discovered during scanning or ingestion,
  * such as title, size, last-modified time and content type.
  * It is immutable once constructed.
+ *
+ * <p>Adapted from MainframeMate's {@code ScannedItem} (path, lastModified, size,
+ * mimeType, directory). The builder pattern replaces the constructor-heavy original.
  */
 public final class VirtualResourceMetadata {
 
     private final String title;
     private final String contentType;
     private final long sizeBytes;
+    private final long lastModifiedMillis;
     private final Map<String, String> attributes;
 
     private VirtualResourceMetadata(Builder builder) {
         this.title = builder.title;
         this.contentType = builder.contentType;
         this.sizeBytes = builder.sizeBytes;
+        this.lastModifiedMillis = builder.lastModifiedMillis;
         this.attributes = Collections.unmodifiableMap(new LinkedHashMap<String, String>(builder.attributes));
     }
 
@@ -40,6 +45,11 @@ public final class VirtualResourceMetadata {
         return sizeBytes;
     }
 
+    /** Returns the last-modified time in epoch milliseconds, or {@code -1} if unknown. */
+    public long lastModifiedMillis() {
+        return lastModifiedMillis;
+    }
+
     /** Returns additional attributes as an unmodifiable map. */
     public Map<String, String> attributes() {
         return attributes;
@@ -53,6 +63,7 @@ public final class VirtualResourceMetadata {
         private String title;
         private String contentType;
         private long sizeBytes = -1;
+        private long lastModifiedMillis = -1;
         private final Map<String, String> attributes = new LinkedHashMap<String, String>();
 
         private Builder() {}
@@ -69,6 +80,11 @@ public final class VirtualResourceMetadata {
 
         public Builder sizeBytes(long sizeBytes) {
             this.sizeBytes = sizeBytes;
+            return this;
+        }
+
+        public Builder lastModifiedMillis(long lastModifiedMillis) {
+            this.lastModifiedMillis = lastModifiedMillis;
             return this;
         }
 

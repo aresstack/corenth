@@ -4,8 +4,12 @@ package com.aresstack.corenth.astu;
  * A lightweight, immutable reference to a virtual resource.
  *
  * <p>A reference combines the bookmark URI that addresses the resource
- * with the logical kind that classifies it. It does not carry content
+ * with the structural kind that classifies it. It does not carry content
  * or transport state — it is a stable handle suitable for indexing and caching.
+ *
+ * <p>Adapted from MainframeMate's {@code VirtualResource} (which coupled ref + kind
+ * with UI/transport state). Only the identity concept is kept here; transport state
+ * belongs in {@code proasteion}.
  */
 public final class VirtualResourceRef {
 
@@ -28,7 +32,7 @@ public final class VirtualResourceRef {
         return uri;
     }
 
-    /** Returns the logical kind of this resource. */
+    /** Returns the structural kind of this resource. */
     public VirtualResourceKind kind() {
         return kind;
     }

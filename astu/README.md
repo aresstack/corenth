@@ -6,19 +6,30 @@ Astu is the inner city of Corenth. It contains the core model and inner orchestr
 
 ## Responsibility
 
-Astu owns **stable inner concepts** — not external protocol handling, not UI state, and not transport implementations. The contracts defined here are intended as the common language between `proasteion` adapters and `acropolis/chalcotheca` indexing modules.
+Astu owns **stable inner concepts** — not external protocol handling, not UI state, and not transport implementations. The contracts defined here are the common language between `proasteion` adapters and `acropolis/chalcotheca` indexing modules.
 
 ### Core contracts (package `com.aresstack.corenth.astu`)
 
-| Class | Purpose |
-|-------|---------|
-| `ResourceScheme` | Known URI scheme prefixes for bookmark addressing |
-| `BookmarkUri` | Immutable parsed bookmark-style URI |
-| `VirtualResourceKind` | Logical classification of a resource (document, source, message, …) |
-| `VirtualResourceRef` | Lightweight handle combining URI and kind |
-| `VirtualResourceMetadata` | Immutable metadata discovered during scanning |
-| `ResourceContentRef` | Pointer to content storage without embedding payload |
-| `ResourceFingerprint` | Content-identity hash for change detection |
+| Class | Purpose | Research origin |
+|-------|---------|----------------|
+| `ResourceScheme` | Extensible URI scheme identity (value object, not closed enum) | Adapted from `VirtualBackendType`, `VirtualResourceRef` prefixes |
+| `BookmarkUri` | Parsed URI with standard (`java.net.URI`) and opaque scheme support | Adapted from `VirtualResourceRef`, `BookmarkEntry` prefix concept |
+| `VirtualResourceKind` | Structural classification (file, directory, message, …) | Adapted from `VirtualResourceKind` (extended beyond FILE/DIRECTORY) |
+| `VirtualResourceRef` | Lightweight handle combining URI and kind | Adapted from `VirtualResource` (without UI/transport state) |
+| `VirtualResourceMetadata` | Immutable scan metadata (title, size, modified, contentType) | Adapted from `ScannedItem` |
+| `ResourceContentRef` | Opaque pointer to content storage | New Corenth API |
+| `ResourceFingerprint` | Content-identity hash for change detection | New Corenth API |
+| `ConfigSnapshot` | Immutable configuration snapshot interface | New Corenth API (placeholder) |
+
+### Key design decisions
+
+- **`file:` is canonical** for local filesystem resources. `local://` is a legacy alias that normalizes to `file:///` on parse.
+- **ResourceScheme is extensible**: well-known schemes have constants but any string is accepted via `ResourceScheme.of(...)`.
+- **Standard URIs use `java.net.URI`**: `file:`, `http:`, `https:`, `ftp:` are fully parsed. Non-standard schemes keep an opaque locator.
+- **No Swing, no transport impl**: `VirtualResource` (with `FtpResourceState`, `NdvResourceState`) is not copied. Transport state belongs in `proasteion`.
+- **`BookmarkHelper` not copied**: JSON-file persistence belongs outside the core.
+- **`DocumentSource` not copied**: raw-byte transport belongs in `proasteion/emporion/deigma`.
+- **ConfigSnapshot deferred**: minimal interface only; typed per-module config is a follow-up.
 
 ### Design rules
 
