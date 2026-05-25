@@ -39,10 +39,11 @@ class BookmarkUriTest {
 
     @Test
     void legacyLocalSchemeNormalizesToFile() {
-        BookmarkUri uri = BookmarkUri.parse("local://C:/Users/file.txt");
+        // MainframeMate legacy: local://path normalizes to file:///path
+        BookmarkUri uri = BookmarkUri.parse("local://C:/Users/example/Documents/note.txt");
         assertEquals(ResourceScheme.FILE, uri.scheme());
-        // local:// is normalized to file:///
         assertTrue(uri.toString().startsWith("file:///"));
+        assertEquals("file:///C:/Users/example/Documents/note.txt", uri.toString());
     }
 
     @Test

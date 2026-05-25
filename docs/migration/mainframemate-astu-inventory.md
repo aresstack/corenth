@@ -28,7 +28,7 @@ This document records the inspection of MainframeMate research sources and the m
 
 ### `file:` is canonical for local filesystem resources
 
-MainframeMate used `local://` as its local filesystem prefix. Corenth uses the standard `file:` URI scheme (`file:///path`). The `local` scheme is **not** supported — all local filesystem URIs must use `file:`.
+Corenth uses `file:` as the canonical local filesystem scheme. MainframeMate's `local://` prefix is kept only as a legacy input alias and is normalized immediately to `file:` during parsing. Public documentation and new configuration examples must use `file:`.
 
 ### Extensible scheme model
 
