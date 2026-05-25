@@ -1,0 +1,84 @@
+package de.zrb.bund.api;
+
+import de.zrb.bund.newApi.ToolRegistry;
+import de.zrb.bund.newApi.VariableRegistry;
+import de.zrb.bund.newApi.bot.AgentRegistry;
+import de.zrb.bund.newApi.browser.BrowserService;
+import de.zrb.bund.newApi.ui.AppTab;
+import de.zrb.bund.newApi.ui.FileTab;
+import de.zrb.bund.newApi.workflow.WorkflowRunner;
+
+import javax.annotation.Nullable;
+import javax.swing.*;
+import java.io.File;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+public interface MainframeContext {
+
+    Map<String, String> loadPluginSettings(String pluginKey);
+
+    void savePluginSettings(String pluginKey, Map<String, String> settings);
+
+    Optional<Bookmarkable> getSelectedTab();
+    FileTab createFile(String content, String sentenceType);
+
+    AppTab openFileOrDirectory(String path);
+
+    AppTab openFileOrDirectory(String path, @Nullable String sentenceType);
+
+    AppTab openFileOrDirectory(String path, @Nullable String sentenceType, String searchPattern);
+
+    AppTab openFileOrDirectory(String path, @Nullable String sentenceType, String searchPattern, Boolean toCompare);
+
+    JFrame getMainFrame();
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // For Extensions
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    BookmarkManager getBookmarkManager();
+    List<Bookmarkable> getAllFileTabs();
+
+    /**
+     * Get all currently open tabs (for attachment selection).
+     */
+    List<AppTab> getAllOpenTabs();
+
+    void focusFileTab(Bookmarkable tab);
+
+    void refresh();
+
+    ToolRegistry getToolRegistry();
+
+    VariableRegistry getVariableRegistry();
+
+    SentenceTypeRegistry getSentenceTypeRegistry();
+    ExpressionRegistry getExpressionRegistry();
+
+    File getSettingsFolder();
+
+    WorkflowRunner getWorkflowRunner();
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Browser & Agent APIs
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /**
+     * Returns the browser automation service, or null if not available.
+     * Plugins use this to access browser functionality without depending on wd4j.
+     */
+    @Nullable
+    BrowserService getBrowserService();
+
+    /**
+     * Returns the agent registry for registering/querying specialized agents.
+     */
+    AgentRegistry getAgentRegistry();
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    // ToDo
+
+}

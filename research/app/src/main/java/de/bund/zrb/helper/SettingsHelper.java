@@ -1,0 +1,113 @@
+package de.bund.zrb.helper;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import de.bund.zrb.model.Settings;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
+
+public class SettingsHelper {
+    private static final File SETTINGS_FILE = new File(System.getProperty("user.home"), ".mainframemate/settings.json");
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+
+    /** Listeners notified on every save() – receive the freshly saved Settings object. */
+    private static final CopyOnWriteArrayList<Consumer<Settings>> listeners = new CopyOnWriteArrayList<>();
+
+    public static final List<String> SUPPORTED_ENCODINGS = Arrays.asList(
+            "UTF-8",
+            "ISO-8859-1",
+            "windows-1252",   // ANSI-ähnlich
+            "Cp1047",         // EBCDIC (Latin-1)
+            "Cp037",          // EBCDIC US/Canada
+            "IBM01140"        // weitere EBCDIC-Variante
+    );
+
+    public static Settings load() {
+        Settings settings;
+        if (!SETTINGS_FILE.exists()) {
+            settings = new Settings();
+        } else {
+            try (Reader reader = new InputStreamReader(new FileInputStream(SETTINGS_FILE), StandardCharsets.UTF_8)) {
+                settings = GSON.fromJson(reader, Settings.class);
+            } catch (IOException e) {
+                e.printStackTrace();
+                settings = new Settings();
+            }
+        }
+        migrateCredentials(settings);
+        return settings;
+    }
+
+    public static void save(Settings settings) {
+        try {
+            SETTINGS_FILE.getParentFile().mkdirs();
+            try (Writer writer = new OutputStreamWriter(new FileOutputStream(SETTINGS_FILE), StandardCharsets.UTF_8)) {
+                GSON.toJson(settings, writer);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        notifyListeners(settings);
+    }
+
+    // ── Observer API ──
+
+    /** Register a listener that is called after every save(). */
+    public static void addChangeListener(Consumer<Settings> listener) {
+        listeners.add(listener);
+    }
+
+    /** Remove a previously registered listener. */
+    public static void removeChangeListener(Consumer<Settings> listener) {
+        listeners.remove(listener);
+    }
+
+    private static void notifyListeners(Settings settings) {
+        for (Consumer<Settings> l : listeners) {
+            try { l.accept(settings); }
+            catch (Exception e) { e.printStackTrace(); }
+        }
+    }
+
+    public static File getSettingsFolder() {
+        return SETTINGS_FILE.getParentFile();
+    }
+
+    /**
+     * Migrate legacy {@code wikiCredentials} entries into {@code componentCredentials}
+     * using the "wiki:&lt;siteId&gt;" key convention. Only migrates entries that are
+     * not yet present in componentCredentials. Clears wikiCredentials after migration.
+     */
+    @SuppressWarnings("deprecation")
+    private static void migrateCredentials(Settings settings) {
+        if (settings.wikiCredentials == null || settings.wikiCredentials.isEmpty()) return;
+        if (settings.componentCredentials == null) {
+            settings.componentCredentials = new java.util.LinkedHashMap<>();
+        }
+        boolean migrated = false;
+        for (Map.Entry<String, String> entry : settings.wikiCredentials.entrySet()) {
+            String newKey = "wiki:" + entry.getKey();
+            if (!settings.componentCredentials.containsKey(newKey)) {
+                settings.componentCredentials.put(newKey, entry.getValue());
+                migrated = true;
+            }
+        }
+        if (migrated) {
+            settings.wikiCredentials.clear();
+            save(settings);
+        }
+    }
+
+    @Deprecated
+    public static void removeBookmark(String path) {
+        Settings settings = load();
+        settings.bookmarks.values().removeIf(value -> value.equals(path));
+        save(settings);
+    }
+}

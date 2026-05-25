@@ -1,0 +1,2758 @@
+package de.bund.zrb.ui;
+
+import de.bund.zrb.archive.ui.CacheConnectionTab;
+import de.bund.zrb.ui.components.HelpButton;
+import de.bund.zrb.ui.components.TabbedPaneWithHelpOverlay;
+import de.bund.zrb.ui.drawer.LeftDrawer;
+import de.bund.zrb.ui.drawer.RightDrawer;
+import de.bund.zrb.ui.help.HelpContentProvider;
+import de.bund.zrb.ui.jes.JobDetailTab;
+import de.bund.zrb.ui.mermaid.MermaidDiagramPanel;
+import de.bund.zrb.ui.preview.SplitPreviewTab;
+import de.bund.zrb.util.AppLogger;
+import de.zrb.bund.api.MainframeContext;
+import de.zrb.bund.api.Bookmarkable;
+import de.zrb.bund.newApi.ui.AppTab;
+import de.zrb.bund.newApi.ui.FileTab;
+import de.zrb.bund.newApi.ui.Navigable;
+
+import javax.swing.*;
+import javax.swing.event.ChangeEvent;
+import javax.swing.event.ChangeListener;
+import java.awt.*;
+import java.awt.event.AWTEventListener;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
+
+public class TabbedPaneManager {
+
+    private final JTabbedPane tabbedPane = new JTabbedPane();
+    private final TabbedPaneWithHelpOverlay tabbedPaneWrapper;
+    private final Map<Component, AppTab> tabMap = new HashMap<>();
+    private final MainframeContext mainframeContext;
+
+
+    // ── Tab-level navigation history ──────────────────────────
+    /** Tabs previously active — used by "back" to return to. */
+    private final Deque<AppTab> tabBackStack = new ArrayDeque<AppTab>();
+    /** Tabs removed via back navigation — used by "forward" to reopen. */
+    private final Deque<AppTab> tabForwardStack = new ArrayDeque<AppTab>();
+    /** The tab that was most recently selected (tracked across changes). */
+    private AppTab lastActiveTab = null;
+    /** Suppresses history recording during programmatic tab switches. */
+    private boolean suppressTabHistory = false;
+
+    public TabbedPaneManager(MainframeContext mainFrame) {
+        this.mainframeContext = mainFrame;
+        this.tabbedPaneWrapper = new TabbedPaneWithHelpOverlay(tabbedPane);
+
+        // Hilfe-Button als Overlay über der Tab-Leiste
+        HelpButton helpButton = new HelpButton("Hilfe zu Datei-Tabs",
+                e -> HelpContentProvider.showHelpPopup(
+                        (Component) e.getSource(),
+                        HelpContentProvider.HelpTopic.MAIN_TABS));
+        tabbedPaneWrapper.setHelpComponent(helpButton);
+
+        // Tab change listener for JCL outline updates + focus management + tab history
+        tabbedPane.addChangeListener(new ChangeListener() {
+            @Override
+            public void stateChanged(ChangeEvent e) {
+                updateJclOutlineForSelectedTab();
+
+                Component selected = tabbedPane.getSelectedComponent();
+                AppTab currentTab = selected != null ? tabMap.get(selected) : null;
+
+                // Track tab activation for back/forward navigation
+                if (!suppressTabHistory && lastActiveTab != null
+                        && currentTab != null && lastActiveTab != currentTab) {
+                    // Only push if the previous tab is still in the pane (not manually closed)
+                    if (tabMap.containsValue(lastActiveTab)) {
+                        tabBackStack.push(lastActiveTab);
+                    }
+                    tabForwardStack.clear();
+                }
+                if (currentTab != null) {
+                    lastActiveTab = currentTab;
+                }
+
+                // Give the newly selected tab a chance to claim keyboard focus
+                if (selected != null) {
+                    AppTab tab = tabMap.get(selected);
+                    if (tab != null) {
+                        // Use invokeLater so the tab is fully visible when focus is requested
+                        SwingUtilities.invokeLater(() -> tab.focusSearchField());
+                    }
+                }
+            }
+        });
+
+        tabbedPane.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                maybeShowPopup(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                maybeShowPopup(e);
+            }
+
+            private void maybeShowPopup(MouseEvent e) {
+                if (!e.isPopupTrigger()) return;
+
+                int tabIndex = tabbedPane.indexAtLocation(e.getX(), e.getY());
+                if (tabIndex < 0) return;
+
+                Component tabComponent = tabbedPane.getComponentAt(tabIndex);
+                AppTab tab = tabMap.get(tabComponent);
+                if (tab == null) return;
+
+                JPopupMenu menu = tab.createContextMenu(() -> closeTab(tabIndex));
+                if (menu != null) {
+                    menu.addSeparator();
+
+                    final Component keepComponent = tabComponent;
+                    JMenuItem closeOthersItem = new JMenuItem("\uD83D\uDDD9 Andere Tabs schließen");
+                    closeOthersItem.addActionListener(ev -> {
+                        for (int i = tabbedPane.getTabCount() - 1; i >= 0; i--) {
+                            if (tabbedPane.getComponentAt(i) == keepComponent) continue;
+                            closeTab(i);
+                        }
+                    });
+                    menu.add(closeOthersItem);
+
+                    JMenuItem closeAllItem = new JMenuItem("\uD83D\uDDD9 Alle Tabs schließen");
+                    closeAllItem.addActionListener(ev -> closeAllTabs());
+                    menu.add(closeAllItem);
+
+                    menu.show(tabbedPane, e.getX(), e.getY());
+                }
+            }
+        });
+
+        // Global mouse listener for back/forward buttons on all tab content
+        installGlobalMouseNavigation();
+    }
+
+    // ── Combined back/forward navigation (shared by menu commands & mouse) ───
+
+    private static final int MOUSE_BACK_BUTTON = 4;
+    private static final int MOUSE_FORWARD_BUTTON = 5;
+
+    /**
+     * Perform "back" navigation: first try within-tab, then close current tab
+     * and return to the previously active one (tab-level back).
+     * Called by menu/keyboard command and mouse button 4.
+     */
+    public void performBack() {
+        Optional<AppTab> sel = getSelectedTab();
+        if (sel.isPresent() && sel.get() instanceof Navigable) {
+            Navigable nav = (Navigable) sel.get();
+            if (nav.canNavigateBack()) {
+                nav.navigateBack();
+                return;
+            }
+        }
+        navigateTabBack();
+    }
+
+    /**
+     * Perform "forward" navigation: first try tab-level (reopen a tab closed
+     * by back), then try within-tab forward.
+     * Called by menu/keyboard command and mouse button 5.
+     */
+    public void performForward() {
+        if (canNavigateTabForward()) {
+            navigateTabForward();
+            return;
+        }
+        Optional<AppTab> sel = getSelectedTab();
+        if (sel.isPresent() && sel.get() instanceof Navigable) {
+            ((Navigable) sel.get()).navigateForward();
+        }
+    }
+
+    /**
+     * Install a global AWT event listener that intercepts mouse back/forward
+     * buttons (4 and 5) anywhere inside the tabbed pane.  This works for
+     * ALL tabs – including those that don't know about TabbedPaneManager
+     * (e.g. Wiki, Confluence Reader).
+     */
+    private void installGlobalMouseNavigation() {
+        Toolkit.getDefaultToolkit().addAWTEventListener(new AWTEventListener() {
+            @Override
+            public void eventDispatched(AWTEvent event) {
+                if (!(event instanceof MouseEvent)) return;
+                MouseEvent me = (MouseEvent) event;
+                if (me.getID() != MouseEvent.MOUSE_RELEASED) return;
+
+                int button = me.getButton();
+                if (button != MOUSE_BACK_BUTTON && button != MOUSE_FORWARD_BUTTON) return;
+
+                Component source = me.getComponent();
+                if (!SwingUtilities.isDescendingFrom(source, tabbedPane)) return;
+
+                if (button == MOUSE_BACK_BUTTON) {
+                    performBack();
+                } else {
+                    performForward();
+                }
+            }
+        }, AWTEvent.MOUSE_EVENT_MASK);
+    }
+
+    public void addTab(AppTab tab) {
+        // Populate tabMap BEFORE addTab — JTabbedPane auto-selects the first tab
+        // added to an empty pane, which fires a ChangeEvent.  The ChangeListener
+        // must be able to find the tab in tabMap to initialise lastActiveTab.
+        tabMap.put(tab.getComponent(), tab);
+        tabbedPane.addTab(tab.getTitle(), tab.getComponent());
+        int index = tabbedPane.indexOfComponent(tab.getComponent());
+
+        addClosableTabComponent(index, tab);
+        tabbedPane.setSelectedComponent(tab.getComponent());
+    }
+
+    public void updateTitleFor(AppTab tab) {
+        Component comp = tab.getComponent();
+        int index = tabbedPane.indexOfComponent(comp);
+        if (index >= 0) {
+            tabbedPane.setTitleAt(index, tab.getTitle());
+
+            // Optional: Wenn ein benutzerdefiniertes Tab-Panel (mit Label + Close-Button) verwendet wird:
+            Component tabComponent = tabbedPane.getTabComponentAt(index);
+            if (tabComponent instanceof JPanel) {
+                JPanel panel = (JPanel) tabComponent;
+                for (Component c : panel.getComponents()) {
+                    if (c instanceof JLabel) {
+                        JLabel label = (JLabel) c;
+                        label.setText(tab.getTitle());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    public void updateTooltipFor(AppTab tab) {
+        Component comp = tab.getComponent();
+        int index = tabbedPane.indexOfComponent(comp);
+        if (index >= 0) {
+            tabbedPane.setToolTipTextAt(index, tab.getTooltip());
+        }
+    }
+
+    private static final String STAR_EMPTY = "☆";
+    private static final String STAR_FILLED = "★";
+
+    private void addClosableTabComponent(int index, AppTab tab) {
+        JPanel tabPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        tabPanel.setOpaque(false);
+
+        // Favorite star button for all tabs that have a path
+        if (tab instanceof Bookmarkable) {
+            JButton starButton = createStarButton(tab);
+            tabPanel.add(starButton);
+        }
+
+        JLabel titleLabel = new JLabel(tab.getTitle());
+        JButton closeButton = new JButton("×");
+        closeButton.setMargin(new Insets(0, 5, 0, 5));
+        closeButton.setBorder(BorderFactory.createEmptyBorder());
+        closeButton.setFocusable(false);
+        closeButton.setContentAreaFilled(false);
+        closeButton.setToolTipText("Tab schließen");
+        closeButton.addActionListener(e -> closeTab(tabbedPane.indexOfComponent(tab.getComponent())));
+
+        tabPanel.add(titleLabel);
+        tabPanel.add(closeButton);
+        tabbedPane.setTabComponentAt(index, tabPanel);
+    }
+
+    /**
+     * Determine the backend typSchluessel string for a tab.
+     */
+    private String getBackendTypeForTab(AppTab tab) {
+        if (tab instanceof FileTabImpl) {
+            VirtualResource res = ((FileTabImpl) tab).getResource();
+            return res != null ? res.getBackendType().name() : "LOCAL";
+        }
+        if (tab instanceof FtpConnectionTabImpl) return "FTP";
+        if (tab instanceof MvsConnectionTab) return "FTP";
+        if (tab instanceof NdvConnectionTab) return "NDV";
+        if (tab instanceof LocalConnectionTabImpl) return "LOCAL";
+        if (tab instanceof de.bund.zrb.ui.mail.MailConnectionTab) return "MAIL";
+        if (tab instanceof de.bund.zrb.ui.mail.MailPreviewTab) return "MAIL";
+        if (tab instanceof CacheConnectionTab) return "CACHE";
+        if (tab instanceof de.bund.zrb.wiki.ui.WikiConnectionTab) return "WIKI";
+        if (tab instanceof de.bund.zrb.wiki.ui.WikiFileTab) return "WIKI";
+        if (tab instanceof ConfluenceConnectionTab) return "CONFLUENCE";
+        if (tab instanceof ConfluenceReaderTab) return "CONFLUENCE";
+        if (tab instanceof de.bund.zrb.ui.terminal.TerminalConnectionTab) return "TN3270";
+        if (tab instanceof BrowserConnectionTab) return "BROWSER";
+        if (tab instanceof JobDetailTab) return "JES";
+        if (tab instanceof de.bund.zrb.ui.jes.JesJobsConnectionTab) return "JES";
+        return "LOCAL";
+    }
+
+    /**
+     * Determine the resource kind string for a tab.
+     */
+    private String getResourceKindForTab(AppTab tab) {
+        if (tab instanceof FileTabImpl) return "FILE";
+        return "DIRECTORY";
+    }
+
+    /**
+     * Get the current path from any tab.
+     */
+    private String getPathForTab(AppTab tab) {
+        if (tab instanceof Bookmarkable) {
+            return ((Bookmarkable) tab).getPath();
+        }
+        return null;
+    }
+
+    private JButton createStarButton(AppTab tab) {
+        String rawPath = getPathForTab(tab);
+        String backendType = getBackendTypeForTab(tab);
+
+        LeftDrawer drawer = getBookmarkDrawer();
+        boolean isBookmarked = drawer != null && rawPath != null && drawer.isBookmarked(rawPath, backendType);
+        AppLogger.get(AppLogger.STAR).fine("createStarButton: rawPath=" + rawPath + " backend=" + backendType + " isBookmarked=" + isBookmarked);
+
+        JButton starButton = new JButton(isBookmarked ? STAR_FILLED : STAR_EMPTY);
+        starButton.setMargin(new Insets(0, 0, 0, 2));
+        starButton.setBorder(BorderFactory.createEmptyBorder());
+        starButton.setFocusable(false);
+        starButton.setContentAreaFilled(false);
+        starButton.setToolTipText(isBookmarked ? "Lesezeichen entfernen" : "Als Lesezeichen merken");
+        starButton.setForeground(isBookmarked ? new Color(255, 200, 0) : Color.GRAY);
+        starButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+
+        starButton.addActionListener(e -> {
+            String path = getPathForTab(tab);
+            String backend = getBackendTypeForTab(tab);
+            String kind = getResourceKindForTab(tab);
+            LeftDrawer d = getBookmarkDrawer();
+            if (d != null && path != null && !path.isEmpty()) {
+                // For NDV FILE bookmarks, pass NDV metadata so we can reopen directly
+                NdvResourceState ndvState = null;
+                if ("NDV".equals(backend) && "FILE".equals(kind) && tab instanceof FileTabImpl) {
+                    VirtualResource res = ((FileTabImpl) tab).getResource();
+                    if (res != null) ndvState = res.getNdvState();
+                }
+
+                // For TN3270 bookmarks, capture macro recording and ask for a name
+                String macroSteps = null;
+                if ("TN3270".equals(backend) && tab instanceof de.bund.zrb.ui.terminal.TerminalConnectionTab) {
+                    de.bund.zrb.ui.terminal.TerminalConnectionTab termTab =
+                            (de.bund.zrb.ui.terminal.TerminalConnectionTab) tab;
+                    macroSteps = termTab.getMacroStepsJson();
+                    // Check if already bookmarked — if so, just remove
+                    if (d.isBookmarked(path, backend)) {
+                        d.toggleBookmark(path, backend, kind, null, null);
+                        starButton.setText(STAR_EMPTY);
+                        starButton.setForeground(Color.GRAY);
+                        starButton.setToolTipText("Als Lesezeichen merken");
+                        return;
+                    }
+                    // Prompt for bookmark name
+                    String defaultName = "🖥️ 3270 → " + path;
+                    String name = (String) javax.swing.JOptionPane.showInputDialog(
+                            tabbedPane, "Name für das Terminal-Lesezeichen:",
+                            "3270 Lesezeichen", javax.swing.JOptionPane.PLAIN_MESSAGE,
+                            null, null, defaultName);
+                    if (name == null || name.trim().isEmpty()) return; // cancelled
+
+                    // Create bookmark directly with custom label
+                    String prefixedPath = de.bund.zrb.model.BookmarkEntry.buildPath(backend, path);
+                    de.bund.zrb.model.BookmarkEntry entry =
+                            new de.bund.zrb.model.BookmarkEntry(name.trim(), prefixedPath, false);
+                    entry.resourceKind = "CONNECTION";
+                    entry.tn3270MacroSteps = macroSteps;
+                    de.bund.zrb.helper.BookmarkHelper.addBookmarkToFolder(
+                            d.resolveTargetBookmarkFolderLabel(), entry);
+                    d.refreshBookmarks();
+                    d.selectBookmarkByPath(prefixedPath);
+                    starButton.setText(STAR_FILLED);
+                    starButton.setForeground(new Color(255, 200, 0));
+                    starButton.setToolTipText("Lesezeichen entfernen");
+                    return;
+                }
+
+                // For Confluence/Wiki tabs, pass the tab title as display label
+                // (path-derived label would just be a numeric page ID)
+                String displayLabel = null;
+                if ("CONFLUENCE".equals(backend) || "WIKI".equals(backend)) {
+                    displayLabel = tab.getTitle();
+                }
+                boolean added = d.toggleBookmark(path, backend, kind, ndvState, null, displayLabel);
+                starButton.setText(added ? STAR_FILLED : STAR_EMPTY);
+                starButton.setForeground(added ? new Color(255, 200, 0) : Color.GRAY);
+                starButton.setToolTipText(added ? "Lesezeichen entfernen" : "Als Lesezeichen merken");
+            }
+        });
+
+        return starButton;
+    }
+
+    public LeftDrawer getBookmarkDrawer() {
+        if (mainframeContext instanceof MainFrame) {
+            return ((MainFrame) mainframeContext).getBookmarkDrawer();
+        }
+        return null;
+    }
+
+    public void closeTab(int index) {
+        Component comp = tabbedPane.getComponentAt(index);
+        AppTab tab = tabMap.remove(comp);
+        if (tab != null) {
+            tab.onClose();
+            // Remove closed tab from navigation stacks
+            while (tabBackStack.remove(tab)) { /* drain */ }
+            while (tabForwardStack.remove(tab)) { /* drain */ }
+            if (lastActiveTab == tab) {
+                lastActiveTab = null;
+            }
+        }
+        tabbedPane.remove(index);
+    }
+
+    /**
+     * Close all tabs that are instances of the given class.
+     * Each tab's onClose() is called before removal.
+     */
+    public void closeTabsOfType(Class<?> tabClass) {
+        // Iterate backwards to avoid index shift issues
+        for (int i = tabbedPane.getTabCount() - 1; i >= 0; i--) {
+            Component comp = tabbedPane.getComponentAt(i);
+            AppTab tab = tabMap.get(comp);
+            if (tab != null && tabClass.isInstance(tab)) {
+                tabMap.remove(comp);
+                tab.onClose();
+                tabbedPane.remove(i);
+            }
+        }
+    }
+
+    /**
+     * Close ALL tabs, calling onClose() on each.
+     * Used during app shutdown to ensure all resources (especially browser processes) are released.
+     */
+    public void closeAllTabs() {
+        for (int i = tabbedPane.getTabCount() - 1; i >= 0; i--) {
+            Component comp = tabbedPane.getComponentAt(i);
+            AppTab tab = tabMap.remove(comp);
+            if (tab != null) {
+                try {
+                    tab.onClose();
+                } catch (Exception e) {
+                    // Best effort — don't let one tab failure prevent others from closing
+                }
+            }
+            tabbedPane.remove(i);
+        }
+    }
+
+    /**
+     * Refresh all star (favorite) buttons in tab headers to match current bookmark state.
+     */
+    public void refreshStarButtons() {
+        LeftDrawer drawer = getBookmarkDrawer();
+        if (drawer == null) return;
+
+        for (int i = 0; i < tabbedPane.getTabCount(); i++) {
+            Component tabComp = tabbedPane.getTabComponentAt(i);
+            if (!(tabComp instanceof JPanel)) continue;
+
+            Component contentComp = tabbedPane.getComponentAt(i);
+            AppTab tab = tabMap.get(contentComp);
+            if (tab == null) continue;
+
+            String rawPath = getPathForTab(tab);
+            boolean isBookmarked;
+            if (rawPath == null || rawPath.isEmpty()) {
+                isBookmarked = false;
+            } else {
+                String backendType = getBackendTypeForTab(tab);
+                isBookmarked = drawer.isBookmarked(rawPath, backendType);
+            }
+
+            JPanel panel = (JPanel) tabComp;
+            for (Component c : panel.getComponents()) {
+                if (c instanceof JButton) {
+                    JButton btn = (JButton) c;
+                    String text = btn.getText();
+                    if (STAR_EMPTY.equals(text) || STAR_FILLED.equals(text)) {
+                        btn.setText(isBookmarked ? STAR_FILLED : STAR_EMPTY);
+                        btn.setForeground(isBookmarked ? new Color(255, 200, 0) : Color.GRAY);
+                        btn.setToolTipText(isBookmarked ? "Lesezeichen entfernen" : "Als Lesezeichen merken");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Refresh the star button for a specific tab (e.g. after directory navigation).
+     */
+    public void refreshStarForTab(AppTab tab) {
+        if (tab == null) return;
+        LeftDrawer drawer = getBookmarkDrawer();
+        if (drawer == null) return;
+
+        Component comp = tab.getComponent();
+        int index = tabbedPane.indexOfComponent(comp);
+        if (index < 0) return;
+
+        Component tabComp = tabbedPane.getTabComponentAt(index);
+        if (!(tabComp instanceof JPanel)) return;
+
+        String rawPath = getPathForTab(tab);
+        if (rawPath == null || rawPath.isEmpty()) return;
+
+        String backendType = getBackendTypeForTab(tab);
+        boolean isBookmarked = drawer.isBookmarked(rawPath, backendType);
+        AppLogger.get(AppLogger.STAR).fine("refreshStarForTab: rawPath=" + rawPath + " backend=" + backendType + " isBookmarked=" + isBookmarked);
+
+        JPanel panel = (JPanel) tabComp;
+        for (Component c : panel.getComponents()) {
+            if (c instanceof JButton) {
+                JButton btn = (JButton) c;
+                String text = btn.getText();
+                if (STAR_EMPTY.equals(text) || STAR_FILLED.equals(text)) {
+                    btn.setText(isBookmarked ? STAR_FILLED : STAR_EMPTY);
+                    btn.setForeground(isBookmarked ? new Color(255, 200, 0) : Color.GRAY);
+                    btn.setToolTipText(isBookmarked ? "Lesezeichen entfernen" : "Als Lesezeichen merken");
+                    break;
+                }
+            }
+        }
+    }
+
+    public void saveSelectedComponent() {
+        Component comp = tabbedPane.getSelectedComponent();
+        AppTab tab = tabMap.get(comp);
+        if (tab != null) tab.saveIfApplicable();
+    }
+
+    public void saveAndCloseSelectedComponent() {
+        Component comp = tabbedPane.getSelectedComponent();
+        if (comp == null) return;
+
+        AppTab tab = tabMap.get(comp);
+        if (tab != null) {
+            tab.saveIfApplicable(); // erst speichern
+            int index = tabbedPane.indexOfComponent(comp);
+            if (index >= 0) {
+                closeTab(index); // dann schließen
+            }
+        }
+    }
+
+    public void closeSelectedComponent() {
+        Component comp = tabbedPane.getSelectedComponent();
+        if (comp == null) return;
+        int index = tabbedPane.indexOfComponent(comp);
+        if (index >= 0) {
+            closeTab(index);
+        }
+    }
+
+    public JComponent getComponent() {
+        return tabbedPaneWrapper;
+    }
+
+    public Component getSelectedComponent() {
+        return tabbedPane.getSelectedComponent();
+    }
+
+    /**
+     * Öffnet einen neuen FileTab basierend auf VirtualResource.
+     */
+    public FileTab openFileTab(VirtualResource resource, String content, String sentenceType, String searchPattern, Boolean toCompare) {
+        de.bund.zrb.ui.FileTabImpl fileTabImpl = new de.bund.zrb.ui.FileTabImpl(this, resource, content, sentenceType, searchPattern, toCompare);
+        addTab(fileTabImpl);
+        focusTabByAdapter(fileTabImpl);
+        return fileTabImpl;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Tab-level back/forward navigation
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    /**
+     * Close the current tab and return to the previously active one.
+     * The closed tab is stored so that {@link #navigateTabForward()} can reopen it.
+     *
+     * @return {@code true} if navigation happened
+     */
+    public boolean navigateTabBack() {
+        // Find a valid previous tab that is still in the pane
+        AppTab prevTab = null;
+        while (!tabBackStack.isEmpty()) {
+            AppTab candidate = tabBackStack.pop();
+            if (tabbedPane.indexOfComponent(candidate.getComponent()) >= 0) {
+                prevTab = candidate;
+                break;
+            }
+        }
+        if (prevTab == null) return false;
+
+        Component currentComp = tabbedPane.getSelectedComponent();
+        AppTab currentTab = currentComp != null ? tabMap.get(currentComp) : null;
+
+        suppressTabHistory = true;
+        try {
+            if (currentTab != null) {
+                // Remove from pane WITHOUT calling onClose — we want to reopen it via forward
+                int idx = tabbedPane.indexOfComponent(currentComp);
+                if (idx >= 0) {
+                    tabMap.remove(currentComp);
+                    tabbedPane.remove(idx);
+                }
+                tabForwardStack.push(currentTab);
+            }
+
+            int prevIdx = tabbedPane.indexOfComponent(prevTab.getComponent());
+            if (prevIdx >= 0) {
+                tabbedPane.setSelectedIndex(prevIdx);
+            }
+            lastActiveTab = prevTab;
+        } finally {
+            suppressTabHistory = false;
+        }
+        return true;
+    }
+
+    /**
+     * Reopen a tab that was previously closed via {@link #navigateTabBack()}.
+     *
+     * @return {@code true} if a tab was reopened
+     */
+    public boolean navigateTabForward() {
+        if (tabForwardStack.isEmpty()) return false;
+        AppTab forwardTab = tabForwardStack.pop();
+
+        AppTab currentTab = lastActiveTab;
+
+        suppressTabHistory = true;
+        try {
+            if (currentTab != null) {
+                tabBackStack.push(currentTab);
+            }
+            // Re-add the tab to the pane
+            tabMap.put(forwardTab.getComponent(), forwardTab);
+            tabbedPane.addTab(forwardTab.getTitle(), forwardTab.getComponent());
+            int index = tabbedPane.indexOfComponent(forwardTab.getComponent());
+            addClosableTabComponent(index, forwardTab);
+            tabbedPane.setSelectedComponent(forwardTab.getComponent());
+            lastActiveTab = forwardTab;
+        } finally {
+            suppressTabHistory = false;
+        }
+        return true;
+    }
+
+    /** @return {@code true} if {@link #navigateTabBack()} would succeed. */
+    public boolean canNavigateTabBack() {
+        for (AppTab tab : tabBackStack) {
+            if (tabbedPane.indexOfComponent(tab.getComponent()) >= 0) return true;
+        }
+        return false;
+    }
+
+    /** @return {@code true} if {@link #navigateTabForward()} would succeed. */
+    public boolean canNavigateTabForward() {
+        return !tabForwardStack.isEmpty();
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Plugin-Management
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    public Optional<AppTab> getSelectedTab() {
+        Component selected = tabbedPane.getSelectedComponent();
+        return Optional.ofNullable(tabMap.get(selected));
+    }
+
+    public Optional<Bookmarkable> getSelectedFileTab() {
+        Component selected = tabbedPane.getSelectedComponent();
+        AppTab tab = tabMap.get(selected);
+        if (tab instanceof FileTabImpl) {
+            return Optional.of((FileTabImpl) tab);
+        }
+        return Optional.empty();
+    }
+
+
+    public java.util.List<Bookmarkable> getAllTabs() {
+        java.util.List<Bookmarkable> result = new java.util.ArrayList<>();
+        for (AppTab tab : tabMap.values()) {
+            if (tab instanceof Bookmarkable) {
+                result.add((Bookmarkable) tab);
+            }
+        }
+        return result;
+    }
+
+    public java.util.List<AppTab> getAllOpenTabs() {
+        return new java.util.ArrayList<>(tabMap.values());
+    }
+
+    /**
+     * Find the first open tab that is an instance of the given class.
+     * @return the tab instance, or null if not found
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends AppTab> T findTabOfType(Class<T> clazz) {
+        for (AppTab tab : tabMap.values()) {
+            if (clazz.isInstance(tab)) {
+                return (T) tab;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Select (bring to front) the given tab.
+     */
+    public void selectTab(AppTab tab) {
+        if (tab == null) return;
+        Component comp = tab.getComponent();
+        int index = tabbedPane.indexOfComponent(comp);
+        if (index >= 0) {
+            tabbedPane.setSelectedIndex(index);
+        }
+    }
+
+    public void focusTabByAdapter(Bookmarkable tab) {
+        if (!(tab instanceof AppTab)) return;
+
+        Component comp = ((AppTab) tab).getComponent();
+        int index = tabbedPane.indexOfComponent(comp);
+        if (index >= 0) {
+            tabbedPane.setSelectedIndex(index);
+        }
+    }
+
+    public MainframeContext getMainframeContext() {
+        return mainframeContext;
+    }
+
+    public void replaceTab(AppTab oldTab, AppTab newTab) {
+        Component oldComponent = oldTab.getComponent();
+        int index = tabbedPane.indexOfComponent(oldComponent);
+        if (index >= 0) {
+            tabbedPane.setComponentAt(index, newTab.getComponent());
+            tabMap.remove(oldComponent);
+            tabMap.put(newTab.getComponent(), newTab);
+            updateTitleFor(newTab);
+            updateTooltipFor(newTab);
+        }
+    }
+
+    /**
+     * Get the parent frame for dialogs.
+     */
+    public Frame getParentFrame() {
+        if (mainframeContext instanceof Frame) {
+            return (Frame) mainframeContext;
+        }
+        return (Frame) SwingUtilities.getWindowAncestor(tabbedPane);
+    }
+
+    /**
+     * Update JCL outline panel when a tab is selected.
+     * Detects if the selected tab contains JCL content and updates the outline.
+     */
+    /**
+     * Public entry point to refresh the outline panel for the currently active tab.
+     * Called when the sentence type dropdown changes.
+     */
+    public void refreshOutlineForActiveTab() {
+        updateJclOutlineForSelectedTab();
+    }
+
+    /**
+     * Public entry point to refresh the relations panel for the currently active tab.
+     * Called when a preview changes inside a ConnectionTab.
+     */
+    public void refreshRelationsForActiveTab() {
+        updateJclOutlineForSelectedTab();
+    }
+
+    private void updateJclOutlineForSelectedTab() {
+        // Get RightDrawer from MainFrame
+        if (!(mainframeContext instanceof MainFrame)) {
+            return;
+        }
+
+        MainFrame mainFrame = (MainFrame) mainframeContext;
+        RightDrawer rightDrawer = mainFrame.getRightDrawer();
+        if (rightDrawer == null) {
+            return;
+        }
+
+        Component selected = tabbedPane.getSelectedComponent();
+        if (selected == null) {
+            rightDrawer.clearJclOutline();
+            return;
+        }
+
+        AppTab tab = tabMap.get(selected);
+        if (tab == null) {
+            rightDrawer.clearJclOutline();
+            rightDrawer.restoreCodeOutline();
+            return;
+        }
+
+        // Switch the LeftDrawer hierarchy filter scope (per tab type — NDV, CONFLUENCE,
+        // WIKI, JES, FTP, MAIL, BROWSER, …) so each tab type keeps its own remembered
+        // caller/callee regex filter.
+        LeftDrawer leftDrawerForScope = mainFrame.getBookmarkDrawer();
+        if (leftDrawerForScope != null) {
+            leftDrawerForScope.setHierarchyScope(getBackendTypeForTab(tab));
+        }
+
+        // WikiFileTab: show wiki outline in RightDrawer + relations in LeftDrawer
+        if (tab instanceof de.bund.zrb.wiki.ui.WikiFileTab) {
+            de.bund.zrb.wiki.ui.WikiFileTab wikiTab = (de.bund.zrb.wiki.ui.WikiFileTab) tab;
+            de.bund.zrb.wiki.domain.OutlineNode outline = wikiTab.getOutline();
+            if (outline != null) {
+                rightDrawer.updateWikiOutline(outline, wikiTab.getPageTitle(), wikiTab);
+            } else {
+                rightDrawer.restoreCodeOutline();
+                rightDrawer.clearJclOutline();
+            }
+            updateRelationsForWikiTab(mainFrame, wikiTab);
+            return;
+        }
+
+        // WikiConnectionTab: show outline + relations for the currently previewed page
+        if (tab instanceof de.bund.zrb.wiki.ui.WikiConnectionTab) {
+            de.bund.zrb.wiki.ui.WikiConnectionTab wikiConnTab =
+                    (de.bund.zrb.wiki.ui.WikiConnectionTab) tab;
+            de.bund.zrb.wiki.domain.OutlineNode outline = wikiConnTab.getCurrentOutline();
+            if (outline != null) {
+                java.util.function.Consumer<String> scroller = anchor -> wikiConnTab.scrollToAnchor(anchor);
+                rightDrawer.updateWikiOutline(outline, wikiConnTab.getCurrentPageTitle(), scroller);
+            } else {
+                rightDrawer.restoreCodeOutline();
+                rightDrawer.clearJclOutline();
+            }
+            updateRelationsForWikiPreview(mainFrame, wikiConnTab);
+            return;
+        }
+
+        // BrowserConnectionTab: show page outline in RightDrawer
+        if (tab instanceof BrowserConnectionTab) {
+            BrowserConnectionTab browserTab = (BrowserConnectionTab) tab;
+            de.bund.zrb.wiki.domain.OutlineNode outline = browserTab.getCurrentOutline();
+            if (outline != null) {
+                rightDrawer.updateWikiOutline(outline, browserTab.getCurrentTitle(), (java.util.function.Consumer<String>) null);
+            } else {
+                rightDrawer.restoreCodeOutline();
+                rightDrawer.clearJclOutline();
+            }
+            return;
+        }
+
+        // ConfluenceConnectionTab: show page outline in RightDrawer + hierarchy/links in LeftDrawer
+        if (tab instanceof ConfluenceConnectionTab) {
+            ConfluenceConnectionTab confTab = (ConfluenceConnectionTab) tab;
+            de.bund.zrb.wiki.domain.OutlineNode outline = confTab.getCurrentOutline();
+            if (outline != null) {
+                java.util.function.Consumer<String> scroller = anchor -> confTab.scrollToAnchor(anchor);
+                rightDrawer.updateWikiOutline(outline, confTab.getCurrentPageTitle(), scroller);
+            } else {
+                rightDrawer.restoreCodeOutline();
+                rightDrawer.clearJclOutline();
+            }
+            updateHierarchyForConfluencePreview(mainFrame, confTab);
+            updateLinksForConfluencePreview(mainFrame, confTab);
+            return;
+        }
+
+        // ConfluenceReaderTab: show page outline in RightDrawer
+        if (tab instanceof ConfluenceReaderTab) {
+            ConfluenceReaderTab readerTab = (ConfluenceReaderTab) tab;
+            de.bund.zrb.wiki.domain.OutlineNode outline = readerTab.getOutline();
+            if (outline != null) {
+                java.util.function.Consumer<String> scroller = anchor -> readerTab.scrollToAnchor(anchor);
+                rightDrawer.updateWikiOutline(outline, readerTab.getPageTitle(), scroller);
+            } else {
+                rightDrawer.restoreCodeOutline();
+                rightDrawer.clearJclOutline();
+            }
+            return;
+        }
+
+        // Restore code outline for non-wiki tabs
+        rightDrawer.restoreCodeOutline();
+
+        // Update relations for non-wiki tabs
+        updateRelationsForNonWikiTab(mainFrame, tab);
+
+        // Get content, source name, and sentence type from the tab
+        String content = null;
+        String sourceName = null;
+        String sentenceType = null;
+
+        if (tab instanceof FileTabImpl) {
+            FileTabImpl fileTab = (FileTabImpl) tab;
+            content = fileTab.getContent();
+            sourceName = fileTab.getPath();
+            sentenceType = fileTab.getModel().getSentenceType();
+            wireExternalNavigation(fileTab);
+        } else if (tab instanceof JobDetailTab) {
+            JobDetailTab jesTab = (JobDetailTab) tab;
+            content = jesTab.getContent();
+            sourceName = jesTab.getPath();
+            sentenceType = jesTab.getEffectiveLanguageHint();
+            // Wire outline refresh so language dropdown changes update the outline
+            jesTab.setOutlineRefreshCallback(this::refreshOutlineForActiveTab);
+        } else if (tab instanceof SplitPreviewTab) {
+            SplitPreviewTab previewTab = (SplitPreviewTab) tab;
+            content = previewTab.getContent();
+            sourceName = previewTab.getPath();
+            wireExternalNavigation(previewTab);
+        }
+
+        if (content == null || content.isEmpty()) {
+            rightDrawer.clearJclOutline();
+            return;
+        }
+
+        // Determine whether to show outline based on the sentence type from dropdown
+        boolean showOutline = false;
+        boolean isDdm = false;
+        if (sentenceType != null && !sentenceType.isEmpty()) {
+            String upper = sentenceType.toUpperCase();
+            isDdm = upper.contains("DDM") || upper.contains("NSD");
+            showOutline = isDdm || upper.contains("JCL") || upper.contains("COBOL")
+                    || upper.contains("NATURAL") || upper.contains("COPYCODE")
+                    || upper.contains("SUBPROGRAM") || upper.contains("SUBROUTINE")
+                    || upper.contains("HELPROUTINE");
+        }
+        if (!showOutline) {
+            // Fallback: auto-detect from content/path if no sentence type is set
+            isDdm = (sourceName != null && de.bund.zrb.service.DdmAnalysisService.getInstance().isDdmFile(sourceName))
+                    || de.bund.zrb.jcl.parser.DdmParser.isDdmContent(content);
+            showOutline = isDdm || isJclContent(content) || isCobolContent(content)
+                    || isNaturalContent(content)
+                    || de.bund.zrb.service.NaturalAnalysisService.getInstance().isNaturalFile(sourceName);
+        }
+
+        if (showOutline) {
+            // For DDM files, pass "DDM" as language hint so the outline panel uses DdmAnalysisService
+            String outlineHint = isDdm ? "DDM" : sentenceType;
+            rightDrawer.updateJclOutline(content, sourceName, outlineHint);
+
+            // Set up line navigator to jump to line in editor (double-click)
+            // When diagram view is active, also navigate to the element in the diagram
+            rightDrawer.getOutlinePanel().setLineNavigator(lineNumber -> {
+                navigateToLine(tab, lineNumber);
+                navigateOutlineToDiagram(tab, rightDrawer);
+            });
+
+            // Single-click tree selection → navigate to line in editor + diagram if active
+            rightDrawer.getOutlinePanel().addTreeSelectionListener(e -> {
+                de.bund.zrb.jcl.model.JclElement selectedElement = rightDrawer.getOutlinePanel().getSelectedElement();
+                if (selectedElement != null && selectedElement.getLineNumber() > 0) {
+                    navigateToLine(tab, selectedElement.getLineNumber());
+                }
+                navigateOutlineToDiagram(tab, rightDrawer);
+            });
+
+            // Auto-switch to Outline tab so the user can see the outline
+            rightDrawer.showOutlineTab();
+        } else {
+            rightDrawer.clearJclOutline();
+        }
+    }
+
+    /**
+     * If the active tab has diagram view, navigate the diagram to the currently
+     * selected outline element. Called from both tree selection and double-click.
+     */
+    private void navigateOutlineToDiagram(Object tab, de.bund.zrb.ui.drawer.RightDrawer rightDrawer) {
+        if (!(tab instanceof SplitPreviewTab)) return;
+        SplitPreviewTab previewTab = (SplitPreviewTab) tab;
+        if (!previewTab.isDiagramViewActive()) return;
+        MermaidDiagramPanel panel = previewTab.getMermaidDiagramPanel();
+        if (panel == null || !panel.hasDiagram()) return;
+
+        de.bund.zrb.jcl.model.JclElement selected = rightDrawer.getOutlinePanel().getSelectedElement();
+        if (selected != null && selected.getName() != null && !selected.getName().isEmpty()) {
+            panel.navigateToElement(selected.getName());
+        }
+    }
+
+    /**
+     * Check if content looks like JCL.
+     */
+    private boolean isJclContent(String content) {
+        if (content == null || content.length() < 3) return false;
+
+        String[] lines = content.split("\\r?\\n", 80);
+        int jclLineCount = 0;
+
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("//")) {
+                jclLineCount++;
+            } else {
+                // JES spool output may prepend line numbers, e.g. "   1 //JOBNAME JOB ..."
+                String stripped = trimmed.replaceFirst("^\\d+\\s+", "");
+                if (stripped.startsWith("//")) {
+                    jclLineCount++;
+                }
+            }
+        }
+
+        // Consider it JCL if at least 2 lines start with //
+        return jclLineCount >= 2;
+    }
+
+    /**
+     * Check if content looks like COBOL.
+     */
+    private boolean isCobolContent(String content) {
+        if (content == null || content.length() < 10) return false;
+
+        String[] lines = content.split("\\r?\\n", 30);
+        int cobolHits = 0;
+        for (String line : lines) {
+            String upper = line.toUpperCase();
+            if (upper.contains("IDENTIFICATION DIVISION")
+                    || upper.contains("PROCEDURE DIVISION")
+                    || upper.contains("DATA DIVISION")
+                    || upper.contains("ENVIRONMENT DIVISION")
+                    || upper.contains("WORKING-STORAGE SECTION")
+                    || upper.contains("PROGRAM-ID")) {
+                cobolHits++;
+            }
+        }
+        return cobolHits >= 1;
+    }
+
+    /**
+     * Check if content looks like Natural (Software AG).
+     */
+    private boolean isNaturalContent(String content) {
+        if (content == null || content.length() < 10) return false;
+
+        String[] lines = content.split("\\r?\\n", 40);
+        int naturalHits = 0;
+        for (String line : lines) {
+            String trimmed = line.trim().toUpperCase();
+            if (trimmed.startsWith("DEFINE DATA")
+                    || trimmed.startsWith("END-DEFINE")
+                    || trimmed.startsWith("DEFINE SUBROUTINE")
+                    || trimmed.startsWith("CALLNAT ")
+                    || trimmed.startsWith("END-SUBROUTINE")
+                    || trimmed.startsWith("LOCAL USING")
+                    || trimmed.startsWith("PARAMETER USING")
+                    || trimmed.startsWith("DECIDE ON")
+                    || trimmed.startsWith("DECIDE FOR")
+                    || trimmed.startsWith("INPUT USING MAP")
+                    || trimmed.startsWith("FETCH RETURN")) {
+                naturalHits++;
+            }
+        }
+        return naturalHits >= 2;
+    }
+
+    /**
+     * Navigate to a specific line in the tab's editor.
+     */
+    private void navigateToLine(AppTab tab, int lineNumber) {
+        try {
+            if (tab instanceof FileTabImpl) {
+                FileTabImpl fileTab = (FileTabImpl) tab;
+                org.fife.ui.rsyntaxtextarea.RSyntaxTextArea textArea = fileTab.getRawPane();
+                if (textArea != null) {
+                    int offset = textArea.getLineStartOffset(lineNumber - 1);
+                    textArea.setCaretPosition(offset);
+                    textArea.requestFocusInWindow();
+                }
+            } else if (tab instanceof JobDetailTab) {
+                JobDetailTab jesTab = (JobDetailTab) tab;
+                org.fife.ui.rsyntaxtextarea.RSyntaxTextArea textArea = jesTab.getContentArea();
+                if (textArea != null) {
+                    int offset = textArea.getLineStartOffset(lineNumber - 1);
+                    textArea.setCaretPosition(offset);
+                    textArea.requestFocusInWindow();
+                }
+            } else if (tab instanceof SplitPreviewTab) {
+                SplitPreviewTab previewTab = (SplitPreviewTab) tab;
+                org.fife.ui.rsyntaxtextarea.RSyntaxTextArea textArea = previewTab.getRawPane();
+                if (textArea != null) {
+                    int offset = textArea.getLineStartOffset(lineNumber - 1);
+                    textArea.setCaretPosition(offset);
+                    textArea.requestFocusInWindow();
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Could not navigate to line " + lineNumber + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Navigate to a specific line in the given tab's editor (public facade).
+     *
+     * @param tab        the tab to navigate in
+     * @param lineNumber 1-based line number
+     */
+    public void navigateToLineInTab(AppTab tab, int lineNumber) {
+        navigateToLine(tab, lineNumber);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  Relations (LeftDrawer) support
+    // ═══════════════════════════════════════════════════════════
+
+    private void updateRelationsForWikiTab(MainFrame mainFrame, de.bund.zrb.wiki.ui.WikiFileTab wikiTab) {
+        LeftDrawer leftDrawer = mainFrame.getBookmarkDrawer();
+        de.bund.zrb.service.RelationsService relationsService = mainFrame.getRelationsService();
+        if (leftDrawer == null || relationsService == null) return;
+
+        String tabPath = wikiTab.getPath(); // wiki://siteId/pageTitle
+        final String pageTitle = wikiTab.getPageTitle();
+
+        // Check cache first
+        java.util.List<LeftDrawer.RelationEntry> cached = relationsService.getCached(tabPath);
+        if (cached != null) {
+            applyWikiLinks(leftDrawer, pageTitle, cached);
+            return;
+        }
+
+        // Show loading and resolve in background
+        leftDrawer.showRelationsLoading();
+        leftDrawer.showCallHierarchyLoading();
+
+        de.bund.zrb.wiki.domain.WikiSiteId siteId =
+                new de.bund.zrb.wiki.domain.WikiSiteId(wikiTab.getSiteId());
+
+        relationsService.resolveWikiLinks(siteId, wikiTab.getPageTitle(), tabPath,
+                new de.bund.zrb.service.RelationsService.RelationsCallback() {
+                    @Override
+                    public void onRelationsResolved(java.util.List<LeftDrawer.RelationEntry> entries) {
+                        applyWikiLinks(leftDrawer, pageTitle, entries);
+                    }
+                });
+    }
+
+    /**
+     * Update the LeftDrawer relations panel for a WikiConnectionTab preview.
+     * Works like {@link #updateRelationsForWikiTab} but reads siteId/pageTitle
+     * from the previewed page instead of from a WikiFileTab.
+     */
+    private void updateRelationsForWikiPreview(MainFrame mainFrame,
+                                               de.bund.zrb.wiki.ui.WikiConnectionTab wikiConnTab) {
+        LeftDrawer leftDrawer = mainFrame.getBookmarkDrawer();
+        de.bund.zrb.service.RelationsService relationsService = mainFrame.getRelationsService();
+        if (leftDrawer == null || relationsService == null) return;
+
+        de.bund.zrb.wiki.domain.WikiSiteId siteId = wikiConnTab.getCurrentSiteId();
+        final String pageTitle = wikiConnTab.getCurrentPageTitle();
+        if (siteId == null || pageTitle == null || pageTitle.isEmpty()) {
+            leftDrawer.showRelationsPlaceholder("Keine Vorschau geladen.");
+            leftDrawer.showCallHierarchyPlaceholder("Keine Vorschau geladen.");
+            return;
+        }
+
+        String cachePath = "wiki://" + siteId.value() + "/" + pageTitle;
+
+        // Check cache first
+        java.util.List<LeftDrawer.RelationEntry> cached = relationsService.getCached(cachePath);
+        if (cached != null) {
+            applyWikiLinks(leftDrawer, pageTitle, cached);
+            return;
+        }
+
+        // Show loading and resolve in background
+        leftDrawer.showRelationsLoading();
+        leftDrawer.showCallHierarchyLoading();
+
+        relationsService.resolveWikiLinks(siteId, pageTitle, cachePath,
+                new de.bund.zrb.service.RelationsService.RelationsCallback() {
+                    @Override
+                    public void onRelationsResolved(java.util.List<LeftDrawer.RelationEntry> entries) {
+                        applyWikiLinks(leftDrawer, pageTitle, entries);
+                    }
+                });
+    }
+
+    /**
+     * Split the resolved wiki links into page-links (→ Callees hierarchy) and
+     * document/attachment links (→ Daten panel) so the two panels don't show
+     * the same content. Callers stays empty until a richer MediaWiki API
+     * integration delivers categories / backlinks.
+     */
+    private void applyWikiLinks(LeftDrawer leftDrawer, String pageTitle,
+                                java.util.List<LeftDrawer.RelationEntry> entries) {
+        java.util.List<LeftDrawer.RelationEntry> docLinks =
+                new java.util.ArrayList<LeftDrawer.RelationEntry>();
+        java.util.List<LeftDrawer.RelationEntry> pageLinks =
+                new java.util.ArrayList<LeftDrawer.RelationEntry>();
+        if (entries != null) {
+            for (LeftDrawer.RelationEntry e : entries) {
+                if (isDocumentLikeUrl(e.getTargetPath())) docLinks.add(e);
+                else pageLinks.add(e);
+            }
+        }
+
+        // Daten panel — only attachments/documents
+        if (docLinks.isEmpty()) {
+            leftDrawer.showRelationsPlaceholder("Keine Dokumente / Anlagen auf dieser Seite.");
+        } else {
+            leftDrawer.updateRelations("Dokumente: " + pageTitle, docLinks);
+        }
+
+        // Callees hierarchy — only page-to-page links
+        pushWikiLinksToHierarchy(leftDrawer, pageTitle, pageLinks);
+    }
+
+    /**
+     * Mirror the wiki page's outgoing links into the Callees hierarchy panel and
+     * clear the Callers panel. This keeps the hierarchy panels consistent with
+     * Confluence behavior (Callees ➡ outgoing references). Categories / "What
+     * links here" data is not loaded here — Callers stays empty until a richer
+     * MediaWiki API integration is added.
+     */
+    private void pushWikiLinksToHierarchy(LeftDrawer leftDrawer, String pageTitle,
+                                          java.util.List<LeftDrawer.RelationEntry> entries) {
+        java.util.List<LeftDrawer.CallHierarchyData> callees =
+                new java.util.ArrayList<LeftDrawer.CallHierarchyData>();
+        if (entries != null) {
+            for (LeftDrawer.RelationEntry re : entries) {
+                callees.add(new LeftDrawer.CallHierarchyData(
+                        "\uD83D\uDD17 " + re.getLabel(), re.getTargetPath(), false, 0, null,
+                        "WIKI_LINK",
+                        java.util.Collections.<LeftDrawer.CallHierarchyData>emptyList()));
+            }
+        }
+        LeftDrawer.CallHierarchyData calleesRoot = new LeftDrawer.CallHierarchyData(
+                pageTitle, null, false, 0, null, null, callees);
+        LeftDrawer.CallHierarchyData callersRoot = new LeftDrawer.CallHierarchyData(
+                pageTitle, null, false, 0, null, null,
+                java.util.Collections.<LeftDrawer.CallHierarchyData>emptyList());
+        leftDrawer.updateCallHierarchy(calleesRoot, callersRoot, pageTitle);
+    }
+
+    /**
+     * Load ancestors, child pages and labels for the currently previewed Confluence
+     * page and display them in the LeftDrawer hierarchy panels:
+     * <ul>
+     *   <li><b>Callers</b> ⬅ Ancestors (übergeordnete Seiten — pages this page lives under).</li>
+     *   <li><b>Callees</b> ➡ Child pages plus outgoing HTML links (Querverweise) plus
+     *       labels. Entries are added as flat children of the invisible root so the
+     *       former "Übergeordnete Seiten" group wrapper no longer appears.</li>
+     * </ul>
+     */
+    private void updateHierarchyForConfluencePreview(MainFrame mainFrame,
+                                                     ConfluenceConnectionTab confTab) {
+        LeftDrawer leftDrawer = mainFrame.getBookmarkDrawer();
+        if (leftDrawer == null) return;
+
+        ConfluenceConnectionTab.PageItem item = confTab.getCurrentPreviewItem();
+        if (item == null) {
+            leftDrawer.showCallHierarchyPlaceholder("Keine Vorschau geladen.");
+            return;
+        }
+
+        leftDrawer.showCallHierarchyLoading();
+
+        final de.bund.zrb.confluence.ConfluenceRestClient client = confTab.getClient();
+        final String baseUrl = confTab.getBaseUrl();
+        final String pageId = item.id;
+        final String pageTitle = item.title;
+        // Snapshot HTML on the EDT so the worker can extract outgoing links offline.
+        final String htmlBody = confTab.getCurrentHtmlBody();
+
+        new javax.swing.SwingWorker<LeftDrawer.CallHierarchyData[], Void>() {
+            @Override
+            protected LeftDrawer.CallHierarchyData[] doInBackground() {
+                java.util.List<LeftDrawer.CallHierarchyData> callees =
+                        new java.util.ArrayList<LeftDrawer.CallHierarchyData>();
+                java.util.List<LeftDrawer.CallHierarchyData> callers =
+                        new java.util.ArrayList<LeftDrawer.CallHierarchyData>();
+
+                // ── Callers: Ancestors (übergeordnete Seiten) ──
+                try {
+                    String json = client.getContentWithAncestorsJson(pageId);
+                    com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+                    com.google.gson.JsonArray ancestors = root.getAsJsonArray("ancestors");
+                    if (ancestors != null) {
+                        for (com.google.gson.JsonElement el : ancestors) {
+                            com.google.gson.JsonObject a = el.getAsJsonObject();
+                            String aId = a.get("id").getAsString();
+                            String aTitle = a.get("title").getAsString();
+                            String url = baseUrl + "/pages/viewpage.action?pageId=" + aId;
+                            callers.add(new LeftDrawer.CallHierarchyData(
+                                    "\uD83D\uDCC1 " + aTitle, url, false, 0, null,
+                                    "CONFLUENCE_ANCESTOR",
+                                    java.util.Collections.<LeftDrawer.CallHierarchyData>emptyList()));
+                        }
+                    }
+                } catch (Exception e) {
+                    java.util.logging.Logger.getLogger(TabbedPaneManager.class.getName())
+                            .log(java.util.logging.Level.FINE, "[Confluence] Ancestors laden fehlgeschlagen", e);
+                }
+
+                // ── Callees: Child pages ──
+                try {
+                    String json = client.getChildrenJson(pageId, 0, 50);
+                    com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+                    com.google.gson.JsonArray results = root.getAsJsonArray("results");
+                    if (results != null) {
+                        for (com.google.gson.JsonElement el : results) {
+                            com.google.gson.JsonObject c = el.getAsJsonObject();
+                            String cId = c.get("id").getAsString();
+                            String cTitle = c.get("title").getAsString();
+                            String url = baseUrl + "/pages/viewpage.action?pageId=" + cId;
+                            callees.add(new LeftDrawer.CallHierarchyData(
+                                    "\uD83D\uDCC4 " + cTitle, url, false, 0, null,
+                                    "CONFLUENCE_CHILD",
+                                    java.util.Collections.<LeftDrawer.CallHierarchyData>emptyList()));
+                        }
+                    }
+                } catch (Exception e) {
+                    java.util.logging.Logger.getLogger(TabbedPaneManager.class.getName())
+                            .log(java.util.logging.Level.FINE, "[Confluence] Children laden fehlgeschlagen", e);
+                }
+
+                // ── Callees: Outgoing HTML links (Querverweise from page body) ──
+                // Only INTERNAL links (same host as baseUrl) that are not document
+                // downloads belong here — external links and documents/attachments
+                // are routed to the Daten panel instead so the two panels don't
+                // show the same items.
+                if (htmlBody != null && !htmlBody.isEmpty()) {
+                    java.util.List<LeftDrawer.RelationEntry> links = extractLinksFromHtml(htmlBody, baseUrl);
+                    for (LeftDrawer.RelationEntry re : links) {
+                        if (isDocumentLikeUrl(re.getTargetPath())) continue;
+                        if (!isSameHost(re.getTargetPath(), baseUrl)) continue;
+                        callees.add(new LeftDrawer.CallHierarchyData(
+                                "\uD83D\uDD17 " + re.getLabel(), re.getTargetPath(), false, 0, null,
+                                "CONFLUENCE_LINK",
+                                java.util.Collections.<LeftDrawer.CallHierarchyData>emptyList()));
+                    }
+                }
+
+                // ── Callees: Labels ──
+                try {
+                    String json = client.getLabelsJson(pageId);
+                    com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+                    com.google.gson.JsonArray results = root.getAsJsonArray("results");
+                    if (results != null) {
+                        for (com.google.gson.JsonElement el : results) {
+                            com.google.gson.JsonObject lbl = el.getAsJsonObject();
+                            String name = lbl.get("name").getAsString();
+                            String url = baseUrl + "/label/" + name;
+                            callees.add(new LeftDrawer.CallHierarchyData(
+                                    "\uD83C\uDFF7 " + name, url, false, 0, null,
+                                    "CONFLUENCE_LABEL",
+                                    java.util.Collections.<LeftDrawer.CallHierarchyData>emptyList()));
+                        }
+                    }
+                } catch (Exception e) {
+                    java.util.logging.Logger.getLogger(TabbedPaneManager.class.getName())
+                            .log(java.util.logging.Level.FINE, "[Confluence] Labels laden fehlgeschlagen", e);
+                }
+
+                LeftDrawer.CallHierarchyData calleesRoot = new LeftDrawer.CallHierarchyData(
+                        pageTitle, null, false, 0, null, null, callees);
+                LeftDrawer.CallHierarchyData callersRoot = new LeftDrawer.CallHierarchyData(
+                        pageTitle, null, false, 0, null, null, callers);
+                return new LeftDrawer.CallHierarchyData[] { calleesRoot, callersRoot };
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    LeftDrawer.CallHierarchyData[] result = get();
+                    leftDrawer.updateCallHierarchy(result[0], result[1], pageTitle);
+                } catch (Exception e) {
+                    java.util.logging.Logger.getLogger(TabbedPaneManager.class.getName())
+                            .log(java.util.logging.Level.WARNING, "[Confluence] Hierarchy laden fehlgeschlagen", e);
+                    leftDrawer.showCallHierarchyPlaceholder("\u274C Fehler: " + e.getMessage());
+                }
+            }
+        }.execute();
+    }
+
+    /**
+     * Extract document/attachment links from the currently previewed Confluence page
+     * HTML and display them in the LeftDrawer <b>Daten</b> panel (formerly
+     * "Abhängigkeiten"). Plain page-to-page hyperlinks already appear under
+     * Callees/Callers — to avoid redundancy this view shows only file-style
+     * targets (PDF/Office documents, archives, Confluence "/download/attachments/"
+     * URLs, etc.).
+     */
+    private void updateLinksForConfluencePreview(MainFrame mainFrame,
+                                                 ConfluenceConnectionTab confTab) {
+        LeftDrawer leftDrawer = mainFrame.getBookmarkDrawer();
+        if (leftDrawer == null) return;
+
+        String html = confTab.getCurrentHtmlBody();
+        String pageTitle = confTab.getCurrentPageTitle();
+        String baseUrl = confTab.getBaseUrl();
+
+        if (html == null || html.isEmpty()) {
+            leftDrawer.showRelationsPlaceholder("Keine Vorschau geladen.");
+            return;
+        }
+
+        // Extract <a href="..."> links and keep document/attachment targets plus
+        // external (different-host) links. Internal page-to-page hyperlinks live
+        // under Callees so they don't duplicate here.
+        java.util.List<LeftDrawer.RelationEntry> allLinks = extractLinksFromHtml(html, baseUrl);
+        java.util.List<LeftDrawer.RelationEntry> docLinks =
+                new java.util.ArrayList<LeftDrawer.RelationEntry>();
+        for (LeftDrawer.RelationEntry e : allLinks) {
+            String url = e.getTargetPath();
+            if (isDocumentLikeUrl(url)) {
+                docLinks.add(e);
+            } else if (!isSameHost(url, baseUrl)) {
+                docLinks.add(e);
+            }
+        }
+
+        if (docLinks.isEmpty()) {
+            leftDrawer.showRelationsPlaceholder("Keine Dokumente / externe Links auf dieser Seite.");
+        } else {
+            leftDrawer.updateRelations("Ressourcen: " + pageTitle, docLinks);
+        }
+    }
+
+    /**
+     * Returns {@code true} when {@code url} and {@code baseUrl} share the same
+     * hostname (case-insensitive). Used to classify hyperlinks on a Confluence
+     * page as internal (same host → Callees) vs external (different host → Daten).
+     * Relative URLs (no scheme) are treated as internal.
+     */
+    static boolean isSameHost(String url, String baseUrl) {
+        if (url == null || baseUrl == null) return false;
+        try {
+            String u = url.trim();
+            if (u.isEmpty()) return false;
+            // Relative URLs without scheme are always internal.
+            if (!u.startsWith("http://") && !u.startsWith("https://") && !u.startsWith("//")) {
+                return true;
+            }
+            String h1 = new java.net.URL(u.startsWith("//") ? "http:" + u : u).getHost();
+            String h2 = new java.net.URL(baseUrl).getHost();
+            return h1 != null && h2 != null && h1.equalsIgnoreCase(h2);
+        } catch (Exception ignore) {
+            return false;
+        }
+    }
+
+    /**
+     * Heuristic: returns {@code true} for URLs that look like file/document
+     * downloads (PDF, Office, archive, image…) or attachment paths. The list of
+     * recognized extensions and path substrings is configurable via
+     * <em>Einstellungen → Allgemein → Datentyp-Erkennung</em>
+     * ({@link de.bund.zrb.model.Settings#documentFileExtensions}). Each entry
+     * starting with a dot is matched as a file extension at the end of the URL
+     * path; every other entry is matched as a substring anywhere in the URL.
+     */
+    static boolean isDocumentLikeUrl(String url) {
+        if (url == null) return false;
+        String u = url.toLowerCase(java.util.Locale.ROOT);
+        // Strip query/fragment for extension check.
+        int q = u.indexOf('?');
+        if (q >= 0) u = u.substring(0, q);
+        int h = u.indexOf('#');
+        if (h >= 0) u = u.substring(0, h);
+
+        java.util.List<String> patterns;
+        try {
+            de.bund.zrb.model.Settings s = de.bund.zrb.helper.SettingsHelper.load();
+            patterns = (s != null) ? s.documentFileExtensions : null;
+        } catch (Exception ignored) {
+            patterns = null;
+        }
+        if (patterns == null || patterns.isEmpty()) {
+            return false;
+        }
+
+        for (String raw : patterns) {
+            if (raw == null) continue;
+            String p = raw.trim().toLowerCase(java.util.Locale.ROOT);
+            if (p.isEmpty()) continue;
+            if (p.startsWith(".")) {
+                if (u.endsWith(p)) return true;
+            } else {
+                if (u.contains(p)) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Parse all {@code <a href="...">} links from Confluence page HTML.
+     * Filters out anchors (#), empty hrefs, and duplicate URLs.
+     * Tries to extract only links from body text (skips navigation/macro containers).
+     */
+    static java.util.List<LeftDrawer.RelationEntry> extractLinksFromHtml(String html, String baseUrl) {
+        java.util.List<LeftDrawer.RelationEntry> result = new java.util.ArrayList<LeftDrawer.RelationEntry>();
+        java.util.Set<String> seen = new java.util.LinkedHashSet<String>();
+
+        // Regex: <a ...href="URL"...>LABEL</a>
+        java.util.regex.Pattern linkPattern = java.util.regex.Pattern.compile(
+                "<a\\s[^>]*href\\s*=\\s*[\"']([^\"'#][^\"']*)[\"'][^>]*>(.*?)</a>",
+                java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.DOTALL);
+
+        java.util.regex.Matcher m = linkPattern.matcher(html);
+        while (m.find()) {
+            String href = m.group(1).trim();
+            String label = m.group(2).replaceAll("<[^>]+>", "").trim(); // strip inner HTML tags
+
+            if (href.isEmpty() || label.isEmpty()) continue;
+
+            // Resolve relative URLs
+            String fullUrl = href;
+            if (!href.startsWith("http://") && !href.startsWith("https://") && !href.startsWith("//")) {
+                if (href.startsWith("/")) {
+                    // Absolute path relative to server root
+                    try {
+                        java.net.URL base = new java.net.URL(baseUrl);
+                        fullUrl = base.getProtocol() + "://" + base.getHost()
+                                + (base.getPort() > 0 && base.getPort() != base.getDefaultPort()
+                                ? ":" + base.getPort() : "")
+                                + href;
+                    } catch (Exception ignore) {
+                        fullUrl = baseUrl + href;
+                    }
+                } else {
+                    fullUrl = baseUrl + "/" + href;
+                }
+            }
+
+            // Deduplicate by URL
+            if (seen.contains(fullUrl)) continue;
+            seen.add(fullUrl);
+
+            // Determine link type based on URL
+            String type;
+            String icon;
+            if (fullUrl.contains("/pages/viewpage.action") || fullUrl.contains("/display/")) {
+                type = "CONFLUENCE_PAGE_LINK";
+                icon = "\uD83D\uDCC4 "; // 📄
+            } else if (fullUrl.contains("/label/")) {
+                type = "CONFLUENCE_LABEL_LINK";
+                icon = "\uD83C\uDFF7 "; // 🏷
+            } else if (fullUrl.startsWith(baseUrl)) {
+                type = "CONFLUENCE_INTERNAL";
+                icon = "\uD83D\uDD17 "; // 🔗
+            } else {
+                type = "EXTERNAL_LINK";
+                icon = "\uD83C\uDF10 "; // 🌐
+            }
+
+            // Truncate very long labels
+            String displayLabel = label.length() > 80 ? label.substring(0, 77) + "…" : label;
+            result.add(new LeftDrawer.RelationEntry(icon + displayLabel, fullUrl, type));
+        }
+
+        return result;
+    }
+
+    private void updateRelationsForNonWikiTab(MainFrame mainFrame, AppTab tab) {
+        LeftDrawer leftDrawer = mainFrame.getBookmarkDrawer();
+        if (leftDrawer == null) return;
+
+
+        // Check if it's a Natural source → analyze dependencies
+        String content = null;
+        String sourceName = null;
+        String sentenceType = null;
+
+        if (tab instanceof FileTabImpl) {
+            FileTabImpl fileTab = (FileTabImpl) tab;
+            content = fileTab.getContent();
+            sourceName = fileTab.getPath();
+            sentenceType = fileTab.getModel().getSentenceType();
+        } else if (tab instanceof de.bund.zrb.ui.jes.JobDetailTab) {
+            de.bund.zrb.ui.jes.JobDetailTab jesTab = (de.bund.zrb.ui.jes.JobDetailTab) tab;
+            content = jesTab.getContent();
+            sourceName = jesTab.getPath();
+            sentenceType = jesTab.getEffectiveLanguageHint();
+        } else if (tab instanceof SplitPreviewTab) {
+            SplitPreviewTab previewTab = (SplitPreviewTab) tab;
+            content = previewTab.getContent();
+            sourceName = previewTab.getPath();
+        }
+
+        final de.bund.zrb.service.NaturalAnalysisService analysisService =
+                de.bund.zrb.service.NaturalAnalysisService.getInstance();
+
+        // ── DDM sources: show programs using this DDM + DDM hierarchy ──
+        final de.bund.zrb.service.DdmAnalysisService ddmService =
+                de.bund.zrb.service.DdmAnalysisService.getInstance();
+        if (content != null && (ddmService.isDdmSource(content, sentenceType)
+                || (sourceName != null && ddmService.isDdmFile(sourceName)))) {
+            leftDrawer.showRelationsLoading();
+            leftDrawer.showCallHierarchyLoading();
+            final String ddmSourceName = sourceName;
+            final String lib = extractLibrary(tab);
+            new javax.swing.SwingWorker<Object[], Void>() {
+                @Override
+                protected Object[] doInBackground() {
+                    String ddmName = ddmService.extractDdmName(ddmSourceName);
+                    de.bund.zrb.service.DdmAnalysisService.DdmDependencyResult deps =
+                            lib != null ? ddmService.findDdmUsers(ddmName, lib)
+                                    : ddmService.findDdmUsersAllLibraries(ddmName);
+                    de.bund.zrb.service.DdmAnalysisService.DdmHierarchyResult hierarchy =
+                            ddmService.buildDdmHierarchy(ddmName, lib, 3);
+                    return new Object[]{deps, hierarchy, ddmName};
+                }
+
+                @Override
+                protected void done() {
+                    try {
+                        Object[] results = get();
+                        de.bund.zrb.service.DdmAnalysisService.DdmDependencyResult deps =
+                                (de.bund.zrb.service.DdmAnalysisService.DdmDependencyResult) results[0];
+                        de.bund.zrb.service.DdmAnalysisService.DdmHierarchyResult hierarchy =
+                                (de.bund.zrb.service.DdmAnalysisService.DdmHierarchyResult) results[1];
+                        String ddmName = (String) results[2];
+                        showDdmDependenciesInLeftDrawer(leftDrawer, deps, lib);
+                        showDdmHierarchyInLeftDrawer(leftDrawer, tab, hierarchy, ddmName, lib);
+                    } catch (Exception ex) {
+                        leftDrawer.showRelationsPlaceholder("Fehler bei DDM-Analyse: " + ex.getMessage());
+                        leftDrawer.clearCallHierarchy();
+                    }
+                }
+            }.execute();
+            return;
+        }
+
+        // For Natural sources, show real dependencies (active + passive XRefs) + call hierarchy
+        if (content != null && analysisService.isNaturalSource(content, sentenceType, sourceName)) {
+            leftDrawer.showRelationsLoading();
+            leftDrawer.showCallHierarchyLoading();
+            final String src = content;
+            final String name = sourceName;
+            final String lib = extractLibrary(tab);
+            new javax.swing.SwingWorker<de.bund.zrb.service.NaturalDependencyService.DependencyResult, Void>() {
+                @Override
+                protected de.bund.zrb.service.NaturalDependencyService.DependencyResult doInBackground() {
+                    return analysisService.analyzeDependencies(src, name);
+                }
+
+                @Override
+                protected void done() {
+                    try {
+                        de.bund.zrb.service.NaturalDependencyService.DependencyResult result = get();
+                        showFullDependenciesInLeftDrawer(leftDrawer, result, lib, name);
+                        // Also populate call hierarchy from graph (if available)
+                        populateCallHierarchy(leftDrawer, tab, lib, name);
+                    } catch (Exception ex) {
+                        leftDrawer.showRelationsPlaceholder("Fehler bei Abhängigkeitsanalyse: " + ex.getMessage());
+                        leftDrawer.clearCallHierarchy();
+                    }
+                }
+            }.execute();
+            return;
+        }
+
+        // For JCL sources, show real dependencies (PGM, PROC, INCLUDE, JCLLIB, DSN) + call hierarchy
+        final de.bund.zrb.service.JclDependencyService jclDependencyService =
+                de.bund.zrb.service.JclDependencyService.getInstance();
+        if (content != null && jclDependencyService.isJclSource(content, sentenceType)) {
+            leftDrawer.showRelationsLoading();
+            leftDrawer.showCallHierarchyLoading();
+            final String jclContent = content;
+            final String jclName = sourceName;
+            new javax.swing.SwingWorker<Object[], Void>() {
+                @Override
+                protected Object[] doInBackground() {
+                    de.bund.zrb.service.JclDependencyService.JclDependencyResult deps =
+                            jclDependencyService.analyze(jclContent, jclName);
+                    java.util.List<de.bund.zrb.service.JclDependencyService.JclCallNode> hierarchy =
+                            jclDependencyService.buildCallHierarchy(jclContent, jclName);
+                    return new Object[]{deps, hierarchy};
+                }
+
+                @Override
+                @SuppressWarnings("unchecked")
+                protected void done() {
+                    try {
+                        Object[] results = get();
+                        de.bund.zrb.service.JclDependencyService.JclDependencyResult depsResult =
+                                (de.bund.zrb.service.JclDependencyService.JclDependencyResult) results[0];
+                        java.util.List<de.bund.zrb.service.JclDependencyService.JclCallNode> hierarchy =
+                                (java.util.List<de.bund.zrb.service.JclDependencyService.JclCallNode>) results[1];
+                        showJclDependenciesInLeftDrawer(leftDrawer, depsResult);
+                        showJclCallHierarchy(leftDrawer, tab, hierarchy, jclName);
+                    } catch (Exception ex) {
+                        leftDrawer.showRelationsPlaceholder("Fehler bei JCL-Abhängigkeitsanalyse: " + ex.getMessage());
+                        leftDrawer.clearCallHierarchy();
+                    }
+                }
+            }.execute();
+            return;
+        }
+
+        // For COBOL, show external calls using CodeAnalyticsService
+        if (content != null && isCobolContent(content, sentenceType)) {
+            leftDrawer.showRelationsLoading();
+            leftDrawer.showCallHierarchyLoading();
+            final String cobolContent = content;
+            final String cobolName = sourceName;
+            new javax.swing.SwingWorker<java.util.List<de.bund.zrb.service.codeanalytics.ExternalCall>, Void>() {
+                @Override
+                protected java.util.List<de.bund.zrb.service.codeanalytics.ExternalCall> doInBackground() {
+                    return de.bund.zrb.service.codeanalytics.CodeAnalyticsService.getInstance()
+                            .extractExternalCalls(cobolContent, cobolName,
+                                    de.bund.zrb.service.codeanalytics.SourceLanguage.COBOL);
+                }
+
+                @Override
+                protected void done() {
+                    try {
+                        java.util.List<de.bund.zrb.service.codeanalytics.ExternalCall> calls = get();
+                        showExternalCallsInLeftDrawer(leftDrawer, tab, calls, cobolName);
+                    } catch (Exception ex) {
+                        leftDrawer.showRelationsPlaceholder("Fehler bei COBOL-Analyse: " + ex.getMessage());
+                        leftDrawer.clearCallHierarchy();
+                    }
+                }
+            }.execute();
+            return;
+        }
+
+        leftDrawer.clearRelations();
+    }
+
+    /** @deprecated Use {@link de.bund.zrb.service.NaturalAnalysisService} instead. Kept for backward compatibility. */
+    private de.bund.zrb.service.NaturalDependencyService naturalDependencyService;
+
+    private de.bund.zrb.service.NaturalDependencyService getNaturalDependencyService() {
+        if (naturalDependencyService == null) {
+            naturalDependencyService = new de.bund.zrb.service.NaturalDependencyService();
+        }
+        return naturalDependencyService;
+    }
+
+    /** Dependency graph per library — now delegated to NaturalAnalysisService. */
+    private final java.util.Map<String, de.bund.zrb.service.NaturalDependencyGraph> dependencyGraphs =
+            new java.util.concurrent.ConcurrentHashMap<String, de.bund.zrb.service.NaturalDependencyGraph>();
+
+    /**
+     * Get or create a dependency graph for a library.
+     * Delegates to {@link de.bund.zrb.service.NaturalAnalysisService}.
+     */
+    public de.bund.zrb.service.NaturalDependencyGraph getDependencyGraph(String library) {
+        return de.bund.zrb.service.NaturalAnalysisService.getInstance().getGraph(library);
+    }
+
+    /**
+     * Register an externally-built dependency graph.
+     * Delegates to {@link de.bund.zrb.service.NaturalAnalysisService}.
+     */
+    public void registerDependencyGraph(String library, de.bund.zrb.service.NaturalDependencyGraph graph) {
+        de.bund.zrb.service.NaturalAnalysisService.getInstance().registerGraph(library, graph);
+    }
+
+    /**
+     * Remove the dependency graph for a library.
+     * Delegates to {@link de.bund.zrb.service.NaturalAnalysisService}.
+     */
+    public void removeDependencyGraph(String library) {
+        de.bund.zrb.service.NaturalAnalysisService.getInstance().removeGraph(library);
+    }
+
+    /**
+     * Build (or rebuild) a dependency graph for a library by scanning all known sources.
+     * Delegates to {@link de.bund.zrb.service.NaturalAnalysisService}.
+     *
+     * @param library     library name
+     * @param sources     map of objectName → sourceCode for all objects in the library
+     * @return the built graph
+     */
+    public de.bund.zrb.service.NaturalDependencyGraph buildDependencyGraph(
+            String library, java.util.Map<String, String> sources) {
+        return de.bund.zrb.service.NaturalAnalysisService.getInstance().buildGraph(library, sources);
+    }
+
+    /**
+     * Populate the LeftDrawer <b>Daten</b> panel with the data-oriented Natural
+     * dependencies (Data Areas / Views / DDMs / Copycodes / Maps / DB access).
+     * Pure call kinds (CALLNAT, FETCH, CALL, PERFORM) are intentionally skipped
+     * here — they already live in the Callees hierarchy, so showing them again
+     * would be redundant. Passive XRefs (who calls this) belong in the Callers
+     * hierarchy and are also excluded.
+     */
+    private void showFullDependenciesInLeftDrawer(LeftDrawer leftDrawer,
+                                                   de.bund.zrb.service.NaturalDependencyService.DependencyResult result,
+                                                   String library, String sourceName) {
+        java.util.Map<String, java.util.List<LeftDrawer.RelationEntry>> sections =
+                new java.util.LinkedHashMap<String, java.util.List<LeftDrawer.RelationEntry>>();
+        int totalCount = 0;
+
+        // ── Data-oriented XRefs only (USING / VIEW / INCLUDE / MAP / DB_ACCESS) ──
+        if (!result.isEmpty()) {
+            for (java.util.Map.Entry<de.bund.zrb.service.NaturalDependencyService.DependencyKind,
+                    java.util.List<de.bund.zrb.service.NaturalDependencyService.Dependency>> group
+                    : result.getGrouped().entrySet()) {
+
+                de.bund.zrb.service.NaturalDependencyService.DependencyKind kind = group.getKey();
+                if (isNaturalCallKind(kind)) continue; // belongs in Callees, not Daten
+
+                java.util.List<LeftDrawer.RelationEntry> entries = new java.util.ArrayList<LeftDrawer.RelationEntry>();
+
+                for (de.bund.zrb.service.NaturalDependencyService.Dependency dep : group.getValue()) {
+                    String targetPath = buildDependencyTargetPath(dep, library);
+                    String depType = "DEPENDENCY_" + kind.getCode();
+                    entries.add(new LeftDrawer.RelationEntry(
+                            dep.getDisplayText(), targetPath, depType, dep.getLineNumber()));
+                }
+
+                sections.put(kind.getDisplayLabel(), entries);
+                totalCount += entries.size();
+            }
+        }
+
+        if (totalCount == 0) {
+            leftDrawer.showRelationsPlaceholder("Keine Daten / Data Areas.");
+        } else {
+            leftDrawer.updateRelationsGrouped("Daten", sections, totalCount);
+        }
+    }
+
+    /** {@code true} for Natural dependency kinds that represent calls (vs. data). */
+    private static boolean isNaturalCallKind(de.bund.zrb.service.NaturalDependencyService.DependencyKind kind) {
+        return kind == de.bund.zrb.service.NaturalDependencyService.DependencyKind.CALLNAT
+                || kind == de.bund.zrb.service.NaturalDependencyService.DependencyKind.FETCH
+                || kind == de.bund.zrb.service.NaturalDependencyService.DependencyKind.CALL
+                || kind == de.bund.zrb.service.NaturalDependencyService.DependencyKind.PERFORM;
+    }
+
+    /**
+     * Populate the LeftDrawer <b>Daten</b> panel with the data-oriented JCL
+     * references (INCLUDE members, JCLLIB libraries, DSN datasets). PROGRAM /
+     * PROCEDURE / NATURAL_PROGRAM entries are skipped here — they are calls and
+     * already appear in the JCL call hierarchy (Callees), so showing them again
+     * would be redundant.
+     */
+    private void showJclDependenciesInLeftDrawer(LeftDrawer leftDrawer,
+                                                  de.bund.zrb.service.JclDependencyService.JclDependencyResult result) {
+        if (result.isEmpty()) {
+            leftDrawer.showRelationsPlaceholder("Keine JCL-Daten gefunden.");
+            return;
+        }
+
+        java.util.Map<String, java.util.List<LeftDrawer.RelationEntry>> sections =
+                new java.util.LinkedHashMap<String, java.util.List<LeftDrawer.RelationEntry>>();
+        int totalCount = 0;
+
+        for (java.util.Map.Entry<de.bund.zrb.service.JclDependencyService.JclDependencyKind,
+                java.util.List<de.bund.zrb.service.JclDependencyService.JclDependency>> group
+                : result.getGrouped().entrySet()) {
+
+            de.bund.zrb.service.JclDependencyService.JclDependencyKind kind = group.getKey();
+            if (isJclCallKind(kind)) continue; // belongs in Callees, not Daten
+
+            java.util.List<LeftDrawer.RelationEntry> entries = new java.util.ArrayList<LeftDrawer.RelationEntry>();
+
+            for (de.bund.zrb.service.JclDependencyService.JclDependency dep : group.getValue()) {
+                String depType = "JCL_DEP_" + kind.getCode();
+                entries.add(new LeftDrawer.RelationEntry(
+                        dep.getDisplayText(), null, depType, dep.getLineNumber()));
+            }
+
+            sections.put(kind.getDisplayLabel(), entries);
+            totalCount += entries.size();
+        }
+
+        if (totalCount == 0) {
+            leftDrawer.showRelationsPlaceholder("Keine JCL-Daten gefunden.");
+        } else {
+            leftDrawer.updateRelationsGrouped("JCL-Daten", sections, totalCount);
+        }
+    }
+
+    /** {@code true} for JCL dependency kinds that represent calls (vs. data). */
+    private static boolean isJclCallKind(de.bund.zrb.service.JclDependencyService.JclDependencyKind kind) {
+        return kind == de.bund.zrb.service.JclDependencyService.JclDependencyKind.PROGRAM
+                || kind == de.bund.zrb.service.JclDependencyService.JclDependencyKind.PROCEDURE
+                || kind == de.bund.zrb.service.JclDependencyService.JclDependencyKind.NATURAL_PROGRAM;
+    }
+
+    /**
+     * Apply a freshly computed call‑hierarchy to the LeftDrawer. Always refreshes
+     * both callees and callers tabs for the active tab.
+     */
+    private void applyCallHierarchy(LeftDrawer leftDrawer, AppTab tab,
+                                     LeftDrawer.CallHierarchyData calleesData,
+                                     LeftDrawer.CallHierarchyData callersData,
+                                     String objectName,
+                                     String calleesLabel, String callersLabel) {
+        leftDrawer.updateCallHierarchy(calleesData, callersData, objectName, calleesLabel, callersLabel);
+    }
+
+    /**
+     * Show JCL call hierarchy (JOB → EXEC steps → DD) in the LeftDrawer call hierarchy panel.
+     */
+    private void showJclCallHierarchy(LeftDrawer leftDrawer, AppTab tab,
+                                       java.util.List<de.bund.zrb.service.JclDependencyService.JclCallNode> roots,
+                                       String sourceName) {
+        if (roots == null || roots.isEmpty()) {
+            leftDrawer.showCallHierarchyPlaceholder("Keine JCL-Ausführungshierarchie gefunden.");
+            return;
+        }
+
+        // Convert roots to CallHierarchyData and show as callees
+        java.util.List<LeftDrawer.CallHierarchyData> children =
+                new java.util.ArrayList<LeftDrawer.CallHierarchyData>();
+        for (de.bund.zrb.service.JclDependencyService.JclCallNode root : roots) {
+            children.add(convertJclCallNode(root));
+        }
+
+        LeftDrawer.CallHierarchyData calleesRoot = new LeftDrawer.CallHierarchyData(
+                "JCL Ausführung", null, false, children);
+
+        applyCallHierarchy(leftDrawer, tab, calleesRoot, null, sourceName, null, null);
+    }
+
+    /**
+     * Recursively convert a JclCallNode to LeftDrawer.CallHierarchyData.
+     * Natural program nodes get a targetPath of "nat-jcl://LIB/PROG" for navigation.
+     * Known system functions get a targetPath of "sysfunc://PGM" for Wikipedia linking.
+     */
+    private LeftDrawer.CallHierarchyData convertJclCallNode(
+            de.bund.zrb.service.JclDependencyService.JclCallNode node) {
+
+        java.util.List<LeftDrawer.CallHierarchyData> children =
+                new java.util.ArrayList<LeftDrawer.CallHierarchyData>();
+        for (de.bund.zrb.service.JclDependencyService.JclCallNode child : node.getChildren()) {
+            children.add(convertJclCallNode(child));
+        }
+
+        String targetPath = null;
+        String natRef = node.getNaturalRef();
+        if (natRef != null && natRef.contains(";")) {
+            String[] parts = natRef.split(";", 2);
+            targetPath = "nat-jcl://" + parts[0] + "/" + parts[1];
+        }
+
+        // Check if this is a known system function (from display text: "▶ STEP → PGM=IDCAMS")
+        if (targetPath == null) {
+            String display = node.getDisplayText();
+            if (display != null && display.contains("PGM=")) {
+                int pgmIdx = display.indexOf("PGM=");
+                String afterPgm = display.substring(pgmIdx + 4).trim();
+                // Extract program name (up to space, bracket, or end)
+                int end = afterPgm.length();
+                for (int i = 0; i < afterPgm.length(); i++) {
+                    char c = afterPgm.charAt(i);
+                    if (c == ' ' || c == ',' || c == ')' || c == '[') {
+                        end = i;
+                        break;
+                    }
+                }
+                String pgm = afterPgm.substring(0, end).toUpperCase();
+                java.util.Map<String, de.bund.zrb.model.SystemFunctionEntry> lookup =
+                        de.bund.zrb.helper.SystemFunctionSettingsHelper.buildLookup();
+                if (lookup.containsKey(pgm)) {
+                    targetPath = "sysfunc://" + pgm;
+                }
+            }
+        }
+
+        return new LeftDrawer.CallHierarchyData(
+                node.getDisplayText(),
+                targetPath,
+                false, // not recursive
+                children
+        );
+    }
+
+    /**
+     * Extract the object name from a path — delegates to NaturalAnalysisService.
+     */
+    private String extractObjectName(String path) {
+        return de.bund.zrb.service.NaturalAnalysisService.getInstance().extractObjectName(path);
+    }
+
+    /**
+     * Populate the Call Hierarchy (bottom split) from the library's dependency graph.
+     * Shows both callees (what this calls, recursive) and callers (who calls this, recursive).
+     */
+    private void populateCallHierarchy(LeftDrawer leftDrawer, AppTab tab, String library, String sourceName) {
+        if (library == null) {
+            leftDrawer.showCallHierarchyPlaceholder("Bibliothek unbekannt — kein Call-Graph.");
+            return;
+        }
+
+        final de.bund.zrb.service.NaturalAnalysisService analysisService =
+                de.bund.zrb.service.NaturalAnalysisService.getInstance();
+
+        de.bund.zrb.service.NaturalDependencyGraph graph = analysisService.getGraph(library);
+
+        if (graph == null || !graph.isBuilt()) {
+            leftDrawer.showCallHierarchyPlaceholder(
+                    "Graph wird beim Öffnen der Bibliothek erstellt.\n" +
+                    "Öffnen Sie den NDV-Browser und navigieren Sie zur Bibliothek.");
+            return;
+        }
+
+        String objName = analysisService.extractObjectName(sourceName);
+        if (objName == null) {
+            leftDrawer.clearCallHierarchy();
+            return;
+        }
+
+        // Build callee hierarchy (what this calls, max depth 5)
+        de.bund.zrb.service.NaturalDependencyGraph.CallHierarchyNode calleesNode =
+                analysisService.getCallHierarchy(library, objName, true, 5);
+        LeftDrawer.CallHierarchyData calleesData = convertHierarchyNode(calleesNode, library, objName, false);
+
+        // Build caller hierarchy (who calls this, max depth 5)
+        de.bund.zrb.service.NaturalDependencyGraph.CallHierarchyNode callersNode =
+                analysisService.getCallHierarchy(library, objName, false, 5);
+        LeftDrawer.CallHierarchyData callersData = convertHierarchyNode(callersNode, library, objName, true);
+
+        applyCallHierarchy(leftDrawer, tab, calleesData, callersData, objName, null, null);
+    }
+
+    /**
+     * Convert a NaturalDependencyGraph.CallHierarchyNode to a LeftDrawer.CallHierarchyData (UI model).
+     * <p>
+     * The {@code sourceFilePath} of each child node is populated so that a single click in
+     * the hierarchy tree opens the correct source file at the correct line:
+     * <ul>
+     *   <li>For <b>callees</b> (this calls X): the line number is the call site in the
+     *       <i>parent</i>'s source file. So child.sourceFilePath = parent's NDV URI.</li>
+     *   <li>For <b>callers</b> (X calls this): the line number is the call site in the
+     *       <i>caller's own</i> source file. So child.sourceFilePath = child's NDV URI.</li>
+     * </ul>
+     *
+     * @param node             current graph node (may be the root)
+     * @param library          library name (for NDV URI construction)
+     * @param parentObjectName name of the object whose source contains call sites pointing
+     *                         to this node (only used for callees direction)
+     * @param isCallers        {@code true} when building the caller (passive XRef) tree
+     */
+    private LeftDrawer.CallHierarchyData convertHierarchyNode(
+            de.bund.zrb.service.NaturalDependencyGraph.CallHierarchyNode node, String library,
+            String parentObjectName, boolean isCallers) {
+
+        // Determine which object's source contains the call site referenced by node.lineNumber:
+        //  - callees: parent is the caller → parentObjectName
+        //  - callers: this node IS the caller → node.getObjectName()
+        String sourceObjectName = isCallers ? node.getObjectName() : parentObjectName;
+        String sourceFilePath = (sourceObjectName != null && library != null && !library.isEmpty())
+                ? "ndv://" + library + "/" + sourceObjectName
+                : null;
+
+        java.util.List<LeftDrawer.CallHierarchyData> children =
+                new java.util.ArrayList<LeftDrawer.CallHierarchyData>();
+        // Children's source file is determined by THIS node:
+        //  - callees: children's call sites live in this node's source → pass node.getObjectName()
+        //  - callers: children's call sites live in their own source → pass anything (unused)
+        for (de.bund.zrb.service.NaturalDependencyGraph.CallHierarchyNode child : node.getChildren()) {
+            children.add(convertHierarchyNode(child, library, node.getObjectName(), isCallers));
+        }
+
+        String targetPath = (library != null && !library.isEmpty())
+                ? "ndv://" + library + "/" + node.getObjectName()
+                : null;
+
+        String kindCode = node.getReferenceKind() != null ? node.getReferenceKind().getCode() : null;
+
+        return new LeftDrawer.CallHierarchyData(
+                node.getDisplayText(),
+                targetPath,
+                node.isRecursive(),
+                node.getLineNumber(),
+                sourceFilePath,
+                kindCode,
+                children
+        );
+    }
+
+    /**
+     * Determine if the source content is Natural — delegates to NaturalAnalysisService.
+     */
+    private boolean isNaturalSource(String content, String sentenceType) {
+        return de.bund.zrb.service.NaturalAnalysisService.getInstance().isNaturalSource(content, sentenceType);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  DDM Dependencies + Hierarchy in LeftDrawer
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * Show DDM dependencies (programs using this DDM) in the LeftDrawer.
+     */
+    private void showDdmDependenciesInLeftDrawer(LeftDrawer leftDrawer,
+                                                  de.bund.zrb.service.DdmAnalysisService.DdmDependencyResult result,
+                                                  String library) {
+        if (result.isEmpty()) {
+            if (library == null) {
+                leftDrawer.showRelationsPlaceholder(
+                        "Bibliothek unbekannt — öffnen Sie den NDV-Browser für DDM-Abhängigkeiten.");
+            } else {
+                leftDrawer.showRelationsPlaceholder(
+                        "Keine Programme gefunden, die dieses DDM referenzieren.\n" +
+                        "Stellen Sie sicher, dass die Bibliothek gecacht ist.");
+            }
+            return;
+        }
+
+        java.util.Map<String, java.util.List<LeftDrawer.RelationEntry>> sections =
+                new java.util.LinkedHashMap<String, java.util.List<LeftDrawer.RelationEntry>>();
+        int totalCount = 0;
+
+        for (java.util.Map.Entry<String, java.util.List<de.bund.zrb.service.DdmAnalysisService.DdmUser>> group
+                : result.getUsersByKind().entrySet()) {
+
+            java.util.List<LeftDrawer.RelationEntry> entries = new java.util.ArrayList<LeftDrawer.RelationEntry>();
+            for (de.bund.zrb.service.DdmAnalysisService.DdmUser user : group.getValue()) {
+                String targetPath = (library != null && !library.isEmpty())
+                        ? "ndv://" + library + "/" + user.getProgramName()
+                        : null;
+                entries.add(new LeftDrawer.RelationEntry(
+                        user.getDisplayText(), targetPath,
+                        "DDM_USER_" + user.getReferenceKind(),
+                        user.getLineNumber()));
+            }
+
+            sections.put("⬅ " + group.getKey(), entries);
+            totalCount += entries.size();
+        }
+
+        leftDrawer.updateRelationsGrouped("DDM-Abhängigkeiten", sections, totalCount);
+    }
+
+    /**
+     * Show DDM hierarchy in the LeftDrawer call hierarchy panel as a properly nested tree.
+     * <p>
+     * Uses {@link LeftDrawer#updateCallHierarchy} with DDM-specific labels:
+     * <ul>
+     *   <li><b>🗃 Verwandte DDMs</b>: Other DDMs used by the same programs (each DDM node
+     *       has connecting programs as children, navigable via double-click)</li>
+     *   <li><b>⬅ Wird verwendet von</b>: Programs using this DDM → who calls those programs
+     *       (nested tree with double-click navigation)</li>
+     * </ul>
+     */
+    private void showDdmHierarchyInLeftDrawer(LeftDrawer leftDrawer, AppTab tab,
+                                               de.bund.zrb.service.DdmAnalysisService.DdmHierarchyResult hierarchy,
+                                               String ddmName, String library) {
+        if (hierarchy == null) {
+            leftDrawer.showCallHierarchyPlaceholder(library == null
+                    ? "Bibliothek unbekannt — kein DDM-Nutzungsgraph."
+                    : "Keine Beziehungen für DDM " + ddmName + " gefunden.");
+            return;
+        }
+
+        de.bund.zrb.service.DdmAnalysisService.DdmHierarchyNode relatedNode = hierarchy.getRelatedDdmsRoot();
+        de.bund.zrb.service.DdmAnalysisService.DdmHierarchyNode callersNode = hierarchy.getCallersRoot();
+
+        boolean hasRelated = relatedNode != null && !relatedNode.getChildren().isEmpty();
+        boolean hasCallers = callersNode != null && !callersNode.getChildren().isEmpty();
+
+        if (!hasRelated && !hasCallers) {
+            leftDrawer.showCallHierarchyPlaceholder(library == null
+                    ? "Bibliothek unbekannt — kein DDM-Nutzungsgraph."
+                    : "Keine DDM-Beziehungen für " + ddmName + " gefunden.");
+            return;
+        }
+
+        // Convert DdmHierarchyNode trees → CallHierarchyData with targetPaths for navigation
+        LeftDrawer.CallHierarchyData relatedData = hasRelated
+                ? convertDdmHierarchyNode(relatedNode, library) : null;
+        LeftDrawer.CallHierarchyData callersData = hasCallers
+                ? convertDdmHierarchyNode(callersNode, library) : null;
+
+        // Use custom labels instead of "Ruft auf" / "Aufgerufen von"
+        String relatedLabel = hasRelated
+                ? "🗃 Verwandte DDMs (" + relatedNode.getChildren().size() + ")" : null;
+        String callersLabel = hasCallers
+                ? "⬅ Wird verwendet von (" + callersNode.getChildren().size() + ")" : null;
+
+        leftDrawer.updateCallHierarchy(relatedData, callersData, ddmName,
+                relatedLabel, callersLabel);
+    }
+
+    /**
+     * Recursively convert DdmHierarchyNode → CallHierarchyData with navigation paths.
+     */
+    private LeftDrawer.CallHierarchyData convertDdmHierarchyNode(
+            de.bund.zrb.service.DdmAnalysisService.DdmHierarchyNode node, String library) {
+
+        java.util.List<LeftDrawer.CallHierarchyData> children =
+                new java.util.ArrayList<LeftDrawer.CallHierarchyData>();
+        for (de.bund.zrb.service.DdmAnalysisService.DdmHierarchyNode child : node.getChildren()) {
+            children.add(convertDdmHierarchyNode(child, library));
+        }
+
+        // Build navigation path — both DDMs and programs should be navigable
+        String targetPath = null;
+        if (library != null && !library.isEmpty()) {
+            targetPath = "ndv://" + library + "/" + node.getName();
+        }
+
+        return new LeftDrawer.CallHierarchyData(
+                node.getDisplayText(),
+                targetPath,
+                node.isRecursive(),
+                children
+        );
+    }
+
+    /**
+     * Determine if the source content is COBOL.
+     */
+    private boolean isCobolContent(String content, String sentenceType) {
+        if (sentenceType != null && sentenceType.toUpperCase().contains("COBOL")) return true;
+        if (content == null) return false;
+        String[] lines = content.split("\\r?\\n", 30);
+        int hits = 0;
+        for (String line : lines) {
+            String upper = line.toUpperCase();
+            if (upper.contains("IDENTIFICATION DIVISION")
+                    || upper.contains("PROCEDURE DIVISION")
+                    || upper.contains("DATA DIVISION")
+                    || upper.contains("WORKING-STORAGE SECTION")
+                    || upper.contains("PROGRAM-ID")) {
+                hits++;
+            }
+        }
+        return hits >= 1;
+    }
+
+    /**
+     * Show external calls from CodeAnalyticsService in the LeftDrawer call hierarchy.
+     * The Daten panel is intentionally <em>not</em> populated here — external calls
+     * are call-relations, not data references, so they already appear in Callees.
+     */
+    private void showExternalCallsInLeftDrawer(LeftDrawer leftDrawer, AppTab tab,
+                                                java.util.List<de.bund.zrb.service.codeanalytics.ExternalCall> calls,
+                                                String sourceName) {
+        if (calls == null || calls.isEmpty()) {
+            leftDrawer.showCallHierarchyPlaceholder("Keine externen Aufrufe.");
+            return;
+        }
+
+
+        // Call hierarchy: flat list (no recursive graph available)
+        java.util.List<LeftDrawer.CallHierarchyData> children =
+                new java.util.ArrayList<LeftDrawer.CallHierarchyData>();
+        for (de.bund.zrb.service.codeanalytics.ExternalCall call : calls) {
+            children.add(new LeftDrawer.CallHierarchyData(
+                    call.getCallType() + " " + call.getTargetName(),
+                    null, false, java.util.Collections.<LeftDrawer.CallHierarchyData>emptyList()));
+        }
+        LeftDrawer.CallHierarchyData calleesRoot = new LeftDrawer.CallHierarchyData(
+                "Externe Aufrufe", null, false, children);
+        applyCallHierarchy(leftDrawer, tab, calleesRoot, null, sourceName, null, null);
+    }
+
+    /**
+     * Extract the library name from a tab's path (for NDV paths like "LIBNAME/OBJNAME.ext").
+     */
+    private String extractLibrary(AppTab tab) {
+        String path = tab.getPath();
+        if (path == null) return null;
+        // NDV paths: "LIBNAME/OBJNAME.NSP"
+        int slash = path.indexOf('/');
+        if (slash > 0 && slash < path.length() - 1) {
+            return path.substring(0, slash);
+        }
+        return null;
+    }
+
+    /**
+     * Convert dependency analysis result into LeftDrawer grouped relations.
+     */
+    private void showDependenciesInLeftDrawer(LeftDrawer leftDrawer,
+                                              de.bund.zrb.service.NaturalDependencyService.DependencyResult result,
+                                              String library) {
+        if (result.isEmpty()) {
+            leftDrawer.showRelationsPlaceholder("Keine Abhängigkeiten gefunden.");
+            return;
+        }
+
+        java.util.Map<String, java.util.List<LeftDrawer.RelationEntry>> sections =
+                new java.util.LinkedHashMap<String, java.util.List<LeftDrawer.RelationEntry>>();
+
+        for (java.util.Map.Entry<de.bund.zrb.service.NaturalDependencyService.DependencyKind,
+                java.util.List<de.bund.zrb.service.NaturalDependencyService.Dependency>> group
+                : result.getGrouped().entrySet()) {
+
+            de.bund.zrb.service.NaturalDependencyService.DependencyKind kind = group.getKey();
+            java.util.List<LeftDrawer.RelationEntry> entries = new java.util.ArrayList<LeftDrawer.RelationEntry>();
+
+            for (de.bund.zrb.service.NaturalDependencyService.Dependency dep : group.getValue()) {
+                // Build target path for navigation (ndv://LIBRARY/OBJECT if library known)
+                String targetPath = buildDependencyTargetPath(dep, library);
+                String depType = "DEPENDENCY_" + kind.getCode();
+                entries.add(new LeftDrawer.RelationEntry(
+                        dep.getDisplayText(), targetPath, depType));
+            }
+
+            sections.put(kind.getDisplayLabel(), entries);
+        }
+
+        leftDrawer.updateRelationsGrouped("Abhängigkeiten", sections, result.getTotalCount());
+    }
+
+    /**
+     * Build a navigable target path for a dependency.
+     * For CALLNAT/FETCH/INCLUDE/USING: ndv://LIBRARY/TARGETNAME  (if library is known)
+     * For DB_ACCESS/VIEW: no navigation target (null)
+     */
+    private String buildDependencyTargetPath(
+            de.bund.zrb.service.NaturalDependencyService.Dependency dep, String library) {
+        switch (dep.getKind()) {
+            case CALLNAT:
+            case FETCH:
+            case CALL:
+            case PERFORM:
+            case INCLUDE:
+            case USING:
+            case INPUT_MAP:
+                if (library != null && !library.isEmpty()) {
+                    return "ndv://" + library + "/" + dep.getTargetName();
+                }
+                return null;
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * Open a wiki page from a relation entry as a new WikiFileTab.
+     * Uses the existing WikiContentService if a WikiConnectionTab is open,
+     * otherwise falls back to a fresh service from settings.
+     */
+    public void openWikiRelationAsTab(String siteId, String pageTitle) {
+
+        // Try to find an open WikiConnectionTab to get its service + callback
+        for (java.util.Map.Entry<Component, AppTab> entry : tabMap.entrySet()) {
+            if (entry.getValue() instanceof de.bund.zrb.wiki.ui.WikiConnectionTab) {
+                de.bund.zrb.wiki.ui.WikiConnectionTab wikiConn =
+                        (de.bund.zrb.wiki.ui.WikiConnectionTab) entry.getValue();
+                // Trigger the connection tab's open mechanism
+                wikiConn.openPageExternally(siteId, pageTitle);
+                return;
+            }
+        }
+        // If no wiki connection tab is open, we can't resolve the page
+        javax.swing.JOptionPane.showMessageDialog(tabbedPane,
+                "Bitte öffnen Sie zuerst einen Wiki-Tab unter Verbindung → Wiki.",
+                "Kein Wiki verbunden", javax.swing.JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    /**
+     * Search for a term in an already open WikiConnectionTab.
+     * Switches to the tab and triggers the search.
+     *
+     * @param siteId     preferred site (e.g. "wikipedia_de") — used to select the wiki dropdown if possible
+     * @param searchTerm the term to search for
+     * @return true if a WikiConnectionTab was found and the search was started
+     */
+    public boolean searchInWikiConnectionTab(String siteId, String searchTerm) {
+        for (java.util.Map.Entry<Component, AppTab> entry : tabMap.entrySet()) {
+            if (entry.getValue() instanceof de.bund.zrb.wiki.ui.WikiConnectionTab) {
+                de.bund.zrb.wiki.ui.WikiConnectionTab wikiConn =
+                        (de.bund.zrb.wiki.ui.WikiConnectionTab) entry.getValue();
+                // Switch to the wiki tab
+                int idx = tabbedPane.indexOfComponent(entry.getKey());
+                if (idx >= 0) {
+                    tabbedPane.setSelectedIndex(idx);
+                }
+                // Select the matching wiki site if possible
+                if (siteId != null && !siteId.isEmpty()) {
+                    wikiConn.selectSiteById(siteId);
+                }
+                // Trigger search
+                wikiConn.searchFor(searchTerm);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Open an NDV dependency target directly as a FileTab.
+     * Connects to NDV, reads the source, and opens it in a new FileTab
+     * without switching to the NdvConnectionTab.
+     *
+     * @param library    target library name
+     * @param objectName target object name (nullable, if null just navigate to library via ConnectionTab)
+     */
+    public void openNdvDependencyTarget(String library, String objectName) {
+        openNdvDependencyTargetInternal(library, objectName, null);
+    }
+
+    /**
+     * Open an NDV dependency target directly as a FileTab, with line number navigation.
+     *
+     * @param library    target library name
+     * @param objectName target object name
+     * @param lineNumber line to navigate to after opening (≤0 → no navigation)
+     */
+    public void openNdvDependencyTarget(String library, String objectName, int lineNumber) {
+        java.util.function.Consumer<AppTab> after = lineNumber > 0
+                ? (AppTab t) -> javax.swing.SwingUtilities.invokeLater(() -> navigateToLine(t, lineNumber))
+                : null;
+        openNdvDependencyTargetInternal(library, objectName, after);
+    }
+
+    /**
+     * Internal implementation supporting an after‑open callback. Replaces the old
+     * fragile 500 ms timer used for line navigation: the callback is fired right
+     * after the destination tab has been added (or located, if it already existed).
+     */
+    private void openNdvDependencyTargetInternal(final String library, final String objectName,
+                                                  final java.util.function.Consumer<AppTab> afterOpen) {
+        if (objectName == null || objectName.isEmpty()) {
+            // No object → fall back to ConnectionTab navigation
+            openNdvDependencyViaConnectionTab(library, null);
+            return;
+        }
+
+        // Check if we already have a FileTab open for this object
+        String fullPath = library + "/" + objectName;
+        for (java.util.Map.Entry<Component, AppTab> entry : tabMap.entrySet()) {
+            if (entry.getValue() instanceof FileTab) {
+                FileTab ft = (FileTab) entry.getValue();
+                String path = ft.getPath();
+                if (path != null && path.toUpperCase().contains(fullPath.toUpperCase())) {
+                    int idx = tabbedPane.indexOfComponent(entry.getKey());
+                    if (idx >= 0) {
+                        tabbedPane.setSelectedIndex(idx);
+                    }
+                    AppTab existing = entry.getValue();
+                    if (afterOpen != null) afterOpen.accept(existing);
+                    return;
+                }
+            }
+        }
+
+        // Try to open directly: get NDV credentials and connect
+        de.bund.zrb.model.Settings settings = de.bund.zrb.helper.SettingsHelper.load();
+        String host = settings.host;
+        String user = settings.user;
+        int port = settings.ndvPort;
+
+        if (host == null || host.isEmpty() || user == null || user.isEmpty()) {
+            // Fall back to ConnectionTab
+            openNdvDependencyViaConnectionTab(library, objectName);
+            return;
+        }
+
+        String password = de.bund.zrb.login.LoginManager.getInstance().getPassword(host, user);
+        if (password == null || password.isEmpty()) {
+            openNdvDependencyViaConnectionTab(library, objectName);
+            return;
+        }
+
+        final String fHost = host;
+        final String fUser = user;
+        final String fLibrary = library;
+        final String fObjectName = objectName;
+        final String fPassword = password;
+        final int fPort = port;
+
+        tabbedPane.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR));
+
+        new javax.swing.SwingWorker<String, Void>() {
+            de.bund.zrb.ndv.NdvService service;
+            de.bund.zrb.ndv.NdvService.ResolvedNdvPath resolved;
+            de.bund.zrb.ndv.NdvObjectInfo probedObj;
+
+            @Override
+            protected String doInBackground() throws Exception {
+                service = new de.bund.zrb.ndv.NdvService();
+                service.connect(fHost, fPort, fUser, fPassword);
+                de.bund.zrb.login.LoginManager.getInstance().onLoginSuccess(fHost, fUser);
+                // Probe the server for the real object info (correct type, extension,
+                // dbid/fnr). This ensures the resulting FileTab path carries a Natural
+                // file extension so downstream features (Visuell button, call hierarchy,
+                // dependency analysis) work the same as when opened from NdvConnectionTab.
+                try {
+                    probedObj = service.findObject(fLibrary, fObjectName);
+                } catch (Exception probeFailure) {
+                    probedObj = null;
+                }
+                if (probedObj != null) {
+                    return service.readSource(fLibrary, probedObj);
+                }
+                // Fallback: pure-string resolver (typeExtension defaults via forBookmark)
+                resolved = service.resolvePath(fLibrary + "/" + fObjectName);
+                if (!resolved.isFile()) return null;
+                return service.readSource(fLibrary, resolved.getObjectInfo());
+            }
+
+            @Override
+            protected void done() {
+                tabbedPane.setCursor(java.awt.Cursor.getDefaultCursor());
+                try {
+                    String source = get();
+                    if (source == null) {
+                        // Could not resolve as file → fall back
+                        openNdvDependencyViaConnectionTab(fLibrary, fObjectName);
+                        return;
+                    }
+                    de.bund.zrb.ndv.NdvObjectInfo objInfo =
+                            probedObj != null ? probedObj : resolved.getObjectInfo();
+
+                    // Cache source
+                    de.bund.zrb.service.NdvSourceCacheService.getInstance()
+                            .cacheSource(fLibrary, objInfo.getEffectiveName(),
+                                    objInfo.getTypeExtension(), source,
+                                    objInfo.getSourceSize(), objInfo.getSourceDate());
+
+                    NdvResourceState ndvState = new NdvResourceState(service, fLibrary, objInfo);
+                    String fp = fLibrary + "/" + objInfo.getEffectiveName()
+                            + (objInfo.getTypeExtension().isEmpty() ? "" : "." + objInfo.getTypeExtension());
+                    VirtualResource resource = new VirtualResource(
+                            de.bund.zrb.files.path.VirtualResourceRef.of(fp),
+                            VirtualResourceKind.FILE,
+                            fp,
+                            VirtualBackendType.NDV,
+                            null, ndvState
+                    );
+
+                    FileTabImpl fileTab = new FileTabImpl(
+                            TabbedPaneManager.this, resource, source, null, null, false
+                    );
+                    addTab(fileTab);
+                    if (afterOpen != null) afterOpen.accept(fileTab);
+                } catch (Exception e) {
+                    String msg = e.getCause() != null ? e.getCause().getMessage() : e.getMessage();
+                    if (msg != null && (msg.contains("Login") || msg.contains("login")
+                            || msg.contains("NAT0873") || msg.contains("NAT7734"))) {
+                        de.bund.zrb.login.LoginManager.getInstance().invalidatePassword(fHost, fUser);
+                    }
+                    // Fall back to ConnectionTab
+                    openNdvDependencyViaConnectionTab(fLibrary, fObjectName);
+                }
+            }
+        }.execute();
+    }
+
+
+    /**
+     * Fallback: switch to an open NdvConnectionTab and navigate there.
+     * If no NdvConnectionTab is open, automatically creates a new connection.
+     */
+    private void openNdvDependencyViaConnectionTab(String library, String objectName) {
+        for (java.util.Map.Entry<Component, AppTab> entry : tabMap.entrySet()) {
+            if (entry.getValue() instanceof NdvConnectionTab) {
+                NdvConnectionTab ndvTab = (NdvConnectionTab) entry.getValue();
+                int idx = tabbedPane.indexOfComponent(entry.getKey());
+                if (idx >= 0) {
+                    tabbedPane.setSelectedIndex(idx);
+                }
+                if (objectName != null && !objectName.isEmpty()) {
+                    ndvTab.navigateToLibraryAndOpen(library, objectName);
+                } else {
+                    ndvTab.navigateToLibrary(library);
+                }
+                return;
+            }
+        }
+
+        // No open NdvConnectionTab → automatically create one and navigate
+        autoConnectNdvAndNavigate(library, objectName);
+    }
+
+    /**
+     * Automatically open a new NDV connection tab and navigate to the given library/object.
+     * Prompts for credentials if needed via LoginManager.
+     */
+    private void autoConnectNdvAndNavigate(final String library, final String objectName) {
+        de.bund.zrb.model.Settings settings = de.bund.zrb.helper.SettingsHelper.load();
+        final String host = settings.host;
+        final String user = settings.user;
+        final int port = settings.ndvPort;
+
+        if (host == null || host.trim().isEmpty() || user == null || user.trim().isEmpty()) {
+            javax.swing.JOptionPane.showMessageDialog(tabbedPane,
+                    "Kein Server konfiguriert.\nBitte unter Einstellungen → Server den Host und Benutzer angeben.",
+                    "Keine NDV-Verbindung", javax.swing.JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        // Get password interactively via LoginManager (prompts if not cached)
+        final String password = de.bund.zrb.login.LoginManager.getInstance().getPassword(host.trim(), user.trim());
+        if (password == null || password.isEmpty()) {
+            return; // User cancelled
+        }
+
+        tabbedPane.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR));
+
+        new javax.swing.SwingWorker<NdvConnectionTab, Void>() {
+            @Override
+            protected NdvConnectionTab doInBackground() throws Exception {
+                de.bund.zrb.ndv.NdvService service = new de.bund.zrb.ndv.NdvService();
+                service.connect(host.trim(), port, user.trim(), password);
+                de.bund.zrb.login.LoginManager.getInstance().onLoginSuccess(host.trim(), user.trim());
+
+                // Logon to the target library if provided
+                if (library != null && !library.isEmpty()) {
+                    try {
+                        service.logon(library.toUpperCase());
+                    } catch (de.bund.zrb.ndv.NdvException e) {
+                        System.err.println("[autoConnectNdv] Library logon warning: " + e.getMessage());
+                    }
+                }
+
+                return new NdvConnectionTab(TabbedPaneManager.this, service);
+            }
+
+            @Override
+            protected void done() {
+                tabbedPane.setCursor(java.awt.Cursor.getDefaultCursor());
+                try {
+                    NdvConnectionTab ndvTab = get();
+                    addTab(ndvTab);
+
+                    // Navigate to the target object
+                    if (objectName != null && !objectName.isEmpty()) {
+                        ndvTab.navigateToLibraryAndOpen(library, objectName);
+                    } else if (library != null && !library.isEmpty()) {
+                        ndvTab.navigateToLibrary(library);
+                    }
+                } catch (Exception e) {
+                    String msg = e.getCause() != null ? e.getCause().getMessage() : e.getMessage();
+                    if (msg != null && (msg.contains("Login") || msg.contains("login")
+                            || msg.contains("NAT0873") || msg.contains("NAT7734"))) {
+                        de.bund.zrb.login.LoginManager.getInstance().invalidatePassword(host.trim(), user.trim());
+                    }
+                    javax.swing.JOptionPane.showMessageDialog(tabbedPane,
+                            "NDV-Verbindung fehlgeschlagen:\n" + msg,
+                            "Verbindungsfehler", javax.swing.JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    /**
+     * Wire the external navigation callback on a SplitPreviewTab so that
+     * diagram double-clicks and sidebar interactions open the target file directly.
+     * Uses the NDV library search order from settings to resolve unqualified symbol names.
+     */
+    private void wireExternalNavigation(final SplitPreviewTab previewTab) {
+        // Wire source resolver for recursive mindmap call tree resolution
+        previewTab.setSourceResolver(buildNdvSourceResolver(previewTab));
+
+        previewTab.setExternalNavigationCallback(new SplitPreviewTab.ExternalNavigationCallback() {
+            @Override
+            public void openExternalTarget(String targetName) {
+                if (targetName == null || targetName.isEmpty()) return;
+
+                // Determine the library from the current tab's backend or settings
+                String library = null;
+
+                // If the current tab is an NDV file, use its library as context
+                if (previewTab instanceof FileTabImpl) {
+                    FileTabImpl ft = (FileTabImpl) previewTab;
+                    String path = ft.getPath();
+                    if (path != null && path.contains("/")) {
+                        library = path.substring(0, path.indexOf('/'));
+                    }
+                }
+
+                // Fall back to settings search order
+                if (library == null || library.isEmpty()) {
+                    de.bund.zrb.model.Settings settings = de.bund.zrb.helper.SettingsHelper.load();
+                    // Try default library first
+                    if (settings.ndvDefaultLibrary != null && !settings.ndvDefaultLibrary.trim().isEmpty()) {
+                        library = settings.ndvDefaultLibrary.trim().toUpperCase();
+                    }
+                    // Try cache to find in search order
+                    if (settings.ndvLibrarySearchOrder != null) {
+                        de.bund.zrb.service.NdvSourceCacheService cache =
+                                de.bund.zrb.service.NdvSourceCacheService.getInstance();
+                        for (String lib : settings.ndvLibrarySearchOrder) {
+                            String cached = cache.getCachedSource(lib.toUpperCase(), targetName.toUpperCase());
+                            if (cached != null) {
+                                library = lib.toUpperCase();
+                                break;
+                            }
+                        }
+                        if (library == null && !settings.ndvLibrarySearchOrder.isEmpty()) {
+                            library = settings.ndvLibrarySearchOrder.get(0).toUpperCase();
+                        }
+                    }
+                }
+
+                if (library != null && !library.isEmpty()) {
+                    openNdvDependencyTarget(library, targetName.toUpperCase());
+                }
+            }
+        });
+    }
+
+    /**
+     * Build a {@link de.bund.zrb.service.codeanalytics.SourceResolver} that resolves
+     * target names to source code using the NDV source cache across all configured libraries.
+     * This enables recursive call-tree resolution for the Mindmap diagram.
+     */
+    private de.bund.zrb.service.codeanalytics.SourceResolver buildNdvSourceResolver(
+            final SplitPreviewTab previewTab) {
+        return new de.bund.zrb.service.codeanalytics.SourceResolver() {
+            @Override
+            public String resolve(String targetName) {
+                if (targetName == null || targetName.isEmpty()) return null;
+
+                de.bund.zrb.service.NdvSourceCacheService cache =
+                        de.bund.zrb.service.NdvSourceCacheService.getInstance();
+                String upper = targetName.toUpperCase();
+
+                // 1) Try current tab's library
+                String currentLib = null;
+                if (previewTab instanceof FileTabImpl) {
+                    String path = ((FileTabImpl) previewTab).getPath();
+                    if (path != null && path.contains("/")) {
+                        currentLib = path.substring(0, path.indexOf('/')).toUpperCase();
+                    }
+                }
+                if (currentLib != null) {
+                    String src = cache.getCachedSource(currentLib, upper);
+                    if (src != null) return src;
+                }
+
+                // 2) Try settings search order
+                de.bund.zrb.model.Settings settings = de.bund.zrb.helper.SettingsHelper.load();
+                java.util.List<String> searchOrder = new java.util.ArrayList<String>();
+                if (settings.ndvDefaultLibrary != null && !settings.ndvDefaultLibrary.trim().isEmpty()) {
+                    String defLib = settings.ndvDefaultLibrary.trim().toUpperCase();
+                    if (!defLib.equals(currentLib)) searchOrder.add(defLib);
+                }
+                if (settings.ndvLibrarySearchOrder != null) {
+                    for (String lib : settings.ndvLibrarySearchOrder) {
+                        String u = lib.toUpperCase();
+                        if (!u.equals(currentLib) && !searchOrder.contains(u)) {
+                            searchOrder.add(u);
+                        }
+                    }
+                }
+                for (String lib : searchOrder) {
+                    String src = cache.getCachedSource(lib, upper);
+                    if (src != null) return src;
+                }
+
+                return null; // not resolvable from cache
+            }
+        };
+    }
+}

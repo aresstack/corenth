@@ -1,0 +1,285 @@
+# MCP Research Tool Suite – Architektur und Nutzung
+
+## Übersicht
+
+Die Research-Tool-Suite bietet einem Bot eine **menübasierte Navigation** durch Webseiten.
+Der Bot arbeitet mit **einem einzigen Navigations-Tool** (`research_navigate`) und bekommt
+bei jedem Aufruf eine **Link-Liste** zurück, aus der er den nächsten Schritt wählt.
+
+**Kernprinzipien:**
+- **Ein Tool für alles**: `research_navigate` akzeptiert URLs (absolut oder relativ) oder History-Aktionen (back/forward).
+- **Callcenter-Prinzip**: Jede Antwort enthält eine klare Auswahl: "Für Politik: /politik/, Für Sport: /sport/, ..."
+- **Nur URLs, keine IDs**: Links werden als echte URLs zurückgegeben, nicht als abstrakte m0/m1-IDs.
+- **Relative Pfade**: `/nachrichten/politik/` wird automatisch zur aktuellen Domain aufgelöst.
+- **Same-URL-Guard**: Wiederholte Navigation zur selben URL wird blockiert mit konkreten Alternativen.
+- **Indexierung im Hintergrund**: Network-Plane sammelt Inhalte automatisch → H2 + Lucene.
+- **Event-getriebenes Timing**: Settle-Policies (NAVIGATION / DOM_QUIET / NETWORK_QUIET).
+
+## Architektur: 3-Plane-System
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Bot (LLM)                                                  │
+│  ↕ MCP Tools (research_session_start, research_navigate)    │
+├─────────────────────────────────────────────────────────────┤
+│  Research Layer (wd4j-mcp-server/research/)                 │
+│  ├── ResearchSession      → sessionId, userContextId,       │
+│  │                          menuItems, domainPolicy, limits │
+│  ├── MenuViewBuilder      → HTML→Jsoup link extraction      │
+│  ├── MenuView / MenuItem  → Datenmodell (link list)         │
+│  └── SettlePolicy         → Wait-Strategie                  │
+├─────────────────────────────────────────────────────────────┤
+│  Action Plane              Network Plane      DOM Plane     │
+│  BrowserSession            H2 Archiv          Jsoup Parse   │
+│  browsingContext.navigate  Lucene Index                     │
+│  URL-based navigation      addDataCollector                 │
+│  UserContext-Isolation     getData/disownData               │
+│                            ResponseCompleted                │
+├─────────────────────────────────────────────────────────────┤
+│  Persistenz: H2 (ArchiveRepository) + Lucene (SearchService)│
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Vollständige Tool-Suite
+
+### Session-Management
+
+| Tool | Beschreibung | Eingabe | Ausgabe |
+|------|-------------|---------|---------|
+| `research_session_start` | Session erzeugen mit Browser-Start | (keine) | sessionId, contextId, status |
+| `research_config_update` | Session-Config live ändern | diverse Config-Parameter | Bestätigung |
+
+### Navigation (Kern)
+
+| Tool | Beschreibung | Eingabe | Ausgabe |
+|------|-------------|---------|---------|
+| `research_navigate` | **DAS Navigations-Tool**. Akzeptiert: absolute URL, relativen Pfad, Link-ID (m0..mN), oder History-Aktion (back/forward/reload) | `target` (req.) | Page title, excerpt, Link-Liste, archived docs, network traffic |
+| `research_menu` | Aktuelle Link-Liste neu laden (ohne Navigation) | (keine) | Page title, excerpt, Link-Liste, archived docs |
+
+### Deprecated (entfernt)
+
+Die folgenden Tools wurden entfernt und durch `research_navigate` ersetzt:
+- `research_open` → `research_navigate` mit URL
+- `research_choose` → `research_navigate` mit Link-ID
+- `research_history` → `research_navigate` mit back/forward/reload
+
+Die alten Java-Klassen existieren noch im Code, werden aber **nicht mehr registriert**.
+Der Fuzzy-Match in ChatSession mappt alte Tool-Namen automatisch auf `research_navigate`.
+
+### Archiv & Suche
+
+| Tool | Beschreibung | Eingabe | Ausgabe |
+|------|-------------|---------|---------|
+| `research_doc_get` | Archiviertes Dokument abrufen | `entryId` oder `url`, `maxTextLength` | Metadaten + extractedText |
+| `research_search` | Lucene-Volltextsuche | `query` (req.), `maxResults` | Trefferliste mit docId, url, snippet, score |
+
+### Crawl-Queue
+
+| Tool | Beschreibung | Eingabe | Ausgabe |
+|------|-------------|---------|---------|
+| `research_queue_add` | URLs zur Crawl-Queue hinzufügen | `urls` (req.), `sourceId`, `depth` | added, skipped |
+| `research_queue_status` | Queue-Status abfragen | `sourceId` | pending, crawled, indexed, failed, nextPending[] |
+
+## viewToken-Vertrag (intern)
+
+- Jede MenuView hat intern einen `viewToken` (z.B. `v1`, `v2`, ...)
+- `menuItemId`s (z.B. `m0`, `m3`) existieren intern im Code, werden aber **nicht mehr an den Bot exponiert**
+- Der Bot sieht nur **URLs** (absolut oder relativ)
+- Bei Navigation wird ein neuer viewToken erzeugt
+- Der viewToken wird nur noch für interne Konsistenzprüfungen verwendet
+
+## Settle-Policies
+
+| Policy | Wann verwenden | Implementierung |
+|--------|---------------|-----------------|
+| `NAVIGATION` | Standard-Links (full page load) | 1s Delay nach navigate() |
+| `DOM_QUIET` | SPA-Clicks ohne Navigation | MutationObserver wartet auf 500ms Ruhe (max 5s) |
+| `NETWORK_QUIET` | AJAX-heavy Seiten | PerformanceObserver wartet auf 500ms Ruhe (max 8s) |
+
+## Network Ingestion Pipeline
+
+Die Network Plane sammelt HTTP-Responses automatisch im Hintergrund:
+
+```
+responseCompleted Event
+        │
+        ▼
+┌─ Filter Chain ──────────────────────┐
+│ Status 2xx?                         │
+│ MIME in allowlist? (text/html, etc.) │
+│ URL not excluded? (no /login etc.)  │
+│ Domain policy allows?               │
+│ Body size ≤ maxBytesPerDoc?         │
+└─────────────┬───────────────────────┘
+              ▼
+    ingestionExecutor (async)
+              │
+        getData() ←── Retry (3x, 100-300ms jitter)
+              │
+        disownData() ←── Speicher freigeben
+              │
+        callback.onBodyCaptured()
+              │
+        session.addArchivedDocId()
+```
+
+### Start/Stop Lifecycle
+- **Start**: `research_session_start` (mode=research) → `NetworkIngestionPipeline.start(callback)`
+- **Stop**: `ResearchSessionManager.remove()` → `pipeline.stop()`
+
+### Konfiguration
+- `maxBytesPerDoc`: Max Response-Body-Größe (default: 2MB)
+- `headerAllowlist`: Nur diese Header werden gespeichert (default: content-type, content-length, last-modified, etag, cache-control)
+- `domainPolicy`: include/exclude Listen
+- MIME-Allowlist: text/html, text/plain, text/xml, text/csv, application/json, application/xml, application/xhtml+xml, ...
+- Excluded URLs: /login, /signin, /auth, /oauth, /token, /checkout, /payment, ...
+
+### Metriken
+- `capturedCount`: Erfolgreich erfasste Bodies
+- `skippedCount`: Übersprungen (Filter)
+- `failedCount`: getData oder Callback fehlgeschlagen
+
+## ReadinessState (wait-Parameter)
+
+`browsingContext.navigate` mit `wait` (Default: `interactive`):
+- `none`: sofort zurück, bevor Seite geladen
+- `interactive`: DOM ist da, aber Bilder/Subresources evtl. noch nicht
+- `complete`: alles geladen (kann auf heavy pages timeout verursachen)
+
+## Tagging-Bridge (Click/Choose ohne JS clicks)
+
+1. JS-Script beschreibt interaktive Elemente und taggt sie mit `data-mm-menu-id`
+2. CSS `browsingContext.locateNodes("[data-mm-menu-id]")` → SharedReferences
+3. `research_choose` nutzt `input.performActions` (PointerMove → Element-Origin → PointerDown → PointerUp)
+4. Fallback bei performActions-Fehler: JS `callFunction` mit `el.scrollIntoView() + el.click()`
+5. Nach jeder Aktion werden Tags bereinigt, neuer viewToken gesetzt
+
+## Session-Isolation
+
+- Pro Bot: eigener `UserContext` (Cookie/Storage-Isolation via `browser.createUserContext`)
+- Pro Session: mehrere BrowsingContexts möglich
+- Domain-Policy: include/exclude Listen filterbar
+- Limits: maxUrls, maxDepth, maxBytesPerDoc
+
+## Datei-Übersicht
+
+### Package: `wd4j-mcp-server/research/`
+- `ResearchSession.java` – Session-State (sessionId, userContextId, viewToken, menuItem→SharedRef, domainPolicy, limits, privacyPolicy, newArchivedDocIds)
+- `ResearchSessionManager.java` – Singleton, pro BrowserSession eine Session
+- `MenuView.java` – Immutable Snapshot (viewToken, excerpt, menuItems)
+- `MenuItem.java` – Einzelner Menüeintrag (menuItemId, type, label, href, actionHint)
+- `MenuViewBuilder.java` – Tagging-Bridge + Settle-Logik
+- `NetworkIngestionPipeline.java` – Network-First Body Collection (addDataCollector → responseCompleted → getData → disownData → callback)
+- `SettlePolicy.java` – Enum (NAVIGATION, DOM_QUIET, NETWORK_QUIET)
+
+### Tools: `wd4j-mcp-server/tool/impl/` (aktiv registriert)
+- `ResearchSessionStartTool.java` – `research_session_start`
+- `ResearchNavigateTool.java` – `research_navigate` (DAS einzige Navigations-Tool)
+- `ResearchMenuTool.java` – `research_menu`
+- `ResearchConfigUpdateTool.java` – `research_config_update`
+
+### Tools: `wd4j-mcp-server/tool/impl/` (nicht mehr registriert, Code noch vorhanden)
+- `ResearchOpenTool.java` – ersetzt durch `research_navigate`
+- `ResearchChooseTool.java` – ersetzt durch `research_navigate`
+- `ResearchBackForwardTool.java` – ersetzt durch `research_navigate`
+
+### Tools: `plugins/webSearch/tools/`
+- `ResearchDocGetTool.java` – `research_doc_get` (H2 Archiv)
+- `ResearchSearchTool.java` – `research_search` (Lucene)
+- `ResearchQueueAddTool.java` – `research_queue_add`
+- `ResearchQueueStatusTool.java` – `research_queue_status`
+
+### Geändert
+- `plugins/webSearch/plugin/WebSearchPlugin.java` – Nur noch 4 Research-Tools + Archive/Search/Queue + 5 Utility-Tools registriert (deprecated Tools entfernt)
+- `plugins/webSearch/tools/BrowserToolAdapter.java` – URL-Check auf `research_navigate` umgestellt
+- `plugins/webSearch/build.gradle` – `compileOnly project(':app')`
+- `wd4j-mcp-server/McpServerMain.java` – Alte Browser*-Tools durch Research-Tools ersetzt
+- `app/ChatMode.java` – AGENT + RECHERCHE System-Prompts auf `research_navigate` umgestellt
+- `app/ChatSession.java` – Fuzzy-Match mappt alte Tool-Namen (`research_open`, `research_choose`, `research_history`) auf `research_navigate`
+- `app/WebSnapshotPipeline.java` – Javadoc aktualisiert
+
+### Gelöschte Dateien (durch Research-Tools ersetzt)
+- `BrowseNavigateTool.java` → `ResearchOpenTool.java`
+- `BrowseReadPageTool.java` → `ResearchMenuTool.java`
+- `BrowseSnapshotTool.java` → `ResearchMenuTool.java`
+- `BrowseClickTool.java` → `ResearchChooseTool.java`
+- `BrowseLocateTool.java` → Tagging-Bridge (MenuViewBuilder)
+- `BrowseBackForwardTool.java` → `ResearchBackForwardTool.java`
+- `BrowseWaitTool.java` → Settle-Policies (NAVIGATION/DOM_QUIET/NETWORK_QUIET)
+- `BrowserNavigateTool.java` → `ResearchOpenTool.java`
+- `BrowserOpenTool.java` → `ResearchSessionStartTool.java`
+- `BrowserClickCssTool.java` → `ResearchChooseTool.java`
+- `BrowserTypeCssTool.java` → `BrowseTypeTool.java` (behalten)
+- `BrowserWaitForTool.java` → Settle-Policies
+- `BrowserLaunchTool.java` → `ResearchSessionStartTool.java`
+- `BrowserCloseTool.java` → Session-Lifecycle
+- `PageDomSnapshotTool.java` → `ResearchMenuTool.java` (Tagging-Bridge)
+- `PageExtractTool.java` → `ResearchMenuTool.java` (excerpt)
+
+## Beispiel-Workflow (Bot)
+
+```
+Bot: research_navigate(target="https://news.example.com")
+→ Du bist auf: News (https://news.example.com)
+  Seiteninhalt: "Aktuelle Nachrichten..."
+  Hier kannst du weiternavigieren:
+    Für Headlines:  /headlines/
+    Für Sport:      /sport/
+    Für Wirtschaft: /economy/
+
+Bot: research_navigate(target="/sport/")
+→ Du bist auf: Sport (https://news.example.com/sport/)
+  Seiteninhalt: "Sportnachrichten..."
+  Hier kannst du weiternavigieren:
+    Für Fußball:  /sport/football/
+    Für Tennis:   /sport/tennis/
+
+Bot: research_navigate(target="/sport/football/")
+→ Du bist auf: Fußball (https://news.example.com/sport/football/)
+  Seiteninhalt: "Match results..."
+  Hier kannst du weiternavigieren:
+    Für Bundesliga: /sport/football/bundesliga/
+
+Bot: research_navigate(target="back")
+→ Du bist auf: Sport (https://news.example.com/sport/)
+
+Bot: research_navigate(target="/economy/stocks/")
+→ Du bist auf: Stocks (https://news.example.com/economy/stocks/)
+  Seiteninhalt: "DAX..."
+
+Bot: research_search(query="football results")
+→ {results: [{documentId: "...", snippet: "...", score: 0.85}]}
+
+Bot: research_doc_get(entryId="abc-123")
+→ {extractedText: "Full article text...", metadata: {...}}
+```
+
+## Anforderungsabdeckung (Mapping)
+
+| Anforderung | Status | Tool/Komponente |
+|------------|--------|----------------|
+| `research_session_start` mit UserContext | ✅ | ResearchSessionStartTool + browser.createUserContext |
+| `research_open` mit `wait` | ✅ | ResearchOpenTool + browsingContext.navigate(wait) |
+| `research_menu` mit `newArchivedDocs[]` | ✅ | ResearchMenuTool + drainNewArchivedDocIds() |
+| `research_choose` mit viewToken-Validierung | ✅ | ResearchChooseTool + resolveMenuItem() |
+| `research_choose` mit WebDriver Actions (nicht JS click) | ✅ | input.performActions + WDElementOrigin Fallback |
+| `research_back`/`forward`/`reload` | ✅ | ResearchBackForwardTool |
+| `research_doc_get` (H2) | ✅ | ResearchDocGetTool |
+| `research_search` (Lucene) | ✅ | ResearchSearchTool |
+| `research_queue_add`/`status` | ✅ | ResearchQueueAddTool / ResearchQueueStatusTool |
+| `research_config_update` | ✅ | ResearchConfigUpdateTool |
+| viewToken-Stabilitätsvertrag | ✅ | ResearchSession.isViewTokenValid() |
+| Tagging-Bridge (data-mm-menu-id) | ✅ | MenuViewBuilder.buildDescribeScript() |
+| Settle-Policies (NAVIGATION/DOM_QUIET/NETWORK_QUIET) | ✅ | MenuViewBuilder.settle() |
+| Domain-Policy (include/exclude) | ✅ | ResearchSession.isUrlAllowed() |
+| Limits (maxUrls, maxDepth, maxBytesPerDoc) | ✅ | ResearchSession config |
+| Privacy-Policy (header allowlist) | ✅ | ResearchSession.headerAllowlist |
+| Network Plane (addDataCollector/getData/disownData) | ✅ | NetworkIngestionPipeline |
+| Event-Subscription (network.responseCompleted) | ✅ | addEventListener + Consumer |
+| Retry/Backoff bei getData | ✅ | 3 Versuche, 100-300ms Jitter |
+| Privacy-Filter (MIME, URL, Header-Allowlist) | ✅ | isCaptureableMime, isExcludedUrl, headerAllowlist |
+| Pipeline-Lifecycle (start/stop mit Session) | ✅ | ResearchSessionStartTool + ResearchSessionManager |
+| H2 Schema (request/response/body/doc/crawl_queue) | ⚠️ Teilweise | Bestehende archive_entries + web_cache Tabellen |
+| Lucene Batch-Commit-Policy | ⚠️ Teilweise | Bestehende LuceneLexicalIndex.commitBatch() |
+| SPA DOM-Snapshot-Pipeline | ⚠️ Teilweise | MutationObserver in DOM_QUIET settle |
+| WebSocket/SSE-Tap | 🔮 Geplant | Erfordert Preload-Script WebSocket-Wrapper |

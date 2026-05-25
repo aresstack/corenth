@@ -1,0 +1,927 @@
+package de.bund.zrb.files.impl.ftp;
+
+import de.bund.zrb.files.api.FileService;
+import de.bund.zrb.files.api.FileServiceErrorCode;
+import de.bund.zrb.files.api.FileServiceException;
+import de.bund.zrb.files.api.FileWriteResult;
+import de.bund.zrb.files.auth.ConnectionId;
+import de.bund.zrb.files.auth.Credentials;
+import de.bund.zrb.files.auth.CredentialsProvider;
+import de.bund.zrb.files.codec.RecordStructureCodec;
+import de.bund.zrb.files.model.FileNode;
+import de.bund.zrb.files.model.FilePayload;
+import de.bund.zrb.files.path.MvsPathDialect;
+import de.bund.zrb.files.path.PathDialect;
+import de.bund.zrb.helper.SettingsHelper;
+import de.bund.zrb.model.Settings;
+import de.bund.zrb.util.ByteUtil;
+import org.apache.commons.net.ftp.FTP;
+import org.apache.commons.net.ftp.FTPClient;
+import org.apache.commons.net.ftp.FTPClientConfig;
+import org.apache.commons.net.ftp.FTPFile;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.lang.reflect.Method;
+import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.List;
+
+public class CommonsNetFtpFileService implements FileService {
+
+
+    private final FTPClient ftpClient = new FTPClient();
+    private final Settings settings;
+    private final PathDialect mvsDialect;
+    private final Byte padding;
+    private boolean recordStructure;
+    private boolean mvsMode;
+    private boolean closed;
+    private final ConnectionId connectionId;
+    private final CredentialsProvider credentialsProvider;
+
+    public CommonsNetFtpFileService(String host, String user, String password) throws FileServiceException {
+        this(host, user, password, SettingsHelper.load(), new MvsPathDialect());
+    }
+
+    public CommonsNetFtpFileService(String host, String user, String password, Settings settings, PathDialect mvsDialect)
+            throws FileServiceException {
+        this.settings = settings == null ? SettingsHelper.load() : settings;
+        this.mvsDialect = mvsDialect == null ? new MvsPathDialect() : mvsDialect;
+        Integer ftpFileType = this.settings.ftpFileType == null ? null : this.settings.ftpFileType.getCode();
+        this.padding = ftpFileType == null || ftpFileType == FTP.ASCII_FILE_TYPE
+                ? ByteUtil.parseHexByte(this.settings.padding)
+                : null;
+        this.recordStructure = false;
+
+        this.connectionId = new ConnectionId("ftp", host, user);
+        this.credentialsProvider = null;
+
+        connect(host, user, password);
+    }
+
+    public CommonsNetFtpFileService(CredentialsProvider credentialsProvider, ConnectionId connectionId) throws FileServiceException {
+        this(credentialsProvider, connectionId, SettingsHelper.load(), new MvsPathDialect());
+    }
+
+    public CommonsNetFtpFileService(CredentialsProvider credentialsProvider,
+                                   ConnectionId connectionId,
+                                   Settings settings,
+                                   PathDialect mvsDialect) throws FileServiceException {
+        this.settings = settings == null ? SettingsHelper.load() : settings;
+        this.mvsDialect = mvsDialect == null ? new MvsPathDialect() : mvsDialect;
+        Integer ftpFileType = this.settings.ftpFileType == null ? null : this.settings.ftpFileType.getCode();
+        this.padding = ftpFileType == null || ftpFileType == FTP.ASCII_FILE_TYPE
+                ? ByteUtil.parseHexByte(this.settings.padding)
+                : null;
+        this.recordStructure = false;
+
+        this.connectionId = connectionId;
+        this.credentialsProvider = credentialsProvider;
+
+        connect();
+    }
+
+    private void connect() throws FileServiceException {
+        if (connectionId == null) {
+            throw new FileServiceException(FileServiceErrorCode.AUTH_FAILED, "Missing ConnectionId");
+        }
+        if (credentialsProvider == null) {
+            throw new FileServiceException(FileServiceErrorCode.AUTH_FAILED, "Missing CredentialsProvider");
+        }
+
+        try {
+            Credentials credentials = credentialsProvider.resolve(connectionId)
+                    .orElseThrow(() -> new FileServiceException(FileServiceErrorCode.AUTH_FAILED, "No credentials available"));
+
+            connect(credentials.getHost(), credentials.getUsername(), credentials.getPassword());
+        } catch (de.bund.zrb.files.auth.AuthCancelledException e) {
+            // Benutzer hat die Passwort-Eingabe abgebrochen
+            throw new FileServiceException(FileServiceErrorCode.AUTH_CANCELLED, e.getMessage());
+        }
+    }
+
+    private void connect(String host, String user, String password) throws FileServiceException {
+        try {
+            // Get timeout values from settings (0 = disabled/infinite)
+            int connectTimeout = settings.ftpConnectTimeoutMs;
+            int controlTimeout = settings.ftpControlTimeoutMs;
+            int dataTimeout = settings.ftpDataTimeoutMs;
+
+            // Log timeout configuration
+            System.out.println("[FTP] Connecting to " + host + " with timeouts: " +
+                    "connect=" + (connectTimeout == 0 ? "disabled" : connectTimeout + "ms") + ", " +
+                    "control=" + (controlTimeout == 0 ? "disabled" : controlTimeout + "ms") + ", " +
+                    "data=" + (dataTimeout == 0 ? "disabled" : dataTimeout + "ms"));
+
+            ftpClient.setControlEncoding(settings.encoding);
+
+            // Apply connect timeout (0 means no timeout)
+            if (connectTimeout > 0) {
+                ftpClient.setDefaultTimeout(connectTimeout);
+                ftpClient.setConnectTimeout(connectTimeout);
+            }
+
+            ftpClient.connect(host);
+
+            // Apply control socket timeout (0 means infinite wait)
+            ftpClient.setSoTimeout(controlTimeout);
+
+            // Apply data timeout (0 means infinite wait)
+            applyDataTimeout(dataTimeout);
+
+            if (!ftpClient.login(user, password)) {
+                throw new FileServiceException(FileServiceErrorCode.AUTH_FAILED, "FTP login failed");
+            }
+
+            ftpClient.enterLocalPassiveMode();
+
+            String systemType = ftpClient.getSystemType();
+            mvsMode = systemType != null && systemType.toUpperCase().contains("MVS");
+
+            // Configure FTP parser based on system typSchluessel
+            if (mvsMode) {
+                System.out.println("[FTP] Detected MVS/zOS system, configuring MVS parser");
+                ftpClient.configure(new FTPClientConfig(FTPClientConfig.SYST_MVS));
+            } else if (systemType != null && systemType.toUpperCase().contains("WIN32NT")) {
+                ftpClient.configure(new FTPClientConfig(FTPClientConfig.SYST_NT));
+            }
+
+            applyTransferSettings(settings);
+            recordStructure = settings.ftpFileStructure != null
+                    ? settings.ftpFileStructure.getCode() == FTP.RECORD_STRUCTURE
+                    : mvsMode;
+        } catch (IOException e) {
+            // Log root cause for diagnosis
+            Throwable rootCause = e;
+            while (rootCause.getCause() != null) {
+                rootCause = rootCause.getCause();
+            }
+            System.err.println("[FTP] Connection failed: " + rootCause.getClass().getSimpleName() +
+                    " - " + rootCause.getMessage());
+            throw new FileServiceException(FileServiceErrorCode.IO_ERROR, "FTP connection failed", e);
+        }
+    }
+
+    private void applyDataTimeout(int timeoutMs) {
+        try {
+            Method intMethod = FTPClient.class.getMethod("setDataTimeout", int.class);
+            intMethod.invoke(ftpClient, timeoutMs);
+            return;
+        } catch (Exception ignore) {
+            // try Duration-based API below
+        }
+
+        try {
+            Class<?> durationClass = Class.forName("java.time.Duration");
+            Method ofMillis = durationClass.getMethod("ofMillis", long.class);
+            Object duration = ofMillis.invoke(null, (long) timeoutMs);
+            Method durationMethod = FTPClient.class.getMethod("setDataTimeout", durationClass);
+            durationMethod.invoke(ftpClient, duration);
+        } catch (Exception ignore) {
+            // best effort only
+        }
+    }
+
+    private void applyTransferSettings(Settings settings) throws IOException {
+        Integer ftpFileType = settings.ftpFileType == null ? null : settings.ftpFileType.getCode();
+        if (ftpFileType != null) {
+            if (settings.ftpTextFormat != null) {
+                ftpClient.setFileType(ftpFileType, settings.ftpTextFormat.getCode());
+            } else {
+                ftpClient.setFileType(ftpFileType);
+            }
+        } else {
+            if (settings.ftpTextFormat != null) {
+                ftpClient.setFileType(FTP.ASCII_FILE_TYPE, settings.ftpTextFormat.getCode());
+            } else {
+                ftpClient.setFileType(FTP.ASCII_FILE_TYPE);
+            }
+        }
+
+        if (settings.ftpFileStructure != null) {
+            ftpClient.setFileStructure(settings.ftpFileStructure.getCode());
+        } else if (mvsMode) {
+            ftpClient.setFileStructure(FTP.RECORD_STRUCTURE);
+        } else {
+            ftpClient.setFileStructure(FTP.FILE_STRUCTURE);
+        }
+
+        if (settings.ftpTransferMode != null) {
+            ftpClient.setFileTransferMode(settings.ftpTransferMode.getCode());
+        } else {
+            ftpClient.setFileTransferMode(FTP.STREAM_TRANSFER_MODE);
+        }
+    }
+
+    @Override
+    public List<FileNode> list(String absolutePath) throws FileServiceException {
+        String resolved = resolvePath(absolutePath);
+        try {
+            if (mvsMode) {
+                return listMvs(resolved);
+            }
+            return listUnix(resolved);
+        } catch (IOException e) {
+            throw new FileServiceException(FileServiceErrorCode.IO_ERROR, "FTP list failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * List files on Unix/standard FTP servers using listFiles().
+     */
+    private List<FileNode> listUnix(String resolved) throws IOException {
+        FTPFile[] files = ftpClient.listFiles(resolved);
+        if (files == null || files.length == 0) {
+            System.out.println("[FTP] listFiles returned empty for: " + resolved + " - reply: " + ftpClient.getReplyString());
+            return Collections.emptyList();
+        }
+
+        List<FileNode> nodes = new ArrayList<FileNode>(files.length);
+        for (FTPFile file : files) {
+            String name = file.getName();
+            if (name == null || name.isEmpty() || ".".equals(name) || "..".equals(name)) {
+                continue;
+            }
+            String childPath = joinPath(resolved, name);
+            long size = file.getSize();
+            Calendar timestamp = file.getTimestamp();
+            long lastModified = timestamp == null ? 0L : timestamp.getTimeInMillis();
+            nodes.add(new FileNode(name, childPath, file.isDirectory(), size, lastModified));
+        }
+        return nodes;
+    }
+
+    /**
+     * List datasets/members on MVS/zOS.
+     *
+     * Performs a **dual listing** to provide Windows-like behaviour:
+     * <ol>
+     *   <li>NLST 'RESOLVED'     → PDS members  (files)</li>
+     *   <li>NLST 'RESOLVED.*'   → sub-datasets  (folders)</li>
+     * </ol>
+     * Both results are merged and deduplicated so the user sees
+     * members <b>and</b> sub-datasets side by side.
+     */
+    private List<FileNode> listMvs(String resolved) throws IOException {
+        // MVS root '' cannot be listed - require HLQ
+        if (resolved == null || resolved.isEmpty() || "''".equals(resolved)) {
+            System.out.println("[FTP/MVS] Cannot list MVS root - HLQ required");
+            return Collections.emptyList();
+        }
+
+        java.util.Set<String> seenKeys = new java.util.LinkedHashSet<String>();
+        List<FileNode> allNodes = new ArrayList<FileNode>();
+
+        // ── 1. Direct listing: PDS members or matching datasets ──
+        String[] directNames = ftpClient.listNames(resolved);
+        if (directNames != null && directNames.length > 0) {
+            System.out.println("[FTP/MVS] listNames (direct) returned " + directNames.length + " entries for: " + resolved);
+            List<FileNode> directNodes = buildMvsFileNodes(resolved, directNames);
+            for (FileNode node : directNodes) {
+                String key = node.getPath().toUpperCase();
+                if (seenKeys.add(key)) {
+                    allNodes.add(node);
+                }
+            }
+        }
+
+        // ── 2. Wildcard listing: sub-datasets 'RESOLVED.*' ──
+        String wildcardPath = buildMvsWildcardPath(resolved);
+        if (wildcardPath != null) {
+            try {
+                String[] subNames = ftpClient.listNames(wildcardPath);
+                if (subNames != null && subNames.length > 0) {
+                    System.out.println("[FTP/MVS] listNames (wildcard) returned " + subNames.length + " entries for: " + wildcardPath);
+                    List<FileNode> subNodes = buildMvsSubDatasetNodes(resolved, subNames);
+                    for (FileNode node : subNodes) {
+                        String key = node.getPath().toUpperCase();
+                        if (seenKeys.add(key)) {
+                            allNodes.add(node);
+                        }
+                    }
+                }
+            } catch (IOException e) {
+                // Wildcard listing failed - not all paths have sub-datasets, that's OK
+                System.out.println("[FTP/MVS] Wildcard listing failed for " + wildcardPath + ": " + e.getMessage());
+            }
+        }
+
+        if (!allNodes.isEmpty()) {
+            return allNodes;
+        }
+
+        // ── 3. Fallback: try listFiles ──
+        System.out.println("[FTP/MVS] Both NLST strategies empty, trying listFiles for: " + resolved + " - reply: " + ftpClient.getReplyString());
+
+        FTPFile[] files = ftpClient.listFiles(resolved);
+        if (files == null || files.length == 0) {
+            System.out.println("[FTP/MVS] listFiles also empty for: " + resolved + " - reply: " + ftpClient.getReplyString());
+            return Collections.emptyList();
+        }
+
+        System.out.println("[FTP/MVS] listFiles returned " + files.length + " entries for: " + resolved);
+        List<FileNode> nodes = new ArrayList<FileNode>(files.length);
+        for (FTPFile file : files) {
+            String name = file.getName();
+            if (name == null || name.isEmpty()) {
+                continue;
+            }
+            String childPath = joinPathMvs(resolved, name);
+            long size = file.getSize();
+            Calendar timestamp = file.getTimestamp();
+            long lastModified = timestamp == null ? 0L : timestamp.getTimeInMillis();
+            // On MVS, directories are typically PDS (partitioned datasets)
+            boolean isDirectory = file.isDirectory() || isPds(name);
+            nodes.add(new FileNode(name, childPath, isDirectory, size, lastModified));
+        }
+        return nodes;
+    }
+
+    /**
+     * Build wildcard path for sub-dataset listing.
+     * 'USR1.TMP' → "'USR1.TMP.*'"
+     * Returns null if the path already is a wildcard or member path.
+     */
+    private String buildMvsWildcardPath(String resolved) {
+        String unquoted = unquote(resolved);
+        if (unquoted.isEmpty() || unquoted.endsWith("*") || unquoted.contains("(")) {
+            return null;
+        }
+        return "'" + unquoted + ".*'";
+    }
+
+    /**
+     * Build FileNodes from a direct NLST result (members + possibly sub-datasets).
+     *
+     * Key improvement: names that are fully qualified (start with parent + ".") are
+     * always treated as <b>sub-datasets (directories)</b>, even if the display name
+     * is short enough to look like a member.
+     */
+    private List<FileNode> buildMvsFileNodes(String parent, String[] names) {
+        List<FileNode> nodes = new ArrayList<FileNode>(names.length);
+        String unquotedParent = unquote(parent).toUpperCase();
+
+        for (String name : names) {
+            if (name == null || name.isEmpty()) {
+                continue;
+            }
+
+            String trimmedName = name.trim();
+            if (trimmedName.isEmpty()) {
+                continue;
+            }
+
+            String unquotedName = unquote(trimmedName).toUpperCase();
+
+            // Skip if name equals parent (server returned the HLQ itself)
+            if (unquotedName.equals(unquotedParent)) {
+                System.out.println("[FTP/MVS] Skipping parent entry: " + trimmedName);
+                continue;
+            }
+
+            // Determine display name, full path, and whether this is a sub-dataset or member
+            String displayName;
+            String fullPath;
+            boolean isSubDataset = false;
+
+            // Check if server returned fully qualified name
+            if (unquotedName.startsWith(unquotedParent + ".")) {
+                // ── Sub-dataset ── (fully qualified path, e.g. USR1.TMP.TMP2 under USR1.TMP)
+                isSubDataset = true;
+                String originalUnquoted = unquote(trimmedName);
+                displayName = originalUnquoted.substring(unquotedParent.length() + 1);
+                fullPath = mvsDialect.toAbsolutePath(originalUnquoted);
+                System.out.println("[FTP/MVS] Sub-dataset: " + trimmedName + " -> display: " + displayName);
+            } else if (trimmedName.startsWith("'") && trimmedName.endsWith("'")) {
+                // Already quoted absolute path
+                String originalUnquoted = unquote(trimmedName);
+                if (originalUnquoted.toUpperCase().startsWith(unquotedParent + ".")) {
+                    // ── Sub-dataset ── (quoted fully qualified)
+                    isSubDataset = true;
+                    displayName = originalUnquoted.substring(unquotedParent.length() + 1);
+                } else {
+                    displayName = originalUnquoted;
+                }
+                fullPath = trimmedName;
+                System.out.println("[FTP/MVS] Quoted path: " + trimmedName + " -> display: " + displayName + " isSubDs=" + isSubDataset);
+            } else {
+                // Relative name → PDS member
+                displayName = trimmedName;
+                fullPath = joinPathMvs(parent, trimmedName);
+                System.out.println("[FTP/MVS] Member: " + trimmedName + " -> fullPath: " + fullPath);
+            }
+
+            // Determine directory status:
+            // - Sub-datasets (fully qualified names) → always directory
+            // - Relative names that look like PDS members → file
+            // - Everything else → directory (dataset)
+            boolean isDirectory;
+            if (isSubDataset) {
+                isDirectory = true;
+            } else if (displayName.contains("(")) {
+                isDirectory = false; // explicit member reference
+            } else {
+                // Relative name from direct listing → likely PDS member
+                isDirectory = !isMemberName(displayName);
+            }
+
+            nodes.add(new FileNode(displayName, fullPath, isDirectory, 0L, 0L));
+        }
+        return nodes;
+    }
+
+    /**
+     * Build FileNodes from a wildcard NLST result (e.g. NLST 'USR1.TMP.*').
+     * All results are sub-datasets → always isDirectory=true.
+     */
+    private List<FileNode> buildMvsSubDatasetNodes(String parent, String[] names) {
+        List<FileNode> nodes = new ArrayList<FileNode>(names.length);
+        String unquotedParent = unquote(parent).toUpperCase();
+
+        for (String name : names) {
+            if (name == null || name.isEmpty()) {
+                continue;
+            }
+
+            String trimmedName = name.trim();
+            if (trimmedName.isEmpty()) {
+                continue;
+            }
+
+            String unquotedName = unquote(trimmedName).toUpperCase();
+
+            // Skip parent itself
+            if (unquotedName.equals(unquotedParent)) {
+                continue;
+            }
+
+            String originalUnquoted = unquote(trimmedName);
+            String displayName;
+            String fullPath;
+
+            // Extract display name by removing parent prefix
+            if (unquotedName.startsWith(unquotedParent + ".")) {
+                displayName = originalUnquoted.substring(unquotedParent.length() + 1);
+                fullPath = mvsDialect.toAbsolutePath(originalUnquoted);
+            } else {
+                displayName = originalUnquoted;
+                fullPath = mvsDialect.toAbsolutePath(originalUnquoted);
+            }
+
+            // Strip any remaining multi-level qualifiers to show only the next level
+            // e.g., if parent=USR1.TMP and result=USR1.TMP.A.B, display should be "A"
+            // and fullPath should be 'USR1.TMP.A' (the next navigation level)
+            if (displayName.contains(".")) {
+                String nextLevel = displayName.substring(0, displayName.indexOf('.'));
+                displayName = nextLevel;
+                fullPath = mvsDialect.toAbsolutePath(unquotedParent + "." + nextLevel);
+            }
+
+            System.out.println("[FTP/MVS] Sub-dataset (wildcard): " + trimmedName + " -> display: " + displayName + " path: " + fullPath);
+
+            // Sub-datasets are always directories
+            nodes.add(new FileNode(displayName, fullPath, true, 0L, 0L));
+        }
+        return nodes;
+    }
+
+    /**
+     * Join path for MVS, distinguishing between HLQ navigation and member access.
+     */
+    private String joinPathMvs(String parent, String name) {
+        if (mvsDialect instanceof MvsPathDialect) {
+            return ((MvsPathDialect) mvsDialect).childOf(parent, name);
+        }
+
+        String rawParent = unquote(parent);
+        if (rawParent.isEmpty()) {
+            return mvsDialect.toAbsolutePath(name);
+        }
+        return mvsDialect.toAbsolutePath(rawParent + "." + name);
+    }
+
+    /**
+     * Check if name looks like a PDS (partitioned dataset).
+     * This is a heuristic - typically PDS don't have extensions.
+     */
+    private boolean isPds(String name) {
+        if (name == null || name.isEmpty()) {
+            return false;
+        }
+        // Simple heuristic: names without dots at the end might be PDS
+        // This is not reliable, but better than nothing
+        return !name.contains("(");
+    }
+
+    /**
+     * Check if name looks like a member name (short, no dots, alphanumeric).
+     */
+    private boolean isMemberName(String name) {
+        if (name == null || name.isEmpty() || name.length() > 8) {
+            return false;
+        }
+        // Member names are 1-8 chars, alphanumeric, no dots
+        return !name.contains(".") && !name.contains("(") && !name.contains(")");
+    }
+
+    @Override
+    public FilePayload readFile(String absolutePath) throws FileServiceException {
+        List<String> candidates = resolveReadCandidates(absolutePath);
+        FileServiceException lastError = null;
+        for (String candidate : candidates) {
+            try {
+                return readFileInternal(candidate);
+            } catch (FileServiceException e) {
+                lastError = e;
+            }
+        }
+        if (lastError != null) {
+            throw lastError;
+        }
+        throw new FileServiceException(FileServiceErrorCode.NOT_FOUND, "FTP file not found");
+    }
+
+    /**
+     * Read a file in BINARY transfer mode (no ASCII/EBCDIC conversion, no padding removal).
+     * Temporarily switches to FTP.BINARY_FILE_TYPE, reads, then restores the original mode.
+     * Required for binary document formats (PDF, DOCX, XLSX, etc.) on FTP/MVS servers.
+     */
+    @Override
+    public FilePayload readFileBinary(String absolutePath) throws FileServiceException {
+        List<String> candidates = resolveReadCandidates(absolutePath);
+        FileServiceException lastError = null;
+
+        boolean originalRecordStructure = recordStructure;
+
+        try {
+            // Switch to BINARY mode, FILE structure (no record markers for binary)
+            ftpClient.setFileType(FTP.BINARY_FILE_TYPE);
+            ftpClient.setFileStructure(FTP.FILE_STRUCTURE);
+            recordStructure = false;
+
+            System.out.println("[FTP] readFileBinary: switched to BINARY mode for " + absolutePath);
+
+            for (String candidate : candidates) {
+                try {
+                    return readFileInternalBinary(candidate);
+                } catch (FileServiceException e) {
+                    lastError = e;
+                }
+            }
+        } catch (IOException e) {
+            throw new FileServiceException(FileServiceErrorCode.IO_ERROR,
+                    "Failed to switch FTP to binary mode: " + e.getMessage(), e);
+        } finally {
+            // Restore original transfer settings
+            try {
+                applyTransferSettings(settings);
+                recordStructure = originalRecordStructure;
+                System.out.println("[FTP] readFileBinary: restored original transfer mode");
+            } catch (IOException e) {
+                System.err.println("[FTP] Warning: failed to restore transfer settings: " + e.getMessage());
+            }
+        }
+
+        if (lastError != null) {
+            throw lastError;
+        }
+        throw new FileServiceException(FileServiceErrorCode.NOT_FOUND, "FTP file not found (binary)");
+    }
+
+    /**
+     * Reads a file as raw binary bytes — no padding removal, no record structure decoding.
+     * Used exclusively by readFileBinary() for binary document formats.
+     */
+    private FilePayload readFileInternalBinary(String resolvedPath) throws FileServiceException {
+        InputStream in = null;
+        try {
+            long t0 = System.currentTimeMillis();
+            in = ftpClient.retrieveFileStream(resolvedPath);
+            if (in == null) {
+                throw new FileServiceException(FileServiceErrorCode.NOT_FOUND,
+                        "FTP file not found: " + resolvedPath + " reply=" + ftpClient.getReplyString());
+            }
+
+            // Read raw bytes — NO padding removal (padding removal corrupts binary data)
+            byte[] bytes = readAllBytesRaw(in);
+            long t1 = System.currentTimeMillis();
+            System.out.println("[FTP] readFileInternalBinary: " + bytes.length + " bytes in " + (t1 - t0) + "ms");
+
+            in.close();
+            in = null;
+
+            if (!ftpClient.completePendingCommand()) {
+                throw new FileServiceException(FileServiceErrorCode.IO_ERROR,
+                        "FTP transfer incomplete: " + resolvedPath);
+            }
+
+            // Return raw bytes without any charset/text transformation
+            return FilePayload.fromBytes(bytes, null, false);
+        } catch (IOException e) {
+            throw new FileServiceException(FileServiceErrorCode.IO_ERROR, "FTP binary read failed: " + resolvedPath, e);
+        } finally {
+            if (in != null) {
+                try { in.close(); } catch (IOException ignore) {}
+            }
+        }
+    }
+
+    private FilePayload readFileInternal(String resolvedPath) throws FileServiceException {
+        InputStream in = null;
+        try {
+            long t0 = System.currentTimeMillis();
+            in = ftpClient.retrieveFileStream(resolvedPath);
+            if (in == null) {
+                throw new FileServiceException(FileServiceErrorCode.NOT_FOUND,
+                        "FTP file not found: " + resolvedPath + " reply=" + ftpClient.getReplyString());
+            }
+
+            byte[] bytes = readAllBytes(in);
+            long t1 = System.currentTimeMillis();
+            System.out.println("[FTP] readAllBytes took " + (t1 - t0) + "ms, bytes=" + bytes.length);
+
+            // WICHTIG: InputStream MUSS vor completePendingCommand() geschlossen werden!
+            // Sonst wartet completePendingCommand() endlos auf die Server-Antwort "226 Transfer Complete"
+            in.close();
+            in = null;
+
+            if (!ftpClient.completePendingCommand()) {
+                throw new FileServiceException(FileServiceErrorCode.IO_ERROR,
+                        "FTP transfer incomplete: " + resolvedPath);
+            }
+            long t2 = System.currentTimeMillis();
+            System.out.println("[FTP] completePendingCommand took " + (t2 - t1) + "ms");
+
+            Charset charset = Charset.forName(ftpClient.getControlEncoding());
+
+            // For RECORD_STRUCTURE, decode bytes to editor-friendly text
+            if (recordStructure) {
+                String editorText = RecordStructureCodec.decodeForEditor(bytes, charset, settings);
+                System.out.println("[FTP] readFileInternal total: " + (System.currentTimeMillis() - t0) + "ms");
+                return FilePayload.fromBytesWithEditorText(bytes, charset, recordStructure, editorText);
+            }
+
+            System.out.println("[FTP] readFileInternal total: " + (System.currentTimeMillis() - t0) + "ms");
+            return FilePayload.fromBytes(bytes, charset, recordStructure);
+        } catch (IOException e) {
+            throw new FileServiceException(FileServiceErrorCode.IO_ERROR, "FTP read failed: " + resolvedPath, e);
+        } finally {
+            if (in != null) {
+                try {
+                    in.close();
+                } catch (IOException ignore) {
+                    // ignore close errors
+                }
+            }
+        }
+    }
+
+    @Override
+    public void writeFile(String absolutePath, FilePayload payload) throws FileServiceException {
+        if (payload == null) {
+            throw new FileServiceException(FileServiceErrorCode.IO_ERROR, "Payload is required");
+        }
+        List<String> candidates = resolveWriteCandidates(absolutePath);
+        FileServiceException lastError = null;
+        for (String candidate : candidates) {
+            try {
+                writeFileInternal(candidate, payload);
+                return;
+            } catch (FileServiceException e) {
+                lastError = e;
+            }
+        }
+        if (lastError != null) {
+            throw lastError;
+        }
+        throw new FileServiceException(FileServiceErrorCode.IO_ERROR, "FTP write failed");
+    }
+
+    private void writeFileInternal(String resolvedPath, FilePayload payload) throws FileServiceException {
+        ByteArrayInputStream in = new ByteArrayInputStream(payload.getBytes());
+        try {
+            boolean success = ftpClient.storeFile(resolvedPath, in);
+            if (!success) {
+                throw new FileServiceException(FileServiceErrorCode.IO_ERROR,
+                        "FTP write failed: " + ftpClient.getReplyString());
+            }
+        } catch (IOException e) {
+            throw new FileServiceException(FileServiceErrorCode.IO_ERROR, "FTP write failed", e);
+        }
+    }
+
+    /**
+     * Write a file in BINARY transfer mode (no ASCII/EBCDIC conversion).
+     * Temporarily switches to FTP.BINARY_FILE_TYPE, writes, then restores the original mode.
+     */
+    @Override
+    public void writeFileBinary(String absolutePath, FilePayload payload) throws FileServiceException {
+        if (payload == null) {
+            throw new FileServiceException(FileServiceErrorCode.IO_ERROR, "Payload is required");
+        }
+
+        boolean originalRecordStructure = recordStructure;
+
+        try {
+            ftpClient.setFileType(FTP.BINARY_FILE_TYPE);
+            ftpClient.setFileStructure(FTP.FILE_STRUCTURE);
+            recordStructure = false;
+            System.out.println("[FTP] writeFileBinary: switched to BINARY mode for " + absolutePath);
+
+            List<String> candidates = resolveWriteCandidates(absolutePath);
+            FileServiceException lastError = null;
+            for (String candidate : candidates) {
+                try {
+                    writeFileInternal(candidate, payload);
+                    System.out.println("[FTP] writeFileBinary: wrote " + payload.getBytes().length + " bytes to " + candidate);
+                    return;
+                } catch (FileServiceException e) {
+                    lastError = e;
+                }
+            }
+            if (lastError != null) throw lastError;
+            throw new FileServiceException(FileServiceErrorCode.IO_ERROR, "FTP binary write failed");
+        } catch (IOException e) {
+            throw new FileServiceException(FileServiceErrorCode.IO_ERROR,
+                    "Failed to switch FTP to binary mode for write: " + e.getMessage(), e);
+        } finally {
+            try {
+                applyTransferSettings(settings);
+                recordStructure = originalRecordStructure;
+                System.out.println("[FTP] writeFileBinary: restored original transfer mode");
+            } catch (IOException e) {
+                System.err.println("[FTP] Warning: failed to restore transfer settings after binary write: " + e.getMessage());
+            }
+        }
+    }
+
+    @Override
+    public FileWriteResult writeIfUnchanged(String absolutePath, FilePayload payload, String expectedHash)
+            throws FileServiceException {
+        if (expectedHash == null || expectedHash.isEmpty()) {
+            writeFile(absolutePath, payload);
+            return FileWriteResult.success();
+        }
+
+        FilePayload current = readFile(absolutePath);
+        if (!expectedHash.equals(current.getHash())) {
+            return FileWriteResult.conflict(current);
+        }
+
+        writeFile(absolutePath, payload);
+        return FileWriteResult.success();
+    }
+
+    @Override
+    public boolean delete(String absolutePath) throws FileServiceException {
+        String resolved = resolvePath(absolutePath);
+        try {
+            return ftpClient.deleteFile(resolved) || ftpClient.removeDirectory(resolved);
+        } catch (IOException e) {
+            throw new FileServiceException(FileServiceErrorCode.IO_ERROR, "FTP delete failed", e);
+        }
+    }
+
+    @Override
+    public boolean createDirectory(String absolutePath) throws FileServiceException {
+        String resolved = resolvePath(absolutePath);
+        try {
+            return ftpClient.makeDirectory(resolved);
+        } catch (IOException e) {
+            throw new FileServiceException(FileServiceErrorCode.IO_ERROR, "FTP create directory failed", e);
+        }
+    }
+
+    @Override
+    public void close() throws FileServiceException {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        try {
+            if (ftpClient.isConnected()) {
+                ftpClient.logout();
+                ftpClient.disconnect();
+            }
+        } catch (IOException e) {
+            throw new FileServiceException(FileServiceErrorCode.IO_ERROR, "FTP disconnect failed", e);
+        }
+    }
+
+    private byte[] readAllBytes(InputStream in) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = in.read(buffer)) != -1) {
+            if (padding != null) {
+                // Remove ALL padding bytes from the stream (matches original FtpFileBuffer behavior)
+                for (int i = 0; i < read; i++) {
+                    if (buffer[i] != padding) {
+                        out.write(buffer[i]);
+                    }
+                }
+            } else {
+                out.write(buffer, 0, read);
+            }
+        }
+
+        return out.toByteArray();
+    }
+
+    /**
+     * Read all bytes from stream WITHOUT any padding removal.
+     * Used for binary file transfers where every byte must be preserved.
+     */
+    private byte[] readAllBytesRaw(InputStream in) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = in.read(buffer)) != -1) {
+            out.write(buffer, 0, read);
+        }
+        return out.toByteArray();
+    }
+
+    private String resolvePath(String path) {
+        if (mvsMode) {
+            return mvsDialect.toAbsolutePath(path);
+        }
+        if (path == null || path.trim().isEmpty()) {
+            return "/";
+        }
+        String trimmed = path.trim();
+        return trimmed.startsWith("/") ? trimmed : "/" + trimmed;
+    }
+
+    private List<String> resolveReadCandidates(String path) {
+        if (!mvsMode) {
+            return Collections.singletonList(resolvePath(path));
+        }
+        return resolveMvsCandidates(path);
+    }
+
+    private List<String> resolveWriteCandidates(String path) {
+        if (!mvsMode) {
+            return Collections.singletonList(resolvePath(path));
+        }
+        return resolveMvsCandidates(path);
+    }
+
+    private List<String> resolveMvsCandidates(String path) {
+        if (mvsDialect instanceof MvsPathDialect) {
+            return ((MvsPathDialect) mvsDialect).resolveCandidates(path);
+        }
+        String trimmed = path == null ? "" : path.trim();
+        return Collections.singletonList(mvsDialect.toAbsolutePath(trimmed));
+    }
+
+    private String joinPath(String parent, String name) {
+        if (mvsMode) {
+            if (mvsDialect instanceof MvsPathDialect) {
+                return ((MvsPathDialect) mvsDialect).childOf(parent, name);
+            }
+
+            String rawParent = unquote(parent);
+            if (rawParent.isEmpty()) {
+                return mvsDialect.toAbsolutePath(name);
+            }
+            return mvsDialect.toAbsolutePath(rawParent + "." + name);
+        }
+
+        if (parent.endsWith("/")) {
+            return parent + name;
+        }
+        if ("/".equals(parent)) {
+            return "/" + name;
+        }
+        return parent + "/" + name;
+    }
+
+    private String unquote(String path) {
+        if (path == null) {
+            return "";
+        }
+        String trimmed = path.trim();
+        if (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length() >= 2) {
+            return trimmed.substring(1, trimmed.length() - 1);
+        }
+        return trimmed;
+    }
+
+    public boolean isMvsMode() {
+        return mvsMode;
+    }
+
+    public String getSystemType() {
+        try {
+            return ftpClient.getSystemType();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+}

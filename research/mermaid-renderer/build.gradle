@@ -1,0 +1,58 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'antlr'
+}
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.graalvm.sdk:graal-sdk:21.2.0'
+    implementation 'org.graalvm.js:js:21.2.0'
+
+    // Apache Batik — SVG DOM + GVT tree for accurate getBBox() computation.
+    // Only batik-bridge is needed (pulls in batik-gvt, batik-dom, batik-css, batik-svg-dom).
+    // This replaces heuristic JS-side BBox estimation with Batik's real SVG text layout engine.
+    implementation 'org.apache.xmlgraphics:batik-bridge:1.17'
+
+    // Batik transcoder — needed by SvgRenderer (test utility) to rasterise SVG to BufferedImage
+    implementation 'org.apache.xmlgraphics:batik-transcoder:1.17'
+    implementation 'org.apache.xmlgraphics:batik-codec:1.17'
+
+    // ANTLR for Mermaid parsing (4.9.3 = last Java 8 compatible version)
+    antlr 'org.antlr:antlr4:4.9.3'
+    implementation 'org.antlr:antlr4-runtime:4.9.3'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testImplementation 'com.google.code.gson:gson:2.10.1'
+}
+
+// ANTLR configuration — generate parser into the mermaid parser package
+generateGrammarSource {
+    arguments += ['-visitor', '-listener', '-package', 'com.aresstack.mermaid.parser']
+    outputDirectory = file("${project.buildDir}/generated-src/antlr/main/com/aresstack/mermaid/parser")
+}
+
+sourceSets {
+    main {
+        java {
+            srcDir "${project.buildDir}/generated-src/antlr/main"
+        }
+    }
+}
+
+compileJava.dependsOn generateGrammarSource
+
+test {
+    useJUnitPlatform()
+}
+
+application {
+    mainClassName = 'de.bund.zrb.mermaid.MermaidRendererMain'
+}
+
