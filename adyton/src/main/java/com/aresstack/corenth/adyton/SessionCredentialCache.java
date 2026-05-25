@@ -6,6 +6,12 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * A session-scoped, in-memory cache for active credential leases.
  * <p>
+ * <b>Important distinction:</b> This is a <em>lease cache</em>, not the RAM
+ * secret-material cache. It holds only opaque {@link CredentialLease} grant
+ * objects (target, principal, scope, expiry) — never passwords, tokens, or
+ * secret material. The MainframeMate RAM secret-material cache is modeled
+ * separately by {@link SecretMaterialCache}.
+ * <p>
  * This cache holds leases only for the duration of a session and automatically
  * discards expired entries on access. It never persists secrets to disk and
  * should be discarded when the session ends.
@@ -19,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * automatically evicted on access.
  *
  * @see CredentialLease#isExpired(long)
+ * @see SecretMaterialCache
  */
 public final class SessionCredentialCache {
 

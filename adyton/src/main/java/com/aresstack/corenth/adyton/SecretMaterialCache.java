@@ -17,7 +17,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>Keyed by a typed {@link SecretCacheKey} combining credential reference,
  *       target, principal, purpose, and authentication method.</li>
  *   <li>Entries with different purpose or scope must not share.</li>
- *   <li>Cleared on JVM shutdown and explicit {@link #close()}.</li>
+ *   <li>The broker or runtime must call {@link #close()} during shutdown;
+ *       this class does not register a JVM shutdown hook.</li>
  *   <li>No logging of secret values.</li>
  * </ul>
  * <p>

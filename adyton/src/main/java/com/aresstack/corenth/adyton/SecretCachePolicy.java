@@ -24,7 +24,8 @@ import java.util.Objects;
  * <b>Security constraints:</b>
  * <ul>
  *   <li>Cache is RAM-only — never persisted to disk.</li>
- *   <li>Cleared on JVM shutdown and explicit broker close.</li>
+ *   <li>The broker or runtime must call {@code SecretMaterialCache.close()} during
+ *       shutdown; no JVM shutdown hook is registered automatically.</li>
  *   <li>Entries are keyed by (target, principal, purpose, scope, method).</li>
  *   <li>No logging of secret values.</li>
  * </ul>
