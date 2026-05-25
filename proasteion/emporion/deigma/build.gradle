@@ -1,1 +1,6 @@
-description = 'Harbor parser layer for transport and file structure.'
+description = 'Harbor inspection and sample house — shallow content detection and extraction for transported resources.'
+
+dependencies {
+    api project(':astu')
+    testImplementation 'junit:junit:4.13.2'
+}
