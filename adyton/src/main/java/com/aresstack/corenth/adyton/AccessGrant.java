@@ -5,19 +5,19 @@ import java.util.Objects;
 /**
  * A scoped, time-limited access grant issued by the broker.
  * <p>
- * This is the metadata that connectors can inspect to understand what access
- * they have been granted. It does not contain secret material — only the
- * scope, target, lifetime and an opaque grant id.
- * <p>
- * Normal modules receive an {@code AccessGrant} through {@link AccessHandle#grant()}.
+ * This is the connector-facing metadata available through a protocol-specific
+ * {@link AccessHandle}. It describes what access has been granted without
+ * containing secret material — only target, principal, purpose, scope,
+ * lifetime, and an opaque grant id.
  * <p>
  * <b>Relationship to CredentialLease:</b> {@link CredentialLease} is the
- * vault-internal lease used between the broker and the credential provider SPI.
- * {@code AccessGrant} is the connector-facing view of the same concept —
- * it carries the same scoping but is tied to the protocol-specific handle.
+ * module-facing scoped lease returned by {@link DelegatedAccessProvider}.
+ * {@code AccessGrant} is the connector-facing view tied to an authenticated
+ * protocol handle returned by {@link AccessBroker}.
  *
  * @see AccessBroker
  * @see AccessHandle
+ * @see CredentialLease
  */
 public final class AccessGrant {
 
