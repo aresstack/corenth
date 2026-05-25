@@ -1,1 +1,11 @@
 description = 'Administrative fortress for data and control authority.'
+
+dependencies {
+    api project(':astu')
+    api project(':astu:acropolis:chalcotheca')
+    api project(':astu:acropolis:chalcotheca:tamias')
+    api project(':astu:acropolis:chalcotheca:anagraphai')
+    api project(':proasteion:emporion:holkas')
+    api project(':proasteion:emporion:deigma')
+    testImplementation 'junit:junit:4.13.2'
+}

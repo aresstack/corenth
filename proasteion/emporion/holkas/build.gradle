@@ -1,1 +1,6 @@
 description = 'Connection layer for raw virtual resources.'
+
+dependencies {
+    api project(':astu')
+    testImplementation 'junit:junit:4.13.2'
+}
