@@ -1,3 +1,7 @@
+plugins {
+    id 'java-library' apply false
+}
+
 allprojects {
     group = 'com.aresstack.corenth'
     version = '0.1.0-SNAPSHOT'
