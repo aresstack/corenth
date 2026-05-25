@@ -6,7 +6,7 @@ import com.aresstack.corenth.astu.VirtualResourceRef;
  * A single result from a lexical search.
  *
  * <p>Contains the matched resource reference, relevance score, chunk index,
- * and the text excerpt that matched the query.
+ * and the stored text from the matching chunk (not a generated hit snippet).
  *
  * <p>Adapted from MainframeMate's {@code ScoredChunk} concept, using Corenth
  * resource identity instead of raw document paths.
@@ -55,7 +55,7 @@ public final class LexicalSearchResult {
         return chunkIndex;
     }
 
-    /** Returns the text excerpt from the matching chunk. */
+    /** Returns the stored text content of the matching chunk. */
     public String excerpt() {
         return excerpt;
     }

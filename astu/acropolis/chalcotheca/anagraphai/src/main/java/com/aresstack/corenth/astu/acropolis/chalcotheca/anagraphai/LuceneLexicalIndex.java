@@ -30,6 +30,7 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Lucene-backed implementation of {@link LexicalIndex}.
@@ -69,12 +70,13 @@ public final class LuceneLexicalIndex implements LexicalIndex {
      * @throws IOException if the index directory cannot be opened or created
      */
     public LuceneLexicalIndex(LexicalIndexConfig config) throws IOException {
-        this.config = config;
+        this.config = Objects.requireNonNull(config, "config must not be null");
         Files.createDirectories(config.indexDirectory());
         this.directory = FSDirectory.open(config.indexDirectory());
         this.analyzer = new StandardAnalyzer();
         IndexWriterConfig writerConfig = new IndexWriterConfig(analyzer);
         writerConfig.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND);
+        writerConfig.setCommitOnClose(false);
         this.writer = new IndexWriter(directory, writerConfig);
     }
 
@@ -118,29 +120,22 @@ public final class LuceneLexicalIndex implements LexicalIndex {
             }
 
             IndexSearcher searcher = new IndexSearcher(reader);
+            String escapedQueryText = QueryParser.escape(query.queryText());
 
             // Build query: search both content and title fields
             BooleanQuery.Builder booleanQuery = new BooleanQuery.Builder();
             try {
                 QueryParser contentParser = new QueryParser(FIELD_CONTENT, analyzer);
                 contentParser.setDefaultOperator(QueryParser.Operator.OR);
-                booleanQuery.add(contentParser.parse(escapeIfNeeded(query.queryText())),
+                booleanQuery.add(contentParser.parse(escapedQueryText),
                         BooleanClause.Occur.SHOULD);
 
                 QueryParser titleParser = new QueryParser(FIELD_TITLE, analyzer);
                 titleParser.setDefaultOperator(QueryParser.Operator.OR);
-                booleanQuery.add(titleParser.parse(escapeIfNeeded(query.queryText())),
+                booleanQuery.add(titleParser.parse(escapedQueryText),
                         BooleanClause.Occur.SHOULD);
             } catch (ParseException e) {
-                // Fall back to escaped query on parse failure
-                try {
-                    QueryParser fallback = new QueryParser(FIELD_CONTENT, analyzer);
-                    booleanQuery = new BooleanQuery.Builder();
-                    booleanQuery.add(fallback.parse(QueryParser.escape(query.queryText())),
-                            BooleanClause.Occur.SHOULD);
-                } catch (ParseException e2) {
-                    return Collections.emptyList();
-                }
+                throw new IllegalArgumentException("Invalid lexical query: " + query.queryText(), e);
             }
 
             TopDocs topDocs = searcher.search(booleanQuery.build(), query.maxResults());
@@ -185,8 +180,15 @@ public final class LuceneLexicalIndex implements LexicalIndex {
 
     @Override
     public void close() throws IOException {
-        writer.close();
-        directory.close();
+        try {
+            writer.close();
+        } finally {
+            try {
+                analyzer.close();
+            } finally {
+                directory.close();
+            }
+        }
     }
 
     /**
@@ -198,7 +200,4 @@ public final class LuceneLexicalIndex implements LexicalIndex {
         return ref.uri().toString() + "\n" + ref.kind().name();
     }
 
-    private String escapeIfNeeded(String text) {
-        return text;
-    }
 }

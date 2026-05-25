@@ -23,7 +23,7 @@ Anagraphai provides:
 | `LexicalDocument` | Document model with resource ref, title, content type, and text chunks |
 | `LexicalChunk` | A numbered text segment within a document |
 | `LexicalQuery` | Search query with text and result limit |
-| `LexicalSearchResult` | Scored result with resource ref, chunk index, excerpt, and title |
+| `LexicalSearchResult` | Scored result with resource ref, chunk index, excerpt, title, and content type |
 | `LexicalIndexConfig` | Injectable configuration (index directory path) |
 | `LuceneLexicalIndex` | Lucene 8.11.x implementation of `LexicalIndex` |
 

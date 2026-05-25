@@ -4,8 +4,8 @@ package com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai;
  * A query against the lexical index.
  *
  * <p>Encapsulates the search text and result constraints such as maximum
- * number of results. The query is expressed in natural language / keyword
- * form and will be parsed by the underlying full-text engine.
+ * number of results. The query is expressed as plain keyword text; Lucene
+ * special characters are escaped by the index implementation before parsing.
  */
 public final class LexicalQuery {
 

@@ -28,7 +28,7 @@ This document records the inspection of MainframeMate research sources and the m
 
 ### VirtualResourceRef as document identity
 
-MainframeMate used file paths (`String documentId`) as the primary key in its Lucene index. Corenth uses `VirtualResourceRef.uri().toString()` as the Lucene `StringField` key. This supports all resource schemes (file, ndv, mail, sharepoint, etc.) without path assumptions.
+MainframeMate used file paths (`String documentId`) as the primary key in its Lucene index. Corenth uses a composite `VirtualResourceRef` key (`uri + "\n" + kind`) as the Lucene key for update/remove identity, while storing URI and kind as metadata fields for reconstruction. This supports all resource schemes (file, ndv, mail, sharepoint, etc.) without path assumptions and preserves full `VirtualResourceRef` identity.
 
 ### No singleton lifecycle
 

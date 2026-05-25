@@ -268,6 +268,31 @@ class LuceneLexicalIndexTest {
 
     // ── Lifecycle ───────────────────────────────────────────────────────────────
 
+
+    @Test
+    void closeWithoutCommitDoesNotPersistChanges() throws IOException {
+        VirtualResourceRef committedRef = fileRef("file:///docs/committed.txt");
+        index.index(LexicalDocument.builder(committedRef)
+                .fullText("Committed content survives reopen.")
+                .build());
+        index.commit();
+
+        VirtualResourceRef uncommittedRef = fileRef("file:///docs/uncommitted-close.txt");
+        index.index(LexicalDocument.builder(uncommittedRef)
+                .fullText("Uncommitted content should not survive close.")
+                .build());
+
+        index.close();
+
+        LexicalIndexConfig config = new LexicalIndexConfig(tempDir.resolve("index"));
+        index = new LuceneLexicalIndex(config);
+
+        List<LexicalSearchResult> committed = index.search(new LexicalQuery("committed survives"));
+        assertFalse(committed.isEmpty());
+
+        List<LexicalSearchResult> uncommitted = index.search(new LexicalQuery("uncommitted survive close"));
+        assertTrue(uncommitted.isEmpty());
+    }
     @Test
     void closeAndReopenIndex() throws IOException {
         VirtualResourceRef ref = fileRef("file:///docs/persistent.txt");
