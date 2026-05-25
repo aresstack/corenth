@@ -7,6 +7,9 @@ package com.aresstack.corenth.adyton;
  * whether the secret exists but is inaccessible, or does not exist at all.
  * Callers should handle this uniformly as "access denied or unavailable".
  * <p>
+ * Extends {@link AccessException} so broker call sites can catch either the
+ * broad {@code AccessException} or the specific {@code SecretUnavailableException}.
+ * <p>
  * <b>Migration note:</b> Unifies the exception taxonomy from MainframeMate:
  * <ul>
  *   <li>{@code AuthCancelledException} — user cancelled interactive auth</li>
@@ -18,7 +21,7 @@ package com.aresstack.corenth.adyton;
  * need to know whether the failure was due to user cancellation, backend
  * misconfiguration, or OS security policy.
  */
-public class SecretUnavailableException extends Exception {
+public class SecretUnavailableException extends AccessException {
 
     public SecretUnavailableException(String message) {
         super(message);

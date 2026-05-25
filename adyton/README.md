@@ -21,71 +21,161 @@ Give me a delegated, short-lived access capability for this target, purpose and 
 Normal Corenth modules (`holkas`, `deigma`, `tamias`, `acropolis`, UI code) receive
 only scoped, time-limited access grants — never raw credentials or secret references.
 
-## Credential Boundary API
+## Analysis baseline
 
-The API models delegated access without ever exposing raw credential material.
-It is derived from the MainframeMate credential infrastructure (see
-[migration inventory](../docs/migration/mainframemate-adyton-inventory.md))
-but adapted to Corenth's stricter boundary model.
+The design is validated against the MainframeMate authentication flow analysis:
 
-### Module-facing API
+- [Authentication flow analysis](../docs/analysis/mainframemate-authentication-flows.md)
+- [Migration inventory](../docs/migration/mainframemate-adyton-inventory.md)
 
-Normal modules use `DelegatedAccessProvider`:
+## Five-concept model
+
+| Concept | Description |
+|---------|-------------|
+| **Secret source** | Where credentials come from (KeePass, encrypted file, session prompt, OS store) |
+| **Secret material cache** | RAM-only cache inside adyton, optional and configurable via `SecretCachePolicy` |
+| **Authentication strategy** | How a specific protocol turns secrets into access (FTP login, Wiki API, Basic Auth, mTLS) |
+| **Access broker** | Controls short-lived use and lifecycle — the connector-facing API |
+| **Access handle / grant** | The protocol-specific thing connectors operate with |
+
+## API layering
+
+```
+Connectors  →  AccessBroker.withAccess() / .acquire()  →  AccessHandle (protocol-specific)
+               AccessHandle.grant()                     →  AccessGrant (scoped metadata)
+
+Modules     →  DelegatedAccessProvider.request()        →  CredentialLease (scoped grant)
+               DelegatedAccessProvider.authenticate()   →  DelegatedAccessResult
+
+Vault SPI   →  CredentialProvider.acquire()             →  CredentialLease
+               AuthenticationStrategy.authenticate()    →  AccessHandle
+               SecretMaterial / SecretRef               →  vault-internal identifiers
+```
+
+## Connector-facing API (AccessBroker)
+
+Connectors use `AccessBroker` — they never resolve passwords directly:
 
 ```java
-// Request a scoped, time-limited access grant
+// Safe default: broker manages handle lifecycle
+String result = broker.withAccess(
+    new AccessRequest("ftp:mainframe", "BATCH_USER", "nightly-job",
+                      "upload-jcl", AuthenticationMethod.FTP_PASSWORD, 300000L),
+    ftpStrategy,
+    handle -> {
+        // handle is an authenticated FTP session — no password visible
+        return handle.upload(file);
+    });
+
+// Long-lived handle for reuse (Wiki search-as-you-type, NDV repeated calls)
+WikiHandle wiki = broker.acquire(
+    new AccessRequest("wiki:internal", "svc", "search",
+                      "read", AuthenticationMethod.MEDIA_WIKI_LOGIN, 600000L),
+    wikiStrategy);
+try {
+    wiki.search("query1");
+    wiki.search("query2");
+} finally {
+    wiki.close();
+}
+```
+
+## Module-facing API (DelegatedAccessProvider)
+
+Normal modules that do not implement protocol-specific connectors use
+`DelegatedAccessProvider`:
+
+```java
 CredentialRequest req = new CredentialRequest(
     "mainframe", "BATCH_USER", "nightly-job", "submit-jcl", 300000L);
 CredentialLease lease = delegatedAccessProvider.request(req);
-
-// Perform delegated operations — secrets stay inside the vault
 DelegatedAccessResult result = delegatedAccessProvider.authenticate(lease, "host:3270");
-
-// Revoke when done
 delegatedAccessProvider.revoke(lease);
 ```
 
-### Adapter SPI (vault internals)
+## Vault-internal types
 
-Trusted credential backends implement `CredentialProvider`:
+`SecretRef`, `CredentialRef`, `SecretMaterial` and `SecretMaterialCache` are for
+vault internals and trusted credential adapters only. Normal modules and connectors
+never handle these types.
 
-```java
-// Adapter-level: resolves requests into leases using backend-specific logic
-CredentialLease lease = credentialProvider.acquire(request);
-credentialProvider.release(lease);
-```
+## RAM cache
 
-`SecretRef` and `CredentialRef` are for vault internals and trusted credential
-adapters only. Normal modules never handle these types.
+Adyton may cache secret material in memory, but only inside the vault boundary.
+Normal modules still receive scoped access handles / grants / operations, not passwords.
 
-### Type derivation table
+Cache properties (governed by `SecretCachePolicy`):
+- **RAM-only** — never persisted to disk.
+- **Configurable** — users/admins choose whether caching is enabled.
+- **Time-bound** — TTL cap (default 60 min) and idle timeout (default 10 min).
+- **Clearable** — explicit revoke, `revokeAll(target)`, and clear on shutdown.
+- **Scoped keying** — entries keyed by (target, principal, purpose, scope, method).
+- **No logging** — never logs usernames + secret values together.
+
+## Handle patterns
+
+Two patterns discovered in the MainframeMate analysis:
+
+1. **Long-lived session** — FTP client, NDV connection, Wiki cookie. Obtained via
+   `broker.acquire()`, reused across many operations, closed on revoke or timeout.
+2. **Derived material** — Confluence Basic Auth header, mTLS `SSLContext`.
+   Password is needed once to derive the handle, then can be discarded.
+
+Protocols that require raw secret material at connect time (FTP, NDV) confine that
+exposure to the `AuthenticationStrategy` implementation — connectors never see it.
+
+## Type derivation table
 
 | Type | Derived from | Role |
 |------|---|------|
-| `CredentialLease` | _new_ (session cache + scope concept) | Primary access grant — scoped, time-limited, carries target/principal/purpose/scope |
-| `CredentialRequest` | `ConnectionId` | Scoped request with target, principal, purpose, scope, requested TTL |
-| `DelegatedAccessProvider` | _new_ (KeePassRpcClient precedent) | Module-facing API for delegated operations |
+| `AccessBroker` | _new_ (analysis-validated) | Connector-facing API with `withAccess` + `acquire` |
+| `AccessRequest` | `CredentialRequest` + `AuthenticationMethod` | Scoped request with target, principal, purpose, scope, method, TTL |
+| `AccessGrant` | _new_ (grant/capability concept) | Scoped metadata on an access handle |
+| `AccessHandle` | _new_ (protocol handle concept) | Protocol-specific authenticated handle |
+| `AccessOperation` | _new_ | Operation callback for `withAccess` |
+| `AuthenticationStrategy` | _new_ (analysis-validated) | SPI: turns secrets into protocol handles |
+| `AuthenticationMethod` | _new_ (implicit in MainframeMate) | Discriminator for strategy selection |
+| `SecretCachePolicy` | `CredentialStore` cache semantics | Configurable TTL/idle/enabled policy |
+| `SecretMaterial` | `SessionCipher` decrypted output | Vault-internal secret container |
+| `SecretMaterialCache` | `CredentialStore.sessionCache` + `LoginManager.sessionPasswordCache` | Unified, policy-driven internal cache |
+| `CredentialLease` | _new_ (session cache + scope) | Module-facing scoped grant |
+| `CredentialRequest` | `ConnectionId` | Module-facing scoped request |
+| `DelegatedAccessProvider` | _new_ (KeePassRpcClient precedent) | Module-facing delegated operations |
 | `DelegatedAccessResult` | _new_ | Outcome of a delegated operation |
 | `CredentialProvider` | `CredentialsProvider` | Adapter SPI — trusted backends only |
 | `SecretRef` | _new_ (replaces raw passwords) | Vault-internal opaque secret handle |
 | `CredentialRef` | `Credentials` | Vault-internal principal+secret pair |
-| `SessionCredentialCache` | `CredentialStore.sessionCache` + `SessionCipher` | In-memory lease cache (never persisted, auto-expires) |
-| `SecretUnavailableException` | `AuthCancelledException`, `KeePassNotAvailableException` | Unified "access denied or unavailable" |
+| `SessionCredentialCache` | `CredentialStore.sessionCache` + `SessionCipher` | In-memory lease cache (auto-expires) |
+| `AccessException` | _new_ | Base checked exception for broker operations |
+| `SecretUnavailableException` | `KeePassNotAvailableException` et al. | Unified "access denied or unavailable" |
 | `AuthCancelledException` | `AuthCancelledException` | User-initiated cancellation (subtype) |
 
-### Design principles
+## Design principles
 
-- **Delegated access is the primary contract.** Normal modules receive scoped, short-lived grants — not credential handles.
+- **Delegated access is the primary contract.** Connectors receive protocol-specific handles; modules receive scoped grants — never raw credentials.
 - **No raw secrets cross the boundary.** Callers never receive plaintext credentials.
-- **Leases are purpose- and scope-bound.** Each grant is tied to a specific target, principal, purpose and operation scope.
-- **Leases are time-limited.** Expired leases are automatically rejected.
-- **SecretRef is vault-internal.** Only trusted adapters handle secret references; normal modules use `DelegatedAccessProvider`.
-- **Adapters are replaceable.** KeePass, DPAPI, OS credential stores, or environment-variable backends plug in behind the adapter SPI without changing the module-facing API.
-- **No UI or application coupling.** The module has zero dependencies on Swing, application settings, or framework singletons.
+- **Leases and grants are purpose- and scope-bound.** Tied to target, principal, purpose and operation scope.
+- **Time-limited.** Expired grants/leases are automatically rejected.
+- **SecretMaterial and SecretRef are vault-internal.** Only trusted strategies/adapters handle them.
+- **RAM cache is supported but controlled.** Policy-driven TTL, idle timeout, configurable, clearable.
+- **Adapters are replaceable.** KeePass, DPAPI, OS stores, environment variables plug in behind the SPI.
+- **No UI or application coupling.** Zero dependencies on Swing, application settings, or singletons.
+- **`getPassword()` is forbidden.** No public API exposes raw passwords.
 
-### Adapter guidance
+## Adapter guidance
 
-Platform-specific backends (KeePassRPC, Windows DPAPI, PowerShell credential vaults) should be implemented as separate adapter modules that depend on `adyton` and implement `CredentialProvider`. They must not be hardwired into this core module.
+Platform-specific backends and protocol strategies should be implemented as
+separate adapter modules. They must not be hardwired into this core module.
+
+Deferred adapter work (from the analysis):
+- FTP `AuthenticationStrategy` + `FtpAccessHandle`
+- NDV `AuthenticationStrategy` + `NdvAccessHandle`
+- Wiki `AuthenticationStrategy` + `WikiAccessHandle`
+- Confluence Basic Auth / mTLS strategies
+- KeePassRPC adapter implementing `CredentialProvider`
+- DPAPI/PowerShell adapter implementing `CredentialProvider`
+- AES file-key adapter implementing `CredentialProvider`
+- Interactive prompt adapter (UI module, not in adyton)
 
 ## Role in Corenth
 
