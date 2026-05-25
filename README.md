@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/corenth-readme-banner.svg" alt="Corenth — Java-first local AI architecture with ancient Corinth and Corinthian bronze motifs">
+</p>
+
 # Corenth
 
 Java-first local AI architecture for enterprise workstations.
@@ -63,4 +67,3 @@ Run from the repository root:
 ```bash
 gradle projects
 ```
-
