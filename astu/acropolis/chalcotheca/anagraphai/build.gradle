@@ -1,1 +1,16 @@
 description = 'Lexical full-text register.'
+
+dependencies {
+    api project(':astu')
+
+    implementation 'org.apache.lucene:lucene-core:8.11.4'
+    implementation 'org.apache.lucene:lucene-analyzers-common:8.11.4'
+    implementation 'org.apache.lucene:lucene-queryparser:8.11.4'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
