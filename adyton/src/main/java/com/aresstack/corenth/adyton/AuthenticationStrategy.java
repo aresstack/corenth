@@ -9,9 +9,10 @@ package com.aresstack.corenth.adyton;
  * authentication, and returns a handle that the connector can use.
  * <p>
  * <b>Important:</b> Strategy implementations are trusted code within the vault
- * boundary. They receive {@link SecretMaterial} but must never expose it to
- * callers. The returned {@link AccessHandle} must not provide any getter for
- * raw passwords or secret tokens.
+ * boundary. They receive {@link SecretMaterial} — which provides public
+ * {@code principal()} and {@code secret()} methods — but must never expose
+ * these values to callers. The returned {@link AccessHandle} must not provide
+ * any getter for raw passwords or secret tokens.
  * <p>
  * <b>Migration note:</b> In MainframeMate, each connector directly calls
  * {@code CredentialStore.resolve()} to get a raw password, then performs its

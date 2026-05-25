@@ -59,7 +59,8 @@ Connectors use `AccessBroker` — they never resolve passwords directly:
 ```java
 // Safe default: broker manages handle lifecycle
 String result = broker.withAccess(
-    new AccessRequest("ftp:mainframe", "BATCH_USER", "nightly-job",
+    new AccessRequest(new SecretRef("keepass://ftp/mainframe"),
+                      "ftp:mainframe", "BATCH_USER", "nightly-job",
                       "upload-jcl", AuthenticationMethod.FTP_PASSWORD, 300000L),
     ftpStrategy,
     handle -> {
@@ -69,7 +70,8 @@ String result = broker.withAccess(
 
 // Long-lived handle for reuse (Wiki search-as-you-type, NDV repeated calls)
 WikiHandle wiki = broker.acquire(
-    new AccessRequest("wiki:internal", "svc", "search",
+    new AccessRequest(new SecretRef("keepass://wiki/internal"),
+                      "wiki:internal", "svc", "search",
                       "read", AuthenticationMethod.MEDIA_WIKI_LOGIN, 600000L),
     wikiStrategy);
 try {
@@ -95,9 +97,28 @@ delegatedAccessProvider.revoke(lease);
 
 ## Vault-internal types
 
-`SecretRef`, `CredentialRef`, `SecretMaterial` and `SecretMaterialCache` are for
-vault internals and trusted credential adapters only. Normal modules and connectors
-never handle these types.
+`SecretRef`, `CredentialRef` and `SecretMaterialCache` are for vault internals and
+trusted credential adapters only. Normal modules and connectors never handle these types.
+
+`SecretMaterial` is an interface accessible to `AuthenticationStrategy` implementations
+(which may reside in external adapter modules/packages). Strategy code can call
+`material.principal()` and `material.secret()` to perform protocol-specific
+authentication. Construction of `SecretMaterial` instances remains internal to adyton.
+
+## Credential reference vs. target system
+
+`AccessRequest` and `CredentialRequest` distinguish between:
+- **`credentialRef`** — tells adyton *where to find* the credential (e.g., `keepass://wiki/internal`)
+- **`targetSystem`** — tells adyton *what the credential is used for* (e.g., `https://wiki.example.internal`)
+
+Multiple credential entries may point to the same target, and the same credential entry
+may be reused for several scoped requests. Connector configurations specify both:
+
+```text
+baseUrl: https://wiki.example.internal
+credentialRef: keepass://wiki/internal
+method: mediawiki-login
+```
 
 ## RAM cache
 

@@ -24,6 +24,7 @@ import java.util.Objects;
  */
 public final class AccessRequest {
 
+    private final SecretRef credentialRef;
     private final String targetSystem;
     private final String principal;
     private final String purpose;
@@ -32,7 +33,51 @@ public final class AccessRequest {
     private final long requestedTtlMillis;
 
     /**
-     * Creates a fully specified access request.
+     * Creates a fully specified access request with an explicit credential reference.
+     * <p>
+     * The {@code credentialRef} tells adyton <i>where to find</i> the credential
+     * (e.g., {@code keepass://wiki/internal}). The {@code targetSystem} tells adyton
+     * <i>what the credential is used for</i> (e.g., {@code https://wiki.example.internal}).
+     * These are distinct: multiple credential entries may point to the same target,
+     * and the same credential entry may be reused for several scoped requests.
+     *
+     * @param credentialRef     reference to the stored credential entry (required)
+     * @param targetSystem      the target system or resource (required)
+     * @param principal         the principal/subject identity (required)
+     * @param purpose           the stated purpose (may be {@code null})
+     * @param scope             the requested operation/scope (may be {@code null})
+     * @param method            the authentication method to use (required)
+     * @param requestedTtlMillis desired TTL in millis (0 = use default)
+     */
+    public AccessRequest(SecretRef credentialRef, String targetSystem, String principal,
+                         String purpose, String scope, AuthenticationMethod method,
+                         long requestedTtlMillis) {
+        if (credentialRef == null) {
+            throw new IllegalArgumentException("Credential reference must not be null");
+        }
+        if (targetSystem == null || targetSystem.isEmpty()) {
+            throw new IllegalArgumentException("Target system must not be null or empty");
+        }
+        if (principal == null || principal.isEmpty()) {
+            throw new IllegalArgumentException("Principal must not be null or empty");
+        }
+        if (method == null) {
+            throw new IllegalArgumentException("Authentication method must not be null");
+        }
+        this.credentialRef = credentialRef;
+        this.targetSystem = targetSystem;
+        this.principal = principal;
+        this.purpose = purpose;
+        this.scope = scope;
+        this.method = method;
+        this.requestedTtlMillis = requestedTtlMillis;
+    }
+
+    /**
+     * Convenience constructor that derives the credential reference from the target system.
+     * <p>
+     * Uses the target system as the credential reference id. Useful for simple
+     * configurations where the credential entry matches the target 1:1.
      *
      * @param targetSystem      the target system or resource (required)
      * @param principal         the principal/subject identity (required)
@@ -44,21 +89,18 @@ public final class AccessRequest {
     public AccessRequest(String targetSystem, String principal, String purpose,
                          String scope, AuthenticationMethod method,
                          long requestedTtlMillis) {
-        if (targetSystem == null || targetSystem.isEmpty()) {
-            throw new IllegalArgumentException("Target system must not be null or empty");
-        }
-        if (principal == null || principal.isEmpty()) {
-            throw new IllegalArgumentException("Principal must not be null or empty");
-        }
-        if (method == null) {
-            throw new IllegalArgumentException("Authentication method must not be null");
-        }
-        this.targetSystem = targetSystem;
-        this.principal = principal;
-        this.purpose = purpose;
-        this.scope = scope;
-        this.method = method;
-        this.requestedTtlMillis = requestedTtlMillis;
+        this(new SecretRef(targetSystem), targetSystem, principal, purpose, scope, method, requestedTtlMillis);
+    }
+
+    /**
+     * Returns the credential reference that tells adyton where to find the credential.
+     * <p>
+     * This is distinct from {@link #targetSystem()}: the credential reference identifies
+     * a stored credential entry (e.g., {@code keepass://wiki/internal}), while the
+     * target system identifies the resource being accessed.
+     */
+    public SecretRef credentialRef() {
+        return credentialRef;
     }
 
     /** Returns the target system or resource. */
@@ -97,6 +139,7 @@ public final class AccessRequest {
         if (!(o instanceof AccessRequest)) return false;
         AccessRequest that = (AccessRequest) o;
         return requestedTtlMillis == that.requestedTtlMillis
+                && credentialRef.equals(that.credentialRef)
                 && targetSystem.equals(that.targetSystem)
                 && principal.equals(that.principal)
                 && Objects.equals(purpose, that.purpose)
@@ -106,7 +149,7 @@ public final class AccessRequest {
 
     @Override
     public int hashCode() {
-        return Objects.hash(targetSystem, principal, purpose, scope, method, requestedTtlMillis);
+        return Objects.hash(credentialRef, targetSystem, principal, purpose, scope, method, requestedTtlMillis);
     }
 
     @Override

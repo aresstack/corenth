@@ -3,61 +3,65 @@ package com.aresstack.corenth.adyton;
 /**
  * Vault-internal boundary type representing resolved secret material.
  * <p>
- * <b>This class is strictly internal to the vault boundary.</b> It must never
- * appear on any module-facing API, connector interface, or public getter.
- * Only trusted {@link AuthenticationStrategy} implementations receive this
- * type, and only during the authentication step.
+ * <b>This type is intended for {@link AuthenticationStrategy} implementations only.</b>
+ * It must never appear on any module-facing API, connector interface, or public getter
+ * exposed to normal modules ({@code holkas}, {@code deigma}, {@code tamias}, etc.).
  * <p>
- * The class is deliberately opaque. It does not have a public
- * {@code getPassword()} or {@code toCharArray()} method. Strategy
- * implementations access the material through package-private methods that
- * are not visible to code outside the {@code adyton} package.
- * <p>
- * <b>Migration note:</b> In MainframeMate, {@code Credentials.getPassword()}
- * returns a raw {@code String}. In Corenth, raw secret material is encapsulated
- * here and never crosses the vault boundary. The closest MainframeMate
- * equivalent is the decrypted output of {@code SessionCipher.decrypt()}, which
- * also should not have been public — adyton formalizes that constraint.
+ * Strategy implementations — which may reside in separate packages or modules —
+ * access the material through the public interface methods below. This is safe because:
+ * <ul>
+ *   <li>Only trusted adapter code implements {@link AuthenticationStrategy}.</li>
+ *   <li>The broker never passes {@code SecretMaterial} to connector/module code.</li>
+ *   <li>Construction remains internal to adyton (package-private factory).</li>
+ * </ul>
  * <p>
  * <b>Security properties:</b>
  * <ul>
  *   <li>{@code toString()} never reveals the material</li>
- *   <li>No public getter for the raw value</li>
+ *   <li>No method named {@code getPassword()} — deliberate API friction</li>
  *   <li>Implementations should support explicit wiping when possible</li>
  * </ul>
+ * <p>
+ * <b>Migration note:</b> In MainframeMate, {@code Credentials.getPassword()}
+ * returns a raw {@code String}. In Corenth, raw secret material is encapsulated
+ * here and never crosses the vault boundary to normal module code. The closest
+ * MainframeMate equivalent is the decrypted output of {@code SessionCipher.decrypt()},
+ * which also should not have been public — adyton formalizes that constraint.
  *
  * @see AuthenticationStrategy#authenticate(AccessRequest, SecretMaterial)
  * @see SecretMaterialCache
  */
-public final class SecretMaterial {
-
-    private final String secretRefId;
+public interface SecretMaterial {
 
     /**
-     * Creates a secret material instance.
+     * Returns the principal/username associated with this material.
      * <p>
-     * Package-private: only the broker and cache create these.
+     * Available to strategy implementations for protocols that need an explicit
+     * username (FTP USER, HTTP Basic, MediaWiki lgname, etc.).
      *
-     * @param secretRefId the internal secret reference identifier
+     * @return the principal identity, never {@code null}
      */
-    SecretMaterial(String secretRefId) {
-        if (secretRefId == null || secretRefId.isEmpty()) {
-            throw new IllegalArgumentException("Secret ref id must not be null or empty");
-        }
-        this.secretRefId = secretRefId;
-    }
+    String principal();
 
     /**
-     * Returns the internal identifier for locating the secret.
+     * Returns the secret value (password, token, key material) as a char array.
      * <p>
-     * Package-private: only strategies within adyton can access this.
+     * Strategy implementations consume this to perform authentication. The array
+     * should be wiped (zeroed) after use where the protocol allows it.
+     * <p>
+     * <b>Warning:</b> This method is for trusted {@link AuthenticationStrategy}
+     * implementations only. It must never be called from normal module code.
+     *
+     * @return the secret material as a char array
      */
-    String secretRefId() {
-        return secretRefId;
-    }
+    char[] secret();
 
-    @Override
-    public String toString() {
-        return "SecretMaterial{***}";
-    }
+    /**
+     * Returns the secret reference id used internally for cache keying.
+     * <p>
+     * This is an opaque identifier — not the actual secret value.
+     *
+     * @return the internal reference identifier
+     */
+    String secretRefId();
 }

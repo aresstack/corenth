@@ -109,7 +109,7 @@ public class AccessBrokerContractTest {
                     AuthenticationStrategy<H> strat,
                     AccessOperation<H, R> operation)
                     throws AccessException {
-                SecretMaterial material = new SecretMaterial("internal-ref");
+                SecretMaterial material = new DefaultSecretMaterial("internal-ref");
                 try {
                     @SuppressWarnings("unchecked")
                     H handle = (H) strat.authenticate(request, material);
@@ -130,7 +130,7 @@ public class AccessBrokerContractTest {
                     AccessRequest request,
                     AuthenticationStrategy<H> strat)
                     throws AccessException {
-                SecretMaterial material = new SecretMaterial("internal-ref");
+                SecretMaterial material = new DefaultSecretMaterial("internal-ref");
                 return strat.authenticate(request, material);
             }
 
@@ -185,7 +185,7 @@ public class AccessBrokerContractTest {
             public <H extends AccessHandle> H acquire(
                     AccessRequest request, AuthenticationStrategy<H> strat)
                     throws AccessException {
-                SecretMaterial material = new SecretMaterial("wiki-secret");
+                SecretMaterial material = new DefaultSecretMaterial("wiki-secret");
                 return strat.authenticate(request, material);
             }
 
@@ -212,7 +212,7 @@ public class AccessBrokerContractTest {
 
     @Test
     public void secretMaterialToStringDoesNotRevealContent() {
-        SecretMaterial material = new SecretMaterial("super-secret-ref-id");
+        SecretMaterial material = new DefaultSecretMaterial("super-secret-ref-id");
         assertFalse(material.toString().contains("super-secret-ref-id"));
         assertEquals("SecretMaterial{***}", material.toString());
     }
@@ -245,7 +245,7 @@ public class AccessBrokerContractTest {
     @Test
     public void cacheDisabledDoesNotStore() {
         SecretMaterialCache cache = new SecretMaterialCache(SecretCachePolicy.disabled());
-        cache.put("key", new SecretMaterial("ref"));
+        cache.put("key", new DefaultSecretMaterial("ref"));
         assertNull(cache.get("key"));
         assertEquals(0, cache.size());
     }
@@ -253,7 +253,7 @@ public class AccessBrokerContractTest {
     @Test
     public void cacheClearsOnClose() {
         SecretMaterialCache cache = new SecretMaterialCache(SecretCachePolicy.defaultPolicy());
-        cache.put("key", new SecretMaterial("ref"));
+        cache.put("key", new DefaultSecretMaterial("ref"));
         assertEquals(1, cache.size());
         cache.close();
         assertEquals(0, cache.size());

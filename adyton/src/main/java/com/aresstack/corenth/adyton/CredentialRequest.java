@@ -22,6 +22,7 @@ import java.util.Objects;
  */
 public final class CredentialRequest {
 
+    private final SecretRef credentialRef;
     private final String targetSystem;
     private final String principal;
     private final String purpose;
@@ -29,7 +30,39 @@ public final class CredentialRequest {
     private final long requestedTtlMillis;
 
     /**
-     * Creates a request with all fields.
+     * Creates a request with all fields including an explicit credential reference.
+     * <p>
+     * The {@code credentialRef} tells adyton <i>where to find</i> the credential
+     * entry. The {@code targetSystem} tells adyton <i>what the credential is used for</i>.
+     *
+     * @param credentialRef     reference to the stored credential entry (required)
+     * @param targetSystem      the target system or resource (required)
+     * @param principal         the principal/subject identity (required)
+     * @param purpose           the stated purpose of the request (may be {@code null})
+     * @param scope             the requested operation or scope (may be {@code null})
+     * @param requestedTtlMillis the desired lease lifetime in millis (0 = use default)
+     */
+    public CredentialRequest(SecretRef credentialRef, String targetSystem, String principal,
+                             String purpose, String scope, long requestedTtlMillis) {
+        if (credentialRef == null) {
+            throw new IllegalArgumentException("Credential reference must not be null");
+        }
+        if (targetSystem == null || targetSystem.isEmpty()) {
+            throw new IllegalArgumentException("Target system must not be null or empty");
+        }
+        if (principal == null || principal.isEmpty()) {
+            throw new IllegalArgumentException("Principal must not be null or empty");
+        }
+        this.credentialRef = credentialRef;
+        this.targetSystem = targetSystem;
+        this.principal = principal;
+        this.purpose = purpose;
+        this.scope = scope;
+        this.requestedTtlMillis = requestedTtlMillis;
+    }
+
+    /**
+     * Creates a request with all fields, deriving the credential reference from the target.
      *
      * @param targetSystem      the target system or resource (required)
      * @param principal         the principal/subject identity (required)
@@ -39,17 +72,7 @@ public final class CredentialRequest {
      */
     public CredentialRequest(String targetSystem, String principal, String purpose,
                              String scope, long requestedTtlMillis) {
-        if (targetSystem == null || targetSystem.isEmpty()) {
-            throw new IllegalArgumentException("Target system must not be null or empty");
-        }
-        if (principal == null || principal.isEmpty()) {
-            throw new IllegalArgumentException("Principal must not be null or empty");
-        }
-        this.targetSystem = targetSystem;
-        this.principal = principal;
-        this.purpose = purpose;
-        this.scope = scope;
-        this.requestedTtlMillis = requestedTtlMillis;
+        this(new SecretRef(targetSystem), targetSystem, principal, purpose, scope, requestedTtlMillis);
     }
 
     /**
@@ -61,6 +84,16 @@ public final class CredentialRequest {
      */
     public CredentialRequest(String targetSystem, String principal, String purpose) {
         this(targetSystem, principal, purpose, null, 0L);
+    }
+
+    /**
+     * Returns the credential reference that tells adyton where to find the credential.
+     * <p>
+     * This is distinct from {@link #targetSystem()}: the credential reference identifies
+     * a stored credential entry, while the target system identifies the resource being accessed.
+     */
+    public SecretRef credentialRef() {
+        return credentialRef;
     }
 
     /** Returns the target system or resource this request is for. */
@@ -94,6 +127,7 @@ public final class CredentialRequest {
         if (!(o instanceof CredentialRequest)) return false;
         CredentialRequest that = (CredentialRequest) o;
         return requestedTtlMillis == that.requestedTtlMillis
+                && credentialRef.equals(that.credentialRef)
                 && targetSystem.equals(that.targetSystem)
                 && principal.equals(that.principal)
                 && Objects.equals(purpose, that.purpose)
@@ -102,7 +136,7 @@ public final class CredentialRequest {
 
     @Override
     public int hashCode() {
-        return Objects.hash(targetSystem, principal, purpose, scope, requestedTtlMillis);
+        return Objects.hash(credentialRef, targetSystem, principal, purpose, scope, requestedTtlMillis);
     }
 
     @Override
