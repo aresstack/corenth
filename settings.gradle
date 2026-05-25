@@ -1,0 +1,30 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        mavenCentral()
+    }
+}
+
+rootProject.name = 'corenth'
+
+include 'adyton'
+include 'astu'
+include 'astu:propylaea'
+include 'astu:acropolis'
+include 'astu:acropolis:chalcotheca'
+include 'astu:acropolis:chalcotheca:tamias'
+include 'astu:acropolis:chalcotheca:anagraphai'
+include 'astu:acropolis:chalcotheca:pinakes'
+include 'proasteion'
+include 'proasteion:exedra'
+include 'proasteion:katagogion'
+include 'proasteion:emporion'
+include 'proasteion:emporion:holkas'
+include 'proasteion:emporion:deigma'
