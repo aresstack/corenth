@@ -5,22 +5,25 @@ import java.util.Objects;
 /**
  * An opaque, non-revealing reference to a secret stored within the vault boundary.
  * <p>
- * <b>Important:</b> This class is for vault internals and trusted credential
- * adapters only. Normal modules ({@code holkas}, {@code deigma}, {@code tamias},
- * {@code acropolis}, UI code) should not handle {@code SecretRef} instances.
- * They should use {@link DelegatedAccessProvider} to request scoped access grants
- * and receive {@link CredentialLease} objects instead.
+ * A {@code SecretRef} is not secret material. It is a stable credential reference
+ * that configuration and access requests may carry, for example
+ * {@code keepass://wiki/internal}. Normal modules and connector adapters may pass
+ * this value to adyton as an opaque identifier, but they must not dereference it,
+ * resolve it, or receive the underlying secret material.
  * <p>
- * A {@code SecretRef} never exposes the secret value itself. It acts as a handle
- * that adapter implementations within the vault can use to locate secret material
- * without passing plaintext through the API boundary.
+ * Trusted credential adapters use this reference inside the vault boundary to
+ * locate secret material. The secret itself is represented only as
+ * {@link SecretMaterial} during trusted authentication strategy execution.
  * <p>
  * <b>Migration note:</b> In MainframeMate, raw password strings flow through
  * {@code CredentialStore.resolve()} and the {@code Credentials} value object
  * (see {@code core/.../files/auth/Credentials.java}). This class replaces that
- * pattern with an opaque reference — the secret never leaves the vault boundary.
+ * pattern with an opaque reference — callers can identify which credential is
+ * needed without receiving username/password material.
  *
  * @see CredentialRef
+ * @see AccessRequest#credentialRef()
+ * @see CredentialRequest#credentialRef()
  */
 public final class SecretRef {
 
