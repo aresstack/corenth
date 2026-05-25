@@ -12,6 +12,13 @@ import java.util.Objects;
  * <p>
  * The lease intentionally does not expose the secret value itself. Consumers
  * use the lease to perform delegated operations through the vault boundary.
+ * <p>
+ * <b>Migration note:</b> In MainframeMate, {@code CredentialStore}'s session
+ * cache holds encrypted credentials indefinitely until application exit. The
+ * lease model adds explicit expiration, preventing long-lived secret handles
+ * from accumulating in memory. See also {@link SessionCredentialCache}.
+ *
+ * @see CredentialProvider#acquire(CredentialRequest)
  */
 public final class CredentialLease {
 

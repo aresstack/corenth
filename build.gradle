@@ -1,4 +1,6 @@
 plugins {
+    // Note: 'java-library' is a core Gradle plugin applied in subprojects {}
+    // below. Gradle 9.x disallows 'apply false' on core plugins.
 }
 
 allprojects {

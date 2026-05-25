@@ -8,6 +8,13 @@ import java.util.Objects;
  * Combines a principal (user/service identity) with a {@link SecretRef} that
  * points to the associated secret material. The credential value is never exposed
  * through this object.
+ * <p>
+ * <b>Migration note:</b> Adapts {@code core/.../files/auth/Credentials.java}
+ * which directly exposes {@code getUsername()} and {@code getPassword()}.
+ * In Corenth, the password is replaced by an opaque {@link SecretRef} and only
+ * the principal identity is readable.
+ *
+ * @see SecretRef
  */
 public final class CredentialRef {
 

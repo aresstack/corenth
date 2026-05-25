@@ -8,6 +8,13 @@ import java.util.Objects;
  * A {@code SecretRef} never exposes the secret value itself. It acts as a handle
  * that modules outside the vault can pass around to request controlled operations
  * without gaining access to the underlying secret material.
+ * <p>
+ * <b>Migration note:</b> In MainframeMate, raw password strings flow through
+ * {@code CredentialStore.resolve()} and the {@code Credentials} value object
+ * (see {@code core/.../files/auth/Credentials.java}). This class replaces that
+ * pattern with an opaque reference — the secret never leaves the vault boundary.
+ *
+ * @see CredentialRef
  */
 public final class SecretRef {
 

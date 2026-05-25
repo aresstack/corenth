@@ -8,6 +8,14 @@ import java.util.Objects;
  * The request identifies the target system and required principal but does not
  * contain or reveal any secret material. The vault boundary resolves the request
  * into a time-limited {@link CredentialLease}.
+ * <p>
+ * <b>Migration note:</b> Adapts {@code core/.../files/auth/ConnectionId.java}
+ * (which combined scheme, host, username) into a more general request model.
+ * The namespaced component keys used in {@code CredentialStore} (e.g.
+ * {@code "ftp:myhost"}, {@code "wiki:wikipedia_de"}) map to the
+ * {@code targetSystem} field here.
+ *
+ * @see CredentialProvider#acquire(CredentialRequest)
  */
 public final class CredentialRequest {
 

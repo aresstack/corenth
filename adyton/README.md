@@ -6,19 +6,22 @@ Adyton is the isolated vault of Corenth. It represents the boundary where creden
 
 ## Credential Boundary API
 
-The API models secret access without ever exposing raw credential material:
+The API models secret access without ever exposing raw credential material.
+It is derived from the MainframeMate credential infrastructure (see
+[migration inventory](../docs/migration/mainframemate-adyton-inventory.md))
+but adapted to Corenth's stricter boundary model.
 
-| Type | Role |
-|------|------|
-| `SecretRef` | Opaque handle to a secret — never reveals the value |
-| `CredentialRef` | Pairs a principal identity with a `SecretRef` |
-| `CredentialRequest` | Describes what a module needs (target system + principal) |
-| `CredentialLease` | Time-limited, revocable grant returned by the vault |
-| `CredentialProvider` | Port that resolves requests into leases |
-| `DelegatedAccessProvider` | Port for vault-mediated operations (no raw secrets leave the boundary) |
-| `DelegatedAccessResult` | Outcome of a delegated operation |
-| `SessionCredentialCache` | In-memory, session-scoped lease cache (never persisted) |
-| `SecretUnavailableException` | Thrown when access is denied or unavailable |
+| Type | Derived from | Role |
+|------|---|------|
+| `SecretRef` | _new_ (replaces raw `String` passwords) | Opaque handle to a secret — never reveals the value |
+| `CredentialRef` | `Credentials` | Pairs a principal identity with a `SecretRef` (no password getter) |
+| `CredentialRequest` | `ConnectionId` | Describes what a module needs (target system + principal) |
+| `CredentialLease` | _new_ (session cache concept) | Time-limited, revocable grant returned by the vault |
+| `CredentialProvider` | `CredentialsProvider` | Port that resolves requests into leases |
+| `DelegatedAccessProvider` | _new_ (KeePassRpcClient precedent) | Port for vault-mediated operations |
+| `DelegatedAccessResult` | _new_ | Outcome of a delegated operation |
+| `SessionCredentialCache` | `CredentialStore.sessionCache` + `SessionCipher` | In-memory, session-scoped lease cache (never persisted, auto-expires) |
+| `SecretUnavailableException` | `AuthCancelledException`, `KeePassNotAvailableException` | Unified "access denied or unavailable" |
 
 ### Design principles
 
@@ -34,4 +37,5 @@ Platform-specific backends (KeePassRPC, Windows DPAPI, PowerShell credential vau
 ## Role in Corenth
 
 This module is part of the Corenth Gradle multi-project architecture and keeps its Greek name intentionally. The name marks a boundary in the architecture and should not be replaced by a generic technical term.
+
 

@@ -8,6 +8,19 @@ package com.aresstack.corenth.adyton;
  * stores, environment variables, or other secret backends.
  * <p>
  * Implementations must never log, serialize, or expose raw secret material.
+ * <p>
+ * <b>Migration note:</b> Adapts {@code core/.../files/auth/CredentialsProvider}
+ * which returns {@code Optional<Credentials>} (including raw password). In
+ * Corenth, implementations return a {@link CredentialLease} instead — the raw
+ * password never crosses the vault boundary.
+ * <p>
+ * MainframeMate adapter examples that would implement this port:
+ * <ul>
+ *   <li>{@code LoginManagerCredentialsProvider} — non-interactive cached lookup</li>
+ *   <li>{@code InteractiveCredentialsProvider} — interactive (UI) password prompt</li>
+ *   <li>{@code KeePassProvider} — KeePass database via PowerShell or RPC</li>
+ *   <li>{@code WindowsCryptoUtil} — facade over DPAPI/AES/PowerShell crypto</li>
+ * </ul>
  */
 public interface CredentialProvider {
 

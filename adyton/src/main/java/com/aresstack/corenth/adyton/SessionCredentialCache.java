@@ -10,8 +10,15 @@ import java.util.concurrent.ConcurrentHashMap;
  * discards expired entries on access. It never persists secrets to disk and
  * should be discarded when the session ends.
  * <p>
- * Inspired by the session cipher/cache concepts in the source material, but
- * adapted to store only opaque lease references rather than raw credentials.
+ * <b>Migration note:</b> Adapts the session cache concept from
+ * {@code CredentialStore.sessionCache} and {@code SessionCipher}. In
+ * MainframeMate, the session cache stores {@code SessionCipher}-encrypted
+ * {@code "user|password"} strings in a {@code HashMap}. In Corenth, the cache
+ * holds only opaque {@link CredentialLease} references with explicit expiration
+ * — no encrypted or plaintext credentials are stored, and expired entries are
+ * automatically evicted on access.
+ *
+ * @see CredentialLease#isExpired(long)
  */
 public final class SessionCredentialCache {
 
