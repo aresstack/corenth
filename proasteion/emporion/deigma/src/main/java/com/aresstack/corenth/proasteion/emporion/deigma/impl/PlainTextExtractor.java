@@ -41,8 +41,9 @@ public final class PlainTextExtractor implements ResourceExtractor {
     public ExtractionResult extract(ExtractionRequest request) {
         String text = new String(request.content(), charset);
 
-        DetectedContentType type = new DetectedContentType(
-                "text/plain", ContentCategory.PLAIN_TEXT, request.filenameHint());
+        DetectedContentType type = request.detectedContentType() != null
+                ? request.detectedContentType()
+                : new DetectedContentType("text/plain", ContentCategory.PLAIN_TEXT, request.filenameHint());
 
         ExtractedDocument doc = ExtractedDocument.builder()
                 .contentType(type)

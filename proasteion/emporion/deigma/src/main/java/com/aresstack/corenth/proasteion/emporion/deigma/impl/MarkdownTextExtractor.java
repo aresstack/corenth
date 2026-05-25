@@ -44,8 +44,9 @@ public final class MarkdownTextExtractor implements ResourceExtractor {
         String text = new String(request.content(), charset);
         String[] lines = text.split("\n", -1);
 
-        DetectedContentType type = new DetectedContentType(
-                "text/markdown", ContentCategory.MARKDOWN, request.filenameHint());
+        DetectedContentType type = request.detectedContentType() != null
+                ? request.detectedContentType()
+                : new DetectedContentType("text/markdown", ContentCategory.MARKDOWN, request.filenameHint());
 
         ExtractedDocument.Builder docBuilder = ExtractedDocument.builder().contentType(type);
 

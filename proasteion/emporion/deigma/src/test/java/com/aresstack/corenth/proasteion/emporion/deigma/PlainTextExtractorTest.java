@@ -6,6 +6,8 @@ import com.aresstack.corenth.astu.VirtualResourceRef;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.PlainTextExtractor;
 import org.junit.Test;
 
+import java.nio.charset.Charset;
+
 import static org.junit.Assert.*;
 
 /**
@@ -15,11 +17,13 @@ public class PlainTextExtractorTest {
 
     private final PlainTextExtractor extractor = new PlainTextExtractor();
 
+    private static final Charset UTF_8 = Charset.forName("UTF-8");
+
     private ExtractionRequest request(String content, String filename) {
         VirtualResourceRef ref = new VirtualResourceRef(
                 BookmarkUri.parse("file:///test/" + (filename != null ? filename : "test.txt")),
                 VirtualResourceKind.FILE);
-        return new ExtractionRequest(ref, content.getBytes(), filename, null);
+        return new ExtractionRequest(ref, content.getBytes(UTF_8), filename, null);
     }
 
     @Test
@@ -79,9 +83,21 @@ public class PlainTextExtractorTest {
         VirtualResourceRef ref = new VirtualResourceRef(
                 BookmarkUri.parse("file:///docs/readme.txt"),
                 VirtualResourceKind.FILE);
-        ExtractionRequest req = new ExtractionRequest(ref, "content".getBytes(), "readme.txt", null);
+        ExtractionRequest req = new ExtractionRequest(ref, "content".getBytes(UTF_8), "readme.txt", null);
 
         ExtractionResult result = extractor.extract(req);
         assertEquals(ref, result.resourceRef());
+    }
+
+    @Test
+    public void preservesDetectedContentTypeFromRequest() {
+        DetectedContentType custom = new DetectedContentType("text/x-custom", ContentCategory.PLAIN_TEXT, "file.txt");
+        VirtualResourceRef ref = new VirtualResourceRef(
+                BookmarkUri.parse("file:///test/file.txt"),
+                VirtualResourceKind.FILE);
+        ExtractionRequest req = new ExtractionRequest(ref, "hello".getBytes(UTF_8), "file.txt", null, custom);
+
+        ExtractionResult result = extractor.extract(req);
+        assertSame(custom, result.detectedType());
     }
 }

@@ -6,6 +6,8 @@ import com.aresstack.corenth.astu.VirtualResourceRef;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.MarkdownTextExtractor;
 import org.junit.Test;
 
+import java.nio.charset.Charset;
+
 import static org.junit.Assert.*;
 
 /**
@@ -15,11 +17,13 @@ public class MarkdownTextExtractorTest {
 
     private final MarkdownTextExtractor extractor = new MarkdownTextExtractor();
 
+    private static final Charset UTF_8 = Charset.forName("UTF-8");
+
     private ExtractionRequest request(String content) {
         VirtualResourceRef ref = new VirtualResourceRef(
                 BookmarkUri.parse("file:///test/doc.md"),
                 VirtualResourceKind.FILE);
-        return new ExtractionRequest(ref, content.getBytes(), "doc.md", null);
+        return new ExtractionRequest(ref, content.getBytes(UTF_8), "doc.md", null);
     }
 
     @Test

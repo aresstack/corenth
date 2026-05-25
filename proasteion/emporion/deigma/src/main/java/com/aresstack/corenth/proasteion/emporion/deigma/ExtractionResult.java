@@ -29,26 +29,72 @@ public final class ExtractionResult {
         this.warnings = Collections.unmodifiableList(new ArrayList<String>(warnings));
     }
 
-    /** Creates a successful result. */
+    /**
+     * Creates a successful result.
+     *
+     * @param resourceRef  must not be null
+     * @param detectedType must not be null
+     * @param document     must not be null
+     */
     public static ExtractionResult success(VirtualResourceRef resourceRef,
                                            DetectedContentType detectedType,
                                            ExtractedDocument document) {
+        if (resourceRef == null) {
+            throw new IllegalArgumentException("resourceRef must not be null");
+        }
+        if (detectedType == null) {
+            throw new IllegalArgumentException("detectedType must not be null");
+        }
+        if (document == null) {
+            throw new IllegalArgumentException("document must not be null for a successful result");
+        }
         return new ExtractionResult(resourceRef, detectedType, document, null,
                 Collections.<String>emptyList());
     }
 
-    /** Creates a successful result with warnings. */
+    /**
+     * Creates a successful result with warnings.
+     *
+     * @param resourceRef  must not be null
+     * @param detectedType must not be null
+     * @param document     must not be null
+     * @param warnings     must not be null; defensively copied
+     */
     public static ExtractionResult successWithWarnings(VirtualResourceRef resourceRef,
                                                        DetectedContentType detectedType,
                                                        ExtractedDocument document,
                                                        List<String> warnings) {
+        if (resourceRef == null) {
+            throw new IllegalArgumentException("resourceRef must not be null");
+        }
+        if (detectedType == null) {
+            throw new IllegalArgumentException("detectedType must not be null");
+        }
+        if (document == null) {
+            throw new IllegalArgumentException("document must not be null for a successful result");
+        }
+        if (warnings == null) {
+            throw new IllegalArgumentException("warnings must not be null; use an empty list instead");
+        }
         return new ExtractionResult(resourceRef, detectedType, document, null, warnings);
     }
 
-    /** Creates a failure result. */
+    /**
+     * Creates a failure result.
+     *
+     * @param resourceRef  must not be null
+     * @param detectedType may be null if detection itself failed
+     * @param errorMessage must not be null or blank
+     */
     public static ExtractionResult failure(VirtualResourceRef resourceRef,
                                            DetectedContentType detectedType,
                                            String errorMessage) {
+        if (resourceRef == null) {
+            throw new IllegalArgumentException("resourceRef must not be null");
+        }
+        if (errorMessage == null || errorMessage.trim().isEmpty()) {
+            throw new IllegalArgumentException("errorMessage must not be null or blank");
+        }
         return new ExtractionResult(resourceRef, detectedType, null, errorMessage,
                 Collections.<String>emptyList());
     }

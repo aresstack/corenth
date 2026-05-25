@@ -3,6 +3,8 @@ package com.aresstack.corenth.proasteion.emporion.deigma;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.SimpleContentDetector;
 import org.junit.Test;
 
+import java.nio.charset.Charset;
+
 import static org.junit.Assert.*;
 
 /**
@@ -10,6 +12,7 @@ import static org.junit.Assert.*;
  */
 public class SimpleContentDetectorTest {
 
+    private static final Charset UTF_8 = Charset.forName("UTF-8");
     private final ContentDetector detector = new SimpleContentDetector();
 
     // ── Plain text detection ─────────────────────────────────────────────────
@@ -71,7 +74,7 @@ public class SimpleContentDetectorTest {
 
     @Test
     public void detectsPdfByMagicBytes() {
-        byte[] pdfMagic = "%PDF-1.4".getBytes();
+        byte[] pdfMagic = "%PDF-1.4".getBytes(UTF_8);
         DetectedContentType result = detector.detect(null, null, pdfMagic);
         assertEquals("application/pdf", result.mimeType());
         assertEquals(ContentCategory.PDF, result.category());
@@ -192,5 +195,44 @@ public class SimpleContentDetectorTest {
     public void handlesWindowsPathSeparator() {
         DetectedContentType result = detector.detect("C:\\docs\\readme.txt", null, null);
         assertEquals(ContentCategory.PLAIN_TEXT, result.category());
+    }
+
+    // ── Precedence tests ─────────────────────────────────────────────────────
+
+    @Test
+    public void magicBytesTakePrecedenceOverFilenameExtension() {
+        // File named .txt but content starts with %PDF magic → PDF wins
+        byte[] pdfMagic = "%PDF-1.5".getBytes(UTF_8);
+        DetectedContentType result = detector.detect("something.txt", null, pdfMagic);
+        assertEquals(ContentCategory.PDF, result.category());
+        assertEquals("application/pdf", result.mimeType());
+    }
+
+    @Test
+    public void magicBytesTakePrecedenceOverMimeHint() {
+        // MIME says text/plain but magic bytes say PDF → PDF wins
+        byte[] pdfMagic = "%PDF-1.7".getBytes(UTF_8);
+        DetectedContentType result = detector.detect(null, "text/plain", pdfMagic);
+        assertEquals(ContentCategory.PDF, result.category());
+    }
+
+    @Test
+    public void mimeHintTakePrecedenceOverFilenameExtension() {
+        // File named .txt but MIME hint says application/pdf → PDF wins
+        DetectedContentType result = detector.detect("report.txt", "application/pdf", null);
+        assertEquals(ContentCategory.PDF, result.category());
+    }
+
+    @Test
+    public void mimeHintOverridesExtensionForHtml() {
+        // File named .txt but MIME hint says text/html → HTML wins
+        DetectedContentType result = detector.detect("page.txt", "text/html", null);
+        assertEquals(ContentCategory.HTML, result.category());
+    }
+
+    @Test
+    public void extensionUsedWhenNoOtherHints() {
+        DetectedContentType result = detector.detect("report.pdf", null, null);
+        assertEquals(ContentCategory.PDF, result.category());
     }
 }

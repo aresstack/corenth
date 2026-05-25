@@ -76,6 +76,9 @@ public final class ExtractedDocument {
         }
 
         public Builder addBlock(ExtractedBlock block) {
+            if (block == null) {
+                throw new IllegalArgumentException("Block must not be null");
+            }
             this.blocks.add(block);
             return this;
         }

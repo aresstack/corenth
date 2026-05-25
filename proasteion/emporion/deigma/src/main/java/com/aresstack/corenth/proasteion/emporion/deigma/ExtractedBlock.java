@@ -18,6 +18,9 @@ public final class ExtractedBlock {
     private final Map<String, String> attributes;
 
     public ExtractedBlock(int index, BlockKind kind, String text, Map<String, String> attributes) {
+        if (index < 0) {
+            throw new IllegalArgumentException("Block index must not be negative");
+        }
         if (kind == null) {
             throw new IllegalArgumentException("Block kind must not be null");
         }

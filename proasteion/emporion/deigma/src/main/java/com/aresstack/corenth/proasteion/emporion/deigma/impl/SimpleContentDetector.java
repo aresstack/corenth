@@ -103,25 +103,26 @@ public final class SimpleContentDetector implements ContentDetector {
         MIME_CATEGORY_MAP.put("text/csv", ContentCategory.STRUCTURED_DATA);
     }
 
+    /**
+     * Detects content type using the following precedence:
+     * <ol>
+     *   <li>Magic bytes for strong signatures (e.g. PDF)</li>
+     *   <li>Explicit MIME/content-type hint</li>
+     *   <li>Filename extension</li>
+     *   <li>Fallback to unknown/octet-stream</li>
+     * </ol>
+     */
     @Override
     public DetectedContentType detect(String filenameHint, String contentTypeHint, byte[] contentPrefix) {
-        // Try filename extension first
-        if (filenameHint != null && !filenameHint.isEmpty()) {
-            String ext = extractExtension(filenameHint);
-            if (ext != null) {
-                // Check source code
-                if (SOURCE_EXTENSIONS.contains(ext)) {
-                    return new DetectedContentType("text/x-source-code", ContentCategory.SOURCE_CODE, filenameHint);
-                }
-                // Check known extension mapping
-                MimeCategory mc = EXTENSION_MAP.get(ext);
-                if (mc != null) {
-                    return new DetectedContentType(mc.mimeType, mc.category, filenameHint);
-                }
+        // 1. Try magic bytes for strong signatures
+        if (contentPrefix != null && contentPrefix.length >= 4) {
+            if (contentPrefix[0] == '%' && contentPrefix[1] == 'P'
+                    && contentPrefix[2] == 'D' && contentPrefix[3] == 'F') {
+                return new DetectedContentType("application/pdf", ContentCategory.PDF, filenameHint);
             }
         }
 
-        // Try content type hint
+        // 2. Try explicit MIME/content-type hint
         if (contentTypeHint != null && !contentTypeHint.isEmpty()) {
             String normalized = contentTypeHint.toLowerCase(Locale.ROOT).trim();
             // Strip parameters (e.g. charset)
@@ -139,15 +140,23 @@ public final class SimpleContentDetector implements ContentDetector {
             }
         }
 
-        // Try magic bytes for PDF
-        if (contentPrefix != null && contentPrefix.length >= 4) {
-            if (contentPrefix[0] == '%' && contentPrefix[1] == 'P'
-                    && contentPrefix[2] == 'D' && contentPrefix[3] == 'F') {
-                return new DetectedContentType("application/pdf", ContentCategory.PDF, filenameHint);
+        // 3. Try filename extension
+        if (filenameHint != null && !filenameHint.isEmpty()) {
+            String ext = extractExtension(filenameHint);
+            if (ext != null) {
+                // Check source code
+                if (SOURCE_EXTENSIONS.contains(ext)) {
+                    return new DetectedContentType("text/x-source-code", ContentCategory.SOURCE_CODE, filenameHint);
+                }
+                // Check known extension mapping
+                MimeCategory mc = EXTENSION_MAP.get(ext);
+                if (mc != null) {
+                    return new DetectedContentType(mc.mimeType, mc.category, filenameHint);
+                }
             }
         }
 
-        // Fallback
+        // 4. Fallback
         return new DetectedContentType("application/octet-stream", ContentCategory.UNKNOWN, filenameHint);
     }
 
