@@ -3,6 +3,19 @@
 This document records the inspection of MainframeMate credential/security source
 files (under `research/`) and the migration decisions for the `adyton` module.
 
+## Security model contrast
+
+MainframeMate and Corenth have fundamentally different credential access models:
+
+| | MainframeMate | Corenth (adyton) |
+|---|---|---|
+| **Access model** | Credentials can be resolved as raw username/password | Normal modules receive only scoped, short-lived delegated access grants |
+| **Module-facing API** | `CredentialsProvider.resolve()` → `Optional<Credentials>` (includes raw password) | `DelegatedAccessProvider.request()` → `CredentialLease` (scoped capability) |
+| **Secret visibility** | Raw `String` passwords flow through `CredentialStore.resolve()`, `Credentials.getPassword()` | Secrets stay inside the vault; modules receive opaque leases |
+| **Lifetime** | Session cache holds credentials until application exit (no expiration) | Leases expire and are rejected after their stated lifetime |
+| **Scope binding** | None — credentials grant full access once resolved | Leases are bound to target, principal, purpose, scope and TTL |
+| **Adapter coupling** | KeePass, DPAPI, PowerShell directly invoked in `CredentialStore` | Adapters implement `CredentialProvider` SPI; modules use `DelegatedAccessProvider` |
+
 ## Source files inspected
 
 All files listed in the issue were reviewed from the `research/` directory.
@@ -11,10 +24,10 @@ All files listed in the issue were reviewed from the `research/` directory.
 
 | MainframeMate source file | Decision | Corenth target | Reason |
 |---|---|---|---|
-| `core/.../files/auth/CredentialsProvider.java` | adapt | `adyton:CredentialProvider` | Core port pattern preserved. Return type changed from `Optional<Credentials>` (raw password) to `CredentialLease` (opaque, time-limited). |
-| `core/.../files/auth/ConnectionId.java` | adapt | `adyton:CredentialRequest` | Connection identity concept generalised into a request with targetSystem + principal + purpose. Scheme/host breakdown replaced by abstract target. |
-| `core/.../files/auth/Credentials.java` | adapt | `adyton:CredentialRef` | Principal identity preserved; raw `getPassword()` removed, replaced by opaque `SecretRef`. |
-| `core/.../files/auth/AuthCancelledException.java` | adapt | `adyton:SecretUnavailableException` | Unified with other failure modes. Corenth callers don't distinguish cancellation from unavailability. |
+| `core/.../files/auth/CredentialsProvider.java` | adapt | `adyton:CredentialProvider` (adapter SPI) | Core port pattern preserved. Return type changed from `Optional<Credentials>` (raw password) to `CredentialLease` (opaque, time-limited). Clarified as adapter SPI, not module-facing. |
+| `core/.../files/auth/ConnectionId.java` | adapt | `adyton:CredentialRequest` | Connection identity concept generalised into a scoped request with targetSystem + principal + purpose + scope + requestedTtlMillis. |
+| `core/.../files/auth/Credentials.java` | adapt | `adyton:CredentialRef` (vault-internal) | Principal identity preserved; raw `getPassword()` removed, replaced by opaque `SecretRef`. Marked as vault-internal — not for normal module use. |
+| `core/.../files/auth/AuthCancelledException.java` | adapt | `adyton:AuthCancelledException` | Preserved as subtype of `SecretUnavailableException`. Now a checked exception. |
 | `app/.../util/CredentialStore.java` | adapt | `adyton:SessionCredentialCache`, `adyton:CredentialProvider` | Session cache concept extracted (RAM-only, never persisted). Global singleton + Settings coupling removed. KeePass delegation and DPAPI calls become adapter candidates. |
 | `app/.../util/SessionCipher.java` | adapt | `adyton:SessionCredentialCache` | The in-memory encryption concept is replaced by storing only opaque lease references with expiration. No encrypted secrets in memory. |
 | `app/.../util/KeePassNotAvailableException.java` | adapt | `adyton:SecretUnavailableException` | Folded into unified exception. German UI message removed. |
@@ -32,9 +45,9 @@ All files listed in the issue were reviewed from the `research/` directory.
 
 | Corenth type | Category | Reason |
 |---|---|---|
-| `SecretRef` | new-corenth-api | Opaque secret handle concept. MainframeMate passes raw strings; Corenth needs a boundary type. |
-| `CredentialLease` | new-corenth-api | Time-limited access grant. MainframeMate's session cache has no expiration; Corenth adds explicit lease lifetimes. |
-| `DelegatedAccessProvider` | new-corenth-api | Operation-based access port. No direct MainframeMate equivalent, but KeePassRpcClient's authenticated operations are the closest precedent. |
+| `CredentialLease` | new-corenth-api | Primary access grant with scope binding, TTL, and opaque lease id. MainframeMate has no equivalent — its session cache holds indefinite encrypted credentials. |
+| `DelegatedAccessProvider` | new-corenth-api | Module-facing API. Replaces the direct credential resolution pattern from MainframeMate with a delegated, scoped access model. |
+| `SecretRef` | new-corenth-api | Vault-internal opaque secret handle. Replaces raw `String` passwords. Not exposed to normal modules. |
 | `DelegatedAccessResult` | new-corenth-api | Result type for delegated operations. |
 
 ## Decisions rationale
@@ -43,7 +56,7 @@ All files listed in the issue were reviewed from the `research/` directory.
 
 - **KeePassRpcPairingDialog**: Swing dialog for SRP pairing PIN entry. Adyton must remain UI-free.
 - **Settings/SettingsHelper coupling**: MainframeMate reads password method from global settings JSON. Adyton uses port injection — the method is determined by which adapter is provided.
-- **Global singleton pattern** (`CredentialStore` static methods): Replaced by injectable `CredentialProvider` instances.
+- **Global singleton pattern** (`CredentialStore` static methods): Replaced by injectable `CredentialProvider` / `DelegatedAccessProvider` instances.
 - **German UI messages**: Removed from exception types.
 
 ### Raw credential exposure in MainframeMate
@@ -54,9 +67,20 @@ The following MainframeMate patterns expose raw credentials:
 3. `SessionCipher` encrypts passwords in memory but decrypts on every access
 
 In Corenth, these are replaced by:
-1. `CredentialRef` has no password getter — only an opaque `SecretRef`
-2. `CredentialProvider.acquire()` returns a `CredentialLease` — no raw material
+1. `CredentialRef` is vault-internal and has no password getter — only an opaque `SecretRef`
+2. `DelegatedAccessProvider.request()` returns a scoped `CredentialLease` — no raw material
 3. `SessionCredentialCache` stores lease references only — no encrypted passwords
+4. Normal modules never handle `SecretRef` or `CredentialRef`
+
+### API layering
+
+```
+Normal modules  →  DelegatedAccessProvider.request()  →  CredentialLease (scoped grant)
+                   DelegatedAccessProvider.authenticate()  →  DelegatedAccessResult
+
+Vault internals →  CredentialProvider.acquire()  →  CredentialLease
+                   SecretRef / CredentialRef  →  adapter-level identifiers
+```
 
 ### Future adapter work (open issues)
 

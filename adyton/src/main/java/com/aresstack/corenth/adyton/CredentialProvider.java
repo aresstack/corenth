@@ -1,11 +1,16 @@
 package com.aresstack.corenth.adyton;
 
 /**
- * Port for credential provisioning within the vault boundary.
+ * Adapter SPI for credential provisioning within the vault boundary.
+ * <p>
+ * This interface is intended for trusted credential adapters (KeePass, DPAPI,
+ * OS credential stores, environment variables). <b>Normal modules should not
+ * use this interface directly</b> — they should use
+ * {@link DelegatedAccessProvider} instead.
  * <p>
  * Implementations resolve a {@link CredentialRequest} into a time-limited
- * {@link CredentialLease}. Adapters may back this port with KeePass, OS credential
- * stores, environment variables, or other secret backends.
+ * {@link CredentialLease}. The lease carries scope, target and expiration
+ * information but does not expose raw secret material to callers.
  * <p>
  * Implementations must never log, serialize, or expose raw secret material.
  * <p>
@@ -26,6 +31,9 @@ public interface CredentialProvider {
 
     /**
      * Resolves the given request into a credential lease.
+     * <p>
+     * This is an adapter-level operation. Normal modules should use
+     * {@link DelegatedAccessProvider#request(CredentialRequest)} instead.
      *
      * @param request the credential request describing what is needed
      * @return a lease granting controlled access to the credential

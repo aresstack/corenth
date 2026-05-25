@@ -54,6 +54,6 @@ public final class DelegatedAccessResult {
 
     @Override
     public String toString() {
-        return "DelegatedAccessResult{success=" + success + "}";
+        return "DelegatedAccessResult{success=" + success + ", token=" + (token != null ? "***" : "null") + "}";
     }
 }

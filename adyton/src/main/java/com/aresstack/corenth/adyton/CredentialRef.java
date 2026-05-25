@@ -5,6 +5,11 @@ import java.util.Objects;
 /**
  * A reference to a credential identity within the vault boundary.
  * <p>
+ * <b>Important:</b> This class is for vault internals and trusted credential
+ * adapters only. Normal modules should not handle {@code CredentialRef}
+ * instances directly — they should use {@link DelegatedAccessProvider} and
+ * receive {@link CredentialLease} grants instead.
+ * <p>
  * Combines a principal (user/service identity) with a {@link SecretRef} that
  * points to the associated secret material. The credential value is never exposed
  * through this object.
