@@ -14,6 +14,7 @@ final class DefaultSecretMaterial implements SecretMaterial {
     private final String secretRefId;
     private final String principal;
     private final char[] secret;
+    private volatile boolean closed;
 
     /**
      * Creates a secret material instance.
@@ -57,7 +58,22 @@ final class DefaultSecretMaterial implements SecretMaterial {
 
     @Override
     public char[] secret() {
+        if (closed) {
+            return new char[0];
+        }
         return Arrays.copyOf(secret, secret.length);
+    }
+
+    /**
+     * Wipes the internal secret array by zero-filling it.
+     * After this call, {@link #secret()} returns an empty array.
+     */
+    @Override
+    public void close() {
+        if (!closed) {
+            Arrays.fill(secret, '\0');
+            closed = true;
+        }
     }
 
     @Override

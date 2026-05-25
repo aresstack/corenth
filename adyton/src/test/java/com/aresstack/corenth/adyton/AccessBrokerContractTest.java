@@ -217,6 +217,47 @@ public class AccessBrokerContractTest {
         assertEquals("SecretMaterial{***}", material.toString());
     }
 
+    @Test
+    public void secretMaterialCloseWipesSecret() {
+        char[] password = "s3cr3t".toCharArray();
+        SecretMaterial material = new DefaultSecretMaterial("ref", "user", password);
+        // Before close, secret is accessible
+        char[] retrieved = material.secret();
+        assertEquals(6, retrieved.length);
+        assertEquals('s', retrieved[0]);
+
+        // After close, secret is wiped
+        material.close();
+        char[] afterClose = material.secret();
+        assertEquals(0, afterClose.length);
+    }
+
+    @Test
+    public void secretMaterialCloseIsIdempotent() {
+        SecretMaterial material = new DefaultSecretMaterial("ref", "user", "pass".toCharArray());
+        material.close();
+        material.close(); // second close should not throw
+        assertEquals(0, material.secret().length);
+    }
+
+    @Test
+    public void secretMaterialIsAutoCloseable() {
+        assertTrue(AutoCloseable.class.isAssignableFrom(SecretMaterial.class));
+    }
+
+    @Test
+    public void cacheCloseWipesMaterial() {
+        SecretMaterialCache cache = new SecretMaterialCache(SecretCachePolicy.defaultPolicy());
+        SecretCacheKey key = new SecretCacheKey(
+                new SecretRef("ref"), "sys", "user", "purpose", "scope",
+                AuthenticationMethod.FTP_PASSWORD);
+        DefaultSecretMaterial material = new DefaultSecretMaterial("ref", "user", "pass".toCharArray());
+        cache.put(key, material);
+        cache.close();
+        // Material should be wiped after cache close
+        assertEquals(0, material.secret().length);
+    }
+
     // ── SecretCachePolicy tests ──────────────────────────────────────────────
 
     @Test
@@ -246,7 +287,7 @@ public class AccessBrokerContractTest {
     public void cacheDisabledDoesNotStore() {
         SecretMaterialCache cache = new SecretMaterialCache(SecretCachePolicy.disabled());
         SecretCacheKey key = new SecretCacheKey(
-                new SecretRef("ref"), "sys", "user", "purpose",
+                new SecretRef("ref"), "sys", "user", "purpose", null,
                 AuthenticationMethod.FTP_PASSWORD);
         cache.put(key, new DefaultSecretMaterial("ref"));
         assertNull(cache.get(key));
@@ -257,7 +298,7 @@ public class AccessBrokerContractTest {
     public void cacheClearsOnClose() {
         SecretMaterialCache cache = new SecretMaterialCache(SecretCachePolicy.defaultPolicy());
         SecretCacheKey key = new SecretCacheKey(
-                new SecretRef("ref"), "sys", "user", "purpose",
+                new SecretRef("ref"), "sys", "user", "purpose", null,
                 AuthenticationMethod.FTP_PASSWORD);
         cache.put(key, new DefaultSecretMaterial("ref"));
         assertEquals(1, cache.size());
@@ -271,10 +312,10 @@ public class AccessBrokerContractTest {
     public void cacheKeyEquality() {
         SecretCacheKey a = new SecretCacheKey(
                 new SecretRef("keepass://ftp"), "ftp:mainframe", "USER",
-                "nightly", AuthenticationMethod.FTP_PASSWORD);
+                "nightly", "upload", AuthenticationMethod.FTP_PASSWORD);
         SecretCacheKey b = new SecretCacheKey(
                 new SecretRef("keepass://ftp"), "ftp:mainframe", "USER",
-                "nightly", AuthenticationMethod.FTP_PASSWORD);
+                "nightly", "upload", AuthenticationMethod.FTP_PASSWORD);
         assertEquals(a, b);
         assertEquals(a.hashCode(), b.hashCode());
     }
@@ -282,10 +323,10 @@ public class AccessBrokerContractTest {
     @Test
     public void cacheKeyDiffersByMethod() {
         SecretCacheKey a = new SecretCacheKey(
-                new SecretRef("ref"), "sys", "user", null,
+                new SecretRef("ref"), "sys", "user", null, null,
                 AuthenticationMethod.FTP_PASSWORD);
         SecretCacheKey b = new SecretCacheKey(
-                new SecretRef("ref"), "sys", "user", null,
+                new SecretRef("ref"), "sys", "user", null, null,
                 AuthenticationMethod.HTTP_BASIC);
         assertNotEquals(a, b);
     }
@@ -293,10 +334,21 @@ public class AccessBrokerContractTest {
     @Test
     public void cacheKeyDiffersByPurpose() {
         SecretCacheKey a = new SecretCacheKey(
-                new SecretRef("ref"), "sys", "user", "read",
+                new SecretRef("ref"), "sys", "user", "read", null,
                 AuthenticationMethod.FTP_PASSWORD);
         SecretCacheKey b = new SecretCacheKey(
-                new SecretRef("ref"), "sys", "user", "write",
+                new SecretRef("ref"), "sys", "user", "write", null,
+                AuthenticationMethod.FTP_PASSWORD);
+        assertNotEquals(a, b);
+    }
+
+    @Test
+    public void cacheKeyDiffersByScope() {
+        SecretCacheKey a = new SecretCacheKey(
+                new SecretRef("ref"), "sys", "user", "purpose", "read",
+                AuthenticationMethod.FTP_PASSWORD);
+        SecretCacheKey b = new SecretCacheKey(
+                new SecretRef("ref"), "sys", "user", "purpose", "write",
                 AuthenticationMethod.FTP_PASSWORD);
         assertNotEquals(a, b);
     }
@@ -312,6 +364,7 @@ public class AccessBrokerContractTest {
         assertEquals("wiki:internal", key.targetSystem());
         assertEquals("svc-user", key.principal());
         assertEquals("sync", key.purpose());
+        assertEquals("read", key.scope());
         assertEquals(AuthenticationMethod.MEDIA_WIKI_LOGIN, key.method());
     }
 
@@ -320,10 +373,10 @@ public class AccessBrokerContractTest {
         SecretMaterialCache cache = new SecretMaterialCache(SecretCachePolicy.defaultPolicy());
         SecretCacheKey ftpKey = new SecretCacheKey(
                 new SecretRef("keepass://ftp"), "ftp:mainframe", "USER",
-                "job", AuthenticationMethod.FTP_PASSWORD);
+                "job", "upload", AuthenticationMethod.FTP_PASSWORD);
         SecretCacheKey wikiKey = new SecretCacheKey(
                 new SecretRef("keepass://wiki"), "wiki:internal", "svc",
-                "sync", AuthenticationMethod.MEDIA_WIKI_LOGIN);
+                "sync", "read", AuthenticationMethod.MEDIA_WIKI_LOGIN);
         cache.put(ftpKey, new DefaultSecretMaterial("ftp-ref"));
         cache.put(wikiKey, new DefaultSecretMaterial("wiki-ref"));
         assertEquals(2, cache.size());

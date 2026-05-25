@@ -81,25 +81,36 @@ public final class SecretMaterialCache implements AutoCloseable {
         long now = System.currentTimeMillis();
         if (now >= entry.expiresAt) {
             entries.remove(key);
+            entry.material.close();
             return null;
         }
         if (policy.idleTimeoutMillis() > 0
                 && (now - entry.lastAccessedAt) >= policy.idleTimeoutMillis()) {
             entries.remove(key);
+            entry.material.close();
             return null;
         }
         entry.lastAccessedAt = now;
         return entry.material;
     }
 
-    /** Removes a specific entry by key. */
+    /** Removes a specific entry by key, wiping the material. */
     void remove(SecretCacheKey key) {
-        entries.remove(key);
+        CacheEntry removed = entries.remove(key);
+        if (removed != null) {
+            removed.material.close();
+        }
     }
 
-    /** Removes all entries matching the given target system. */
+    /** Removes all entries matching the given target system, wiping each. */
     void revokeAll(String targetSystem) {
-        entries.entrySet().removeIf(e -> e.getKey().targetSystem().equals(targetSystem));
+        entries.entrySet().removeIf(e -> {
+            if (e.getKey().targetSystem().equals(targetSystem)) {
+                e.getValue().material.close();
+                return true;
+            }
+            return false;
+        });
     }
 
     /** Returns the current cache size. */
@@ -107,9 +118,12 @@ public final class SecretMaterialCache implements AutoCloseable {
         return entries.size();
     }
 
-    /** Clears all cached material. Called on shutdown and explicit close. */
+    /** Clears all cached material, wiping each entry. Called on shutdown and explicit close. */
     @Override
     public void close() {
+        for (CacheEntry entry : entries.values()) {
+            entry.material.close();
+        }
         entries.clear();
     }
 

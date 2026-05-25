@@ -21,6 +21,7 @@ public final class SecretCacheKey {
     private final String targetSystem;
     private final String principal;
     private final String purpose;
+    private final String scope;
     private final AuthenticationMethod method;
 
     /**
@@ -30,10 +31,11 @@ public final class SecretCacheKey {
      * @param targetSystem  the target system (required)
      * @param principal     the principal (required)
      * @param purpose       the stated purpose (may be {@code null})
+     * @param scope         the requested operation/scope (may be {@code null})
      * @param method        the authentication method (required)
      */
     public SecretCacheKey(SecretRef credentialRef, String targetSystem,
-                          String principal, String purpose,
+                          String principal, String purpose, String scope,
                           AuthenticationMethod method) {
         if (credentialRef == null) {
             throw new IllegalArgumentException("Credential reference must not be null");
@@ -51,6 +53,7 @@ public final class SecretCacheKey {
         this.targetSystem = targetSystem;
         this.principal = principal;
         this.purpose = purpose;
+        this.scope = scope;
         this.method = method;
     }
 
@@ -66,6 +69,7 @@ public final class SecretCacheKey {
                 request.targetSystem(),
                 request.principal(),
                 request.purpose(),
+                request.scope(),
                 request.method());
     }
 
@@ -89,6 +93,11 @@ public final class SecretCacheKey {
         return purpose;
     }
 
+    /** Returns the requested operation/scope, may be {@code null}. */
+    public String scope() {
+        return scope;
+    }
+
     /** Returns the authentication method. */
     public AuthenticationMethod method() {
         return method;
@@ -103,12 +112,13 @@ public final class SecretCacheKey {
                 && targetSystem.equals(that.targetSystem)
                 && principal.equals(that.principal)
                 && Objects.equals(purpose, that.purpose)
+                && Objects.equals(scope, that.scope)
                 && method.equals(that.method);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(credentialRef, targetSystem, principal, purpose, method);
+        return Objects.hash(credentialRef, targetSystem, principal, purpose, scope, method);
     }
 
     @Override

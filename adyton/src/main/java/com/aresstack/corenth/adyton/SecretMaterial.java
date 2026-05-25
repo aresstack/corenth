@@ -31,7 +31,7 @@ package com.aresstack.corenth.adyton;
  * @see AuthenticationStrategy#authenticate(AccessRequest, SecretMaterial)
  * @see SecretMaterialCache
  */
-public interface SecretMaterial {
+public interface SecretMaterial extends AutoCloseable {
 
     /**
      * Returns the principal/username associated with this material.
@@ -64,4 +64,13 @@ public interface SecretMaterial {
      * @return the internal reference identifier
      */
     String secretRefId();
+
+    /**
+     * Wipes the internal secret material and releases resources.
+     * <p>
+     * After this call, {@link #secret()} should return a zeroed or empty array.
+     * Implementations must zero-fill any internal char arrays holding secret data.
+     */
+    @Override
+    void close();
 }
