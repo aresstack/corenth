@@ -1,0 +1,592 @@
+package de.bund.zrb.websearch.ui;
+
+import de.bund.zrb.mcpserver.browser.BrowserSession;
+import de.bund.zrb.mcpserver.research.CookieBannerDismisser;
+import de.bund.zrb.mcpserver.research.NetworkIngestionPipeline;
+import de.bund.zrb.mcpserver.research.ResearchSession;
+import de.bund.zrb.mcpserver.research.ResearchSessionManager;
+import de.bund.zrb.websearch.plugin.WebSearchBrowserManager;
+import de.bund.zrb.websearch.tools.BrowserToolAdapter;
+import de.zrb.bund.api.MainframeContext;
+
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.HierarchyEvent;
+import java.awt.event.HierarchyListener;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * Settings dialog for the WebSearch plugin.
+ * Allows configuring browser type, headless mode, and URL boundaries.
+ */
+public class WebSearchSettingsDialog extends JDialog {
+
+    private static final String PLUGIN_KEY = "webSearch";
+
+    /** Default blacklist: block URLs whose host is a bare IP address (IPv4 or IPv6). */
+    static final String DEFAULT_BLACKLIST =
+            "# IPv4-Adressen blockieren (http(s)://123.45.67.89)\n"
+          + "https?://\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}([:/]|$)\n"
+          + "# IPv6-Adressen blockieren (http(s)://[::1])\n"
+          + "https?://\\[[:0-9a-fA-F]+\\]";
+
+    private final MainframeContext context;
+    private final WebSearchBrowserManager browserManager;
+    private final JTextArea whitelistArea;
+    private final JTextArea blacklistArea;
+    private final JTextArea cookieSelectorsArea;
+    private final JTextArea cookieScriptArea;
+
+    // ---- Research Settings ----
+    private final JCheckBox historyNavigationCheckbox;
+    private final JSpinner maxParallelTabsSpinner;
+    private final JComboBox<String> settleStrategyCombo;
+
+    // ---- WebSocket Logging & Live Stats ----
+    private final JCheckBox wsLoggingCheckbox;
+    private final JLabel wsRxCountLabel;
+    private final JLabel wsTxCountLabel;
+    private final JLabel wsLastRxLabel;
+    private final JLabel wsCongestionLabel;
+    private final JLabel wsPipelineStatusLabel;
+    private final JButton wsKillInterceptsButton;
+    private Timer wsStatsTimer;
+    private static final SimpleDateFormat TS_FORMAT = new SimpleDateFormat("HH:mm:ss.SSS");
+
+    public WebSearchSettingsDialog(MainframeContext context, WebSearchBrowserManager browserManager) {
+        super(context.getMainFrame(), "Websearch-Einstellungen", true);
+        this.context = context;
+        this.browserManager = browserManager;
+
+        Map<String, String> settings = context.loadPluginSettings(PLUGIN_KEY);
+
+        setLayout(new BorderLayout(10, 10));
+        JPanel form = new JPanel(new GridBagLayout());
+        form.setBorder(BorderFactory.createEmptyBorder(15, 15, 10, 15));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.anchor = GridBagConstraints.WEST;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        int row = 0;
+
+        // ── Browser-Info ─────────────────────────────────────────
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2; gbc.weightx = 1;
+        JLabel browserInfo = new JLabel(
+                "<html><i>Browser-Typ, Pfad, Debug-Port und Timeout werden unter "
+              + "<b>Einstellungen \u2192 Browser</b> konfiguriert.</i></html>");
+        browserInfo.setForeground(Color.GRAY);
+        form.add(browserInfo, gbc);
+        gbc.gridwidth = 1;
+
+        // ── Recherche ────────────────────────────────────────────
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2; gbc.weightx = 1;
+        JLabel rechercheHeader = new JLabel("\u2500\u2500 Recherche \u2500\u2500");
+        rechercheHeader.setFont(rechercheHeader.getFont().deriveFont(Font.BOLD));
+        rechercheHeader.setForeground(new Color(60, 60, 120));
+        form.add(rechercheHeader, gbc);
+        gbc.gridwidth = 1;
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0;
+        form.add(new JLabel("Back/Forward:"), gbc);
+        historyNavigationCheckbox = new JCheckBox("Back/Forward-Navigation erlauben");
+        historyNavigationCheckbox.setSelected(!"false".equals(settings.getOrDefault("historyNavigationEnabled", "true")));
+        historyNavigationCheckbox.setToolTipText(
+                "Wenn deaktiviert, kann der Bot nur \u00fcber Linklisten navigieren (kein back/forward).");
+        gbc.gridx = 1; gbc.weightx = 1;
+        form.add(historyNavigationCheckbox, gbc);
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0;
+        form.add(new JLabel("Max. Hintergrund-Tabs:"), gbc);
+        int savedMaxTabs = 3;
+        try {
+            savedMaxTabs = Integer.parseInt(settings.getOrDefault("maxParallelTabs", "3"));
+        } catch (NumberFormatException ignored) {}
+        maxParallelTabsSpinner = new JSpinner(new SpinnerNumberModel(savedMaxTabs, 1, 10, 1));
+        maxParallelTabsSpinner.setToolTipText(
+                "Maximale Anzahl gleichzeitiger Hintergrund-Tabs f\u00fcr automatisches Crawling interner Seiten.");
+        gbc.gridx = 1; gbc.weightx = 1;
+        form.add(maxParallelTabsSpinner, gbc);
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0;
+        form.add(new JLabel("Snapshot-Settling:"), gbc);
+        settleStrategyCombo = new JComboBox<>(new String[]{"FAST (500ms)", "NORMAL (2000ms)", "SLOW (5000ms)"});
+        String savedSettle = settings.getOrDefault("settleStrategy", "NORMAL");
+        if ("FAST".equals(savedSettle)) settleStrategyCombo.setSelectedIndex(0);
+        else if ("SLOW".equals(savedSettle)) settleStrategyCombo.setSelectedIndex(2);
+        else settleStrategyCombo.setSelectedIndex(1);
+        settleStrategyCombo.setToolTipText(
+                "Wartezeit nach Seitenladung bevor der DOM-Snapshot erstellt wird.\n"
+              + "FAST: 500ms \u2013 f\u00fcr schnelle/statische Seiten.\n"
+              + "NORMAL: 2000ms \u2013 Standard (empfohlen).\n"
+              + "SLOW: 5000ms \u2013 f\u00fcr langsame/JS-lastige Seiten.");
+        gbc.gridx = 1; gbc.weightx = 1;
+        form.add(settleStrategyCombo, gbc);
+
+        // Apply to system properties
+        System.setProperty("websearch.history.enabled", String.valueOf(historyNavigationCheckbox.isSelected()));
+        System.setProperty("websearch.crawl.maxTabs", String.valueOf(savedMaxTabs));
+
+        // ── Info ─────────────────────────────────────────────────
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2; gbc.weightx = 1;
+        JLabel infoLabel = new JLabel(
+                "<html><i>Die Browser-Tools (browser_navigate, browser_click_css, ...) werden "
+                + "automatisch in der Tool-Registry registriert und stehen im Chat zur Verf\u00fcgung.</i></html>");
+        infoLabel.setForeground(Color.GRAY);
+        form.add(infoLabel, gbc);
+        gbc.gridwidth = 1;
+
+        // ── URL Whitelist ────────────────────────────────────────
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0; gbc.weighty = 0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        JLabel whitelistLabel = new JLabel("<html>URL-Whitelist<br><small>(Regex, pro Zeile)</small>:</html>");
+        whitelistLabel.setToolTipText("Nur URLs, die einem Pattern matchen, werden erlaubt. Leer = alle erlaubt.");
+        form.add(whitelistLabel, gbc);
+
+        whitelistArea = new JTextArea(settings.getOrDefault("urlWhitelist", ""), 4, 30);
+        whitelistArea.setToolTipText(
+                "Regex-Patterns (ein Pattern pro Zeile). Beispiele:\n"
+              + "  yahoo\\.com       \u2192 erlaubt alle Yahoo-URLs\n"
+              + "  https://news\\.yahoo\\.com/.*  \u2192 nur Yahoo News\n"
+              + "Zeilen mit # sind Kommentare. Leer = alle URLs erlaubt.");
+        whitelistArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        JScrollPane whitelistScroll = new JScrollPane(whitelistArea);
+        gbc.gridx = 1; gbc.weightx = 1; gbc.weighty = 0.3;
+        gbc.fill = GridBagConstraints.BOTH;
+        form.add(whitelistScroll, gbc);
+
+        // ── URL Blacklist ────────────────────────────────────────
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0; gbc.weighty = 0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        JLabel blacklistLabel = new JLabel("<html>URL-Blacklist<br><small>(Regex, pro Zeile)</small>:</html>");
+        blacklistLabel.setToolTipText("URLs, die einem Blacklist-Pattern matchen, werden blockiert.");
+        form.add(blacklistLabel, gbc);
+
+        String savedBlacklist = settings.containsKey("urlBlacklist")
+                ? settings.get("urlBlacklist")
+                : DEFAULT_BLACKLIST;
+        blacklistArea = new JTextArea(savedBlacklist, 4, 30);
+        blacklistArea.setToolTipText(
+                "Regex-Patterns (ein Pattern pro Zeile). Beispiele:\n"
+              + "  ads\\.example\\.com  \u2192 blockiert Werbe-Domain\n"
+              + "  \\.(exe|zip|msi)$   \u2192 blockiert Downloads\n"
+              + "Blacklist hat Vorrang vor Whitelist.");
+        blacklistArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        JScrollPane blacklistScroll = new JScrollPane(blacklistArea);
+        gbc.gridx = 1; gbc.weightx = 1; gbc.weighty = 0.3;
+        gbc.fill = GridBagConstraints.BOTH;
+        form.add(blacklistScroll, gbc);
+
+        // ── Cookie-Banner Selektoren ─────────────────────────────
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0; gbc.weighty = 0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        JLabel cookieLabel = new JLabel("<html>Cookie-Banner<br><small>(CSS-Selektoren)</small>:</html>");
+        cookieLabel.setToolTipText("CSS-Selektoren f\u00fcr Cookie-Accept-Buttons (einer pro Zeile). Leer = Defaults.");
+        form.add(cookieLabel, gbc);
+
+        String defaultSelectorsText = String.join("\n", CookieBannerDismisser.DEFAULT_SELECTORS);
+        String savedSelectors = settings.getOrDefault("cookieSelectors", defaultSelectorsText);
+        cookieSelectorsArea = new JTextArea(savedSelectors, 4, 30);
+        cookieSelectorsArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        cookieSelectorsArea.setToolTipText("CSS-Selektoren f\u00fcr Cookie-Consent-Buttons.\nEin Selektor pro Zeile. Leer = Defaults verwenden.");
+        JScrollPane cookieSelScroll = new JScrollPane(cookieSelectorsArea);
+        gbc.gridx = 1; gbc.weightx = 1; gbc.weighty = 0.2;
+        gbc.fill = GridBagConstraints.BOTH;
+        form.add(cookieSelScroll, gbc);
+
+        // ── Cookie-Banner Script ─────────────────────────────────
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0; gbc.weighty = 0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        JLabel cookieScriptLabel = new JLabel("<html>Cookie-Dismiss<br><small>(JS-Script)</small>:</html>");
+        cookieScriptLabel.setToolTipText("Custom JS-Script zur Cookie-Banner-Dismissal. Muss %SELECTORS_JSON% Platzhalter enthalten. Leer = Default.");
+        form.add(cookieScriptLabel, gbc);
+
+        String savedScript = settings.getOrDefault("cookieDismissScript", "");
+        cookieScriptArea = new JTextArea(savedScript, 3, 30);
+        cookieScriptArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
+        cookieScriptArea.setToolTipText("Benutzerdefiniertes JS. Muss %SELECTORS_JSON% enthalten.\nLeer = Standard-Script verwenden.");
+        JScrollPane cookieScriptScroll = new JScrollPane(cookieScriptArea);
+        gbc.gridx = 1; gbc.weightx = 1; gbc.weighty = 0.15;
+        gbc.fill = GridBagConstraints.BOTH;
+        form.add(cookieScriptScroll, gbc);
+
+        // ── Cookie Reset Buttons ─────────────────────────────────
+        row++;
+        gbc.gridx = 1; gbc.gridy = row; gbc.weightx = 1; gbc.weighty = 0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        JPanel cookieResetPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        JButton resetSelectorsBtn = new JButton("\u21BA Selektoren zur\u00fccksetzen");
+        resetSelectorsBtn.addActionListener(e -> cookieSelectorsArea.setText(defaultSelectorsText));
+        JButton resetScriptBtn = new JButton("\u21BA Script zur\u00fccksetzen");
+        resetScriptBtn.addActionListener(e -> cookieScriptArea.setText(""));
+        cookieResetPanel.add(resetSelectorsBtn);
+        cookieResetPanel.add(Box.createHorizontalStrut(8));
+        cookieResetPanel.add(resetScriptBtn);
+        form.add(cookieResetPanel, gbc);
+
+        // ── Separator ────────────────────────────────────────────
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2; gbc.weightx = 1;
+        gbc.weighty = 0; gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.anchor = GridBagConstraints.WEST;
+        form.add(new JSeparator(), gbc);
+        gbc.gridwidth = 1;
+
+        // ── Debug / WebSocket ────────────────────────────────────
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.gridwidth = 2;
+        JLabel debugSectionLabel = new JLabel("Debug / WebSocket");
+        debugSectionLabel.setFont(debugSectionLabel.getFont().deriveFont(Font.BOLD, 12f));
+        form.add(debugSectionLabel, gbc);
+        gbc.gridwidth = 1;
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0;
+        form.add(new JLabel("WS-Logging:"), gbc);
+        wsLoggingCheckbox = new JCheckBox("WebSocket-Frame-Logging aktivieren");
+        wsLoggingCheckbox.setToolTipText("Aktiviert detailliertes Logging aller ein-/ausgehenden WebSocket-Frames (wd4j.log.websocket).");
+        wsLoggingCheckbox.setSelected(Boolean.getBoolean("wd4j.log.websocket"));
+        wsLoggingCheckbox.addActionListener(e -> {
+            boolean enabled = wsLoggingCheckbox.isSelected();
+            System.setProperty("wd4j.log.websocket", String.valueOf(enabled));
+        });
+        gbc.gridx = 1; gbc.weightx = 1;
+        form.add(wsLoggingCheckbox, gbc);
+
+        // Live-Stats labels
+        wsRxCountLabel = createStatsLabel();
+        wsTxCountLabel = createStatsLabel();
+        wsLastRxLabel = createStatsLabel();
+        wsCongestionLabel = createStatsLabel();
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0;
+        form.add(new JLabel("Empfangene Frames:"), gbc);
+        gbc.gridx = 1; gbc.weightx = 1;
+        form.add(wsRxCountLabel, gbc);
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0;
+        form.add(new JLabel("Gesendete Frames:"), gbc);
+        gbc.gridx = 1; gbc.weightx = 1;
+        form.add(wsTxCountLabel, gbc);
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0;
+        form.add(new JLabel("Letzte Nachricht:"), gbc);
+        gbc.gridx = 1; gbc.weightx = 1;
+        form.add(wsLastRxLabel, gbc);
+
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0;
+        form.add(new JLabel("Congestion-Status:"), gbc);
+        gbc.gridx = 1; gbc.weightx = 1;
+        form.add(wsCongestionLabel, gbc);
+
+        // ── Pipeline Status ──────────────────────────────────────
+        wsPipelineStatusLabel = createStatsLabel();
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0;
+        form.add(new JLabel("Pipeline:"), gbc);
+        gbc.gridx = 1; gbc.weightx = 1;
+        form.add(wsPipelineStatusLabel, gbc);
+
+        // ── Kill Intercepts Button ───────────────────────────────
+        row++;
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0;
+        form.add(new JLabel("Notfall:"), gbc);
+        wsKillInterceptsButton = new JButton("\uD83D\uDEA8 Pipeline stoppen & zur\u00fccksetzen");
+        wsKillInterceptsButton.setToolTipText(
+                "Stoppt die NetworkIngestionPipeline und entfernt den DataCollector.\n"
+              + "Das gibt den Browser-Speicher frei und kann bei Problemen helfen.\n"
+              + "Die Pipeline wird beim n\u00e4chsten research_navigate automatisch neu gestartet.");
+        wsKillInterceptsButton.setForeground(new Color(180, 0, 0));
+        wsKillInterceptsButton.addActionListener(e -> killAllIntercepts());
+        gbc.gridx = 1; gbc.weightx = 1;
+        form.add(wsKillInterceptsButton, gbc);
+
+        add(form, BorderLayout.CENTER);
+
+        // ── Buttons ─────────────────────────────────────────────────
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton testButton = new JButton("🔌 Verbindung testen");
+        testButton.setToolTipText("Startet den Browser und testet die WebDriver-BiDi-Verbindung");
+        testButton.addActionListener(e -> {
+            String browser = browserManager.getBrowser();
+            String path = browserManager.getBrowserPath();
+            boolean hl = browserManager.isHeadless();
+            int port = browserManager.getDebugPort();
+            BrowserConnectionTestDialog testDialog = new BrowserConnectionTestDialog(this);
+            testDialog.setVisible(true);
+            testDialog.startTest(browser, path, hl, port);
+        });
+        JButton okButton = new JButton("OK");
+        JButton cancelButton = new JButton("Abbrechen");
+
+        okButton.addActionListener(e -> {
+            saveSettings();
+            dispose();
+        });
+        cancelButton.addActionListener(e -> dispose());
+
+        buttonPanel.add(testButton);
+        buttonPanel.add(Box.createHorizontalStrut(20));
+        buttonPanel.add(okButton);
+        buttonPanel.add(cancelButton);
+        add(buttonPanel, BorderLayout.SOUTH);
+
+        pack();
+        setMinimumSize(new Dimension(550, 650));
+        setLocationRelativeTo(context.getMainFrame());
+
+        // ---- Lifecycle: Start/Stop stats timer based on dialog visibility ----
+        addHierarchyListener(new HierarchyListener() {
+            @Override
+            public void hierarchyChanged(HierarchyEvent e) {
+                if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0) {
+                    if (isShowing()) {
+                        startStatsTimer();
+                    } else {
+                        stopStatsTimer();
+                    }
+                }
+            }
+        });
+    }
+
+    // ---- WebSocket Stats Helper Methods ----
+
+    private static JLabel createStatsLabel() {
+        JLabel label = new JLabel("–");
+        label.setFont(label.getFont().deriveFont(Font.PLAIN));
+        return label;
+    }
+
+    private void startStatsTimer() {
+        if (wsStatsTimer != null && wsStatsTimer.isRunning()) {
+            return;
+        }
+        wsStatsTimer = new Timer(1000, e -> updateStats());
+        wsStatsTimer.setInitialDelay(0);
+        wsStatsTimer.start();
+    }
+
+    private void stopStatsTimer() {
+        if (wsStatsTimer != null) {
+            wsStatsTimer.stop();
+            wsStatsTimer = null;
+        }
+    }
+
+    private void updateStats() {
+        String rxCount = System.getProperty("wd4j.stats.rx.count", "0");
+        String txCount = System.getProperty("wd4j.stats.tx.count", "0");
+        String rxTs = System.getProperty("wd4j.stats.rx.lastTimestamp");
+
+        wsRxCountLabel.setText(rxCount);
+        wsTxCountLabel.setText(txCount);
+        wsLastRxLabel.setText(formatTimestamp(rxTs));
+
+        // Congestion detection: warn if last RX is more than 10s ago while there's traffic
+        long rxCountVal = parseLong(rxCount);
+        long rxTsVal = parseLong(rxTs);
+        if (rxCountVal > 0 && rxTsVal > 0) {
+            long silenceMs = System.currentTimeMillis() - rxTsVal;
+            if (silenceMs > 10_000) {
+                wsCongestionLabel.setText("⚠ Möglicherweise verstopft! Keine Nachricht seit " + (silenceMs / 1000) + " s");
+                wsCongestionLabel.setForeground(new Color(180, 0, 0));
+            } else {
+                wsCongestionLabel.setText("OK (" + (silenceMs < 1000 ? "<1s" : (silenceMs / 1000) + " s") + " seit letzter Nachricht)");
+                wsCongestionLabel.setForeground(new Color(0, 120, 0));
+            }
+        } else {
+            wsCongestionLabel.setText("Keine Verbindung / Keine Daten");
+            wsCongestionLabel.setForeground(Color.GRAY);
+        }
+
+        // Pipeline / Intercept status
+        updatePipelineStatus();
+    }
+
+    /**
+     * Updates the pipeline status label with information about the active
+     * NetworkIngestionPipeline and its intercept.
+     */
+    private void updatePipelineStatus() {
+        if (browserManager == null) {
+            wsPipelineStatusLabel.setText("Kein BrowserManager");
+            wsPipelineStatusLabel.setForeground(Color.GRAY);
+            wsKillInterceptsButton.setEnabled(false);
+            return;
+        }
+
+        BrowserSession session = browserManager.getExistingSession();
+        if (session == null || !session.isConnected()) {
+            wsPipelineStatusLabel.setText("Keine aktive Browser-Session");
+            wsPipelineStatusLabel.setForeground(Color.GRAY);
+            wsKillInterceptsButton.setEnabled(false);
+            return;
+        }
+
+        ResearchSessionManager rsm = ResearchSessionManager.getInstance();
+        ResearchSession rs = rsm != null ? rsm.get(session) : null;
+        NetworkIngestionPipeline pipeline = rs != null ? rs.getNetworkPipeline() : null;
+
+        if (pipeline == null) {
+            wsPipelineStatusLabel.setText("Keine Pipeline aktiv");
+            wsPipelineStatusLabel.setForeground(Color.GRAY);
+            wsKillInterceptsButton.setEnabled(false);
+        } else if (pipeline.isActive()) {
+            String status = "✅ Aktiv – Captured=" + pipeline.getCapturedCount()
+                    + " Skipped=" + pipeline.getSkippedCount()
+                    + " Failed=" + pipeline.getFailedCount();
+            wsPipelineStatusLabel.setText(status);
+            wsPipelineStatusLabel.setForeground(new Color(0, 120, 0));
+            wsKillInterceptsButton.setEnabled(true);
+        } else {
+            wsPipelineStatusLabel.setText("Pipeline gestoppt (inaktiv)");
+            wsPipelineStatusLabel.setForeground(new Color(180, 120, 0));
+            wsKillInterceptsButton.setEnabled(false);
+        }
+    }
+
+    /**
+     * Emergency action: stops the NetworkIngestionPipeline and removes the DataCollector.
+     * This frees browser memory and can help when the pipeline is stuck.
+     * The pipeline will be automatically restarted on the next research_navigate.
+     */
+    private void killAllIntercepts() {
+        StringBuilder log = new StringBuilder();
+        log.append("🚨 Pipeline-Reset gestartet...\n\n");
+
+        try {
+            // 1. Stop the pipeline (removes intercept, collector, event listeners)
+            BrowserSession session = browserManager != null ? browserManager.getExistingSession() : null;
+            if (session == null || !session.isConnected()) {
+                JOptionPane.showMessageDialog(this,
+                        "Keine aktive Browser-Session vorhanden.",
+                        "Pipeline-Reset", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+
+            ResearchSessionManager rsm = ResearchSessionManager.getInstance();
+            ResearchSession rs = rsm != null ? rsm.get(session) : null;
+            NetworkIngestionPipeline pipeline = rs != null ? rs.getNetworkPipeline() : null;
+
+            if (pipeline != null && pipeline.isActive()) {
+                log.append("1. Pipeline stoppen... ");
+                try {
+                    pipeline.stop();
+                    log.append("✅ OK\n");
+                } catch (Exception e) {
+                    log.append("⚠ Fehler: ").append(e.getMessage()).append("\n");
+                }
+                // Detach pipeline from session so next navigate creates a fresh one
+                rs.setNetworkPipeline(null);
+            } else {
+                log.append("1. Keine aktive Pipeline gefunden.\n");
+            }
+
+            // 2. As a safety measure, log the state.
+            log.append("\n✅ Pipeline und DataCollector wurden zurückgesetzt.\n");
+            log.append("Die Pipeline wird beim nächsten research_navigate automatisch neu gestartet.\n");
+            log.append("\nFalls der Browser immer noch eingefroren ist, kann ein Seiten-Reload helfen.");
+
+            // Force an immediate stats update
+            updatePipelineStatus();
+
+        } catch (Exception e) {
+            log.append("\n❌ Fehler: ").append(e.getMessage());
+        }
+
+        JOptionPane.showMessageDialog(this,
+                log.toString(),
+                "Pipeline-Reset", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private static String formatTimestamp(String epochMs) {
+        if (epochMs == null || epochMs.isEmpty()) return "–";
+        try {
+            long ts = Long.parseLong(epochMs);
+            if (ts <= 0) return "–";
+            return TS_FORMAT.format(new Date(ts));
+        } catch (NumberFormatException e) {
+            return "–";
+        }
+    }
+
+    private static long parseLong(String s) {
+        if (s == null || s.isEmpty()) return 0;
+        try { return Long.parseLong(s); } catch (NumberFormatException e) { return 0; }
+    }
+
+    private void saveSettings() {
+        Map<String, String> settings = new LinkedHashMap<>();
+        settings.put("urlWhitelist", whitelistArea.getText());
+        settings.put("urlBlacklist", blacklistArea.getText());
+
+        // Cookie-Banner settings
+        String selectors = cookieSelectorsArea.getText().trim();
+        settings.put("cookieSelectors", selectors);
+        String script = cookieScriptArea.getText().trim();
+        settings.put("cookieDismissScript", script);
+
+        // Recherche settings
+        settings.put("historyNavigationEnabled", String.valueOf(historyNavigationCheckbox.isSelected()));
+        settings.put("maxParallelTabs", String.valueOf(maxParallelTabsSpinner.getValue()));
+        String settleSelected = (String) settleStrategyCombo.getSelectedItem();
+        String settleKey = "NORMAL";
+        long settleMs = 2000;
+        if (settleSelected != null && settleSelected.startsWith("FAST")) { settleKey = "FAST"; settleMs = 500; }
+        else if (settleSelected != null && settleSelected.startsWith("SLOW")) { settleKey = "SLOW"; settleMs = 5000; }
+        settings.put("settleStrategy", settleKey);
+
+        context.savePluginSettings(PLUGIN_KEY, settings);
+
+
+        // Apply Recherche system properties
+        System.setProperty("websearch.history.enabled", String.valueOf(historyNavigationCheckbox.isSelected()));
+        System.setProperty("websearch.crawl.maxTabs", String.valueOf(maxParallelTabsSpinner.getValue()));
+        System.setProperty("websearch.crawl.settleMs", String.valueOf(settleMs));
+
+        // Reload URL boundary checker with new settings
+        BrowserToolAdapter.reloadBoundaries(settings);
+
+        // Apply Cookie-Banner settings to CookieBannerDismisser
+        applyCookieBannerSettings(selectors, script);
+    }
+
+    /** Apply cookie-banner configuration from saved settings. */
+    public static void applyCookieBannerSettings(String selectors, String script) {
+        if (selectors != null && !selectors.isEmpty()) {
+            java.util.List<String> list = new java.util.ArrayList<>();
+            for (String line : selectors.split("\\n")) {
+                String trimmed = line.trim();
+                if (!trimmed.isEmpty() && !trimmed.startsWith("#")) {
+                    list.add(trimmed);
+                }
+            }
+            CookieBannerDismisser.setSelectors(list.isEmpty() ? null : list);
+        } else {
+            CookieBannerDismisser.setSelectors(null);
+        }
+        CookieBannerDismisser.setDismissScript(
+                script != null && !script.isEmpty() ? script : null);
+    }
+}
+

@@ -1,0 +1,136 @@
+package de.bund.zrb.ui;
+
+import de.bund.zrb.ui.filetab.DiffHighlighter;
+import de.bund.zrb.ui.filetab.event.*;
+import de.zrb.bund.api.SentenceTypeRegistry;
+import de.zrb.bund.newApi.sentence.SentenceDefinition;
+
+public class FileTabEventManager {
+
+    private final FileTabImpl fileTab;
+
+    public FileTabEventManager(FileTabImpl fileTab) {
+        this.fileTab = fileTab;
+    }
+
+    public void bindAll() {
+        fileTab.dispatcher.subscribe(SentenceTypeChangedEvent.class, event -> {
+            fileTab.model.setSentenceType(event.newType);
+
+            // Refresh outline to match the dropdown selection
+            fileTab.refreshOutline();
+
+            if (event.newType == null || event.newType.trim().isEmpty()) {
+                // Satzart/Dateityp wurde "abgewählt" → Reset rendering
+                fileTab.highlighter.clearHighlights(fileTab.getRawPane());
+                fileTab.highlighter.clearHighlights(fileTab.comparePanel.getOriginalTextArea());
+                fileTab.legendController.clearLegend();
+                fileTab.resetFileTypeRendering();
+                return;
+            }
+
+            // Check if this is a file type definition
+            java.util.Optional<SentenceDefinition> optDef = getRegistry().findDefinition(event.newType);
+            if (optDef.isPresent() && optDef.get().isFileType()) {
+                SentenceDefinition fileDef = optDef.get();
+                // File type selected → switch to file type rendering, clear sentence highlights
+                fileTab.highlighter.clearHighlights(fileTab.getRawPane());
+                fileTab.highlighter.clearHighlights(fileTab.comparePanel.getOriginalTextArea());
+                fileTab.legendController.clearLegend();
+
+                // Check if this file type has a syntaxStyle (programming language)
+                if (fileDef.getMeta() != null && fileDef.getMeta().hasSyntaxStyle()) {
+                    // Programming language → apply syntax highlighting directly
+                    fileTab.applySyntaxStyleRendering(fileDef.getMeta().getSyntaxStyle());
+                } else {
+                    // Document type (PDF, WORD, etc.) → use file type rendering
+                    fileTab.applyFileTypeRendering(event.newType);
+                }
+
+                // Binary file types need re-reading as bytes and ingestion-based rendering
+                boolean needsBinary = fileDef.getMeta() != null && fileDef.getMeta().isBinaryTransfer();
+                if (needsBinary) {
+                    fileTab.reloadAsBinary(event.newType);
+                }
+                return;
+            }
+
+            // Sentence type selected → apply sentence highlighting, reset file type rendering
+            fileTab.resetFileTypeRendering();
+            getRegistry().findDefinition(event.newType).ifPresent(def -> {
+                int schemaLines = def.getRowCount() != null ? def.getRowCount() : 1;
+                fileTab.highlighter.highlightFields(fileTab.getRawPane(), def.getFields(), schemaLines);
+                fileTab.legendController.setDefinition(def);
+                fileTab.legendController.updateLegendForCaret(0);
+                fileTab.highlighter.highlightFields(fileTab.comparePanel.getOriginalTextArea(), def.getFields(), schemaLines);
+            });
+        });
+
+        fileTab.dispatcher.subscribe(CaretMovedEvent.class, event -> {
+            fileTab.legendController.updateLegendForCaret(event.editorLine);
+        });
+
+        fileTab.dispatcher.subscribe(RegexFilterChangedEvent.class, event -> {
+            fileTab.filterCoordinator.applyFilter();
+            // For binary/rendered documents, also highlight in HTML pane
+            if (fileTab.isHtmlRendered()) {
+                fileTab.highlightFindMatches();
+            }
+        });
+
+        fileTab.dispatcher.subscribe(EditorContentChangedEvent.class, event -> {
+            if (!fileTab.model.isChanged()) {
+                fileTab.model.markChanged();
+                fileTab.updateTitle(); // 👈 direkte Methode auf FileTabImpl
+            }
+        });
+
+        fileTab.dispatcher.subscribe(AppendChangedEvent.class, event -> {
+            fileTab.model.setAppend(event.append);
+        });
+
+        fileTab.dispatcher.subscribe(CloseComparePanelEvent.class, event -> {
+            fileTab.saveDividerLocation();
+            DiffHighlighter.clearDiffHighlights(fileTab.getRawPane());
+            DiffHighlighter.clearDiffHighlights(fileTab.comparePanel.getOriginalTextArea());
+            fileTab.comparePanel.setVisible(false);
+            fileTab.setCompareButtonSelected(false);
+        });
+
+        fileTab.dispatcher.subscribe(ShowComparePanelEvent.class, event -> {
+            fileTab.setCompareButtonSelected(true);
+            fileTab.showComparePanel(); // 👈 zentrales Verhalten
+        });
+
+        fileTab.dispatcher.subscribe(UndoRequestedEvent.class, e -> fileTab.getRawPane().undoLastAction());
+        fileTab.dispatcher.subscribe(RedoRequestedEvent.class, e -> fileTab.getRawPane().redoLastAction());
+
+        fileTab.dispatcher.subscribe(EditorContentChangedEvent.class, event -> {
+            if(event.changed)
+            {
+                if (!fileTab.model.isChanged()) {
+                    fileTab.model.markChanged();
+                }
+            } else {
+                if (fileTab.model.isChanged()) {
+                    fileTab.model.resetChanged();
+                }
+            }
+
+            fileTab.updateTitle(); // 👈 Immer aufrufen
+        });
+
+    }
+
+    private SentenceTypeRegistry getRegistry() {
+        return fileTab.tabbedPaneManager.getMainframeContext().getSentenceTypeRegistry();
+    }
+
+
+    private boolean isRemoteResource() {
+        VirtualResource res = fileTab.getResource();
+        if (res == null) return false;
+        VirtualBackendType backend = res.getBackendType();
+        return backend == VirtualBackendType.FTP || backend == VirtualBackendType.NDV;
+    }
+}

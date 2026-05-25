@@ -1,0 +1,2069 @@
+package de.bund.zrb.ui;
+
+import de.bund.zrb.helper.ShortcutManager;
+import de.bund.zrb.login.LoginManager;
+import de.bund.zrb.mcp.FilterColumnTool;
+import de.bund.zrb.mcp.OpenFileTool;
+import de.bund.zrb.mcp.SetVariableTool;
+import de.bund.zrb.model.AiProvider;
+import de.bund.zrb.model.Settings;
+import de.bund.zrb.runtime.ExpressionRegistryImpl;
+import de.bund.zrb.runtime.PluginManager;
+import de.bund.zrb.runtime.SentenceTypeRegistryImpl;
+import de.bund.zrb.runtime.ToolRegistryImpl;
+import de.bund.zrb.service.*;
+import de.bund.zrb.ui.commands.*;
+import de.bund.zrb.helper.BookmarkHelper;
+import de.bund.zrb.helper.SettingsHelper;
+import de.bund.zrb.ui.commands.config.CommandRegistryImpl;
+import de.bund.zrb.ui.commands.config.MenuTreeBuilder;
+import de.bund.zrb.ui.commands.config.ShowShortcutConfigMenuCommand;
+import de.bund.zrb.ui.commands.sub.FocusSearchFieldCommand;
+import de.bund.zrb.ui.commands.sub.ShowComparePanelCommand;
+import de.bund.zrb.ui.toolbar.MainframeMateToolbarCommandRegistry;
+import de.bund.zrb.ui.lock.ApplicationLocker;
+import de.bund.zrb.ui.drawer.LeftDrawer;
+import de.bund.zrb.ui.drawer.RightDrawer;
+import de.bund.zrb.ui.file.DragAndDropImportHandler;
+import de.bund.zrb.runtime.VariableRegistryImpl;
+import de.bund.zrb.workflow.WorkflowRunnerImpl;
+import de.zrb.bund.api.*;
+import de.zrb.bund.newApi.McpService;
+import de.zrb.bund.newApi.ToolRegistry;
+import de.zrb.bund.newApi.ui.AppTab;
+import de.zrb.bund.newApi.ui.FileTab;
+import de.zrb.bund.newApi.workflow.WorkflowRunner;
+
+import de.example.toolbarkit.command.ToolbarCommandRegistry;
+import de.example.toolbarkit.config.JsonToolbarConfigRepository;
+import de.example.toolbarkit.config.ToolbarConfigRepository;
+import de.example.toolbarkit.toolbar.ConfigurableCommandToolbar;
+
+import javax.annotation.Nullable;
+import javax.swing.*;
+import javax.swing.plaf.FontUIResource;
+import java.awt.*;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+import java.io.File;
+import java.nio.charset.Charset;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.*;
+import java.util.List;
+import java.util.stream.Collectors;
+
+import static de.bund.zrb.util.StringUtil.tryParseInt;
+
+public class MainFrame extends JFrame implements MainframeContext {
+    private final ApplicationLocker locker;
+    private TabbedPaneManager tabManager;
+    private ConfigurableCommandToolbar actionToolbar;
+    private LeftDrawer leftDrawer;
+    private RightDrawer rightDrawer;
+    private volatile ChatManager chatManager;
+    private JSplitPane rightSplitPane;
+    private JSplitPane leftSplitPane;
+    private final ToolRegistry toolRegistry;
+    private final VariableRegistryImpl variableRegistryImpl;
+    private final McpService mcpService;
+    private final WorkflowRunner workflowRunner;
+    private final de.bund.zrb.service.McpChatEventBridge chatEventBridge;
+    private DragAndDropImportHandler importHandler;
+    private de.bund.zrb.service.RelationsService relationsService;
+    private final de.bund.zrb.bot.DefaultAgentRegistry agentRegistry;
+    private volatile de.bund.zrb.browser.Wd4jBrowserService browserService;
+
+    // Builds the menu
+    private void registerCoreCommands() {
+        CommandRegistryImpl.register(new SaveMenuCommand(tabManager));
+        CommandRegistryImpl.register(new CloseTabMenuCommand(tabManager));
+        CommandRegistryImpl.register(new SaveAndCloseMenuCommand(tabManager));
+        CommandRegistryImpl.register(new ConnectMenuCommand(this, tabManager));
+        CommandRegistryImpl.register(new ConnectLocalMenuCommand(this, tabManager));
+        CommandRegistryImpl.register(new ConnectNdvMenuCommand(this, tabManager));
+        CommandRegistryImpl.register(new ConnectMailMenuCommand(this, tabManager));
+        CommandRegistryImpl.register(new OpenWebMenuCommand(tabManager));
+        CommandRegistryImpl.register(new OpenConfluenceMenuCommand(tabManager));
+        CommandRegistryImpl.register(new OpenCacheMenuCommand(this, tabManager));
+        CommandRegistryImpl.register(new OpenBetaViewMenuCommand(this, tabManager));
+        CommandRegistryImpl.register(new OpenBrowserMenuCommand(this, tabManager));
+        CommandRegistryImpl.register(new OpenSharePointMenuCommand(this, tabManager));
+        CommandRegistryImpl.register(new Connect3270MenuCommand(this, tabManager));
+        CommandRegistryImpl.register(new ConnectJesMenuCommand(this, tabManager));
+        CommandRegistryImpl.register(new OpenDosMenuCommand(this, tabManager));
+        CommandRegistryImpl.register(new ExitMenuCommand());
+        CommandRegistryImpl.register(new ShowSettingsDialogMenuCommand(this));
+        CommandRegistryImpl.register(new ShowSentenceDialogMenuCommand(this));
+        CommandRegistryImpl.register(new ShowExpressionEditorMenuCommand(this));
+        CommandRegistryImpl.register(new ShowToolDialogMenuCommand(this));
+        CommandRegistryImpl.register(new ShowFeatureDialogMenuCommand(this));
+        CommandRegistryImpl.register(new ShowAboutDialogMenuCommand(this));
+        CommandRegistryImpl.register(new ShowPasswordsMenuCommand(this));
+        CommandRegistryImpl.register(new ShowShortcutConfigMenuCommand(this));
+        CommandRegistryImpl.register(new ShowIndexingControlPanelMenuCommand(this));
+
+        // Advanced
+        CommandRegistryImpl.register(new BookmarkMenuCommand(this));
+
+        // Video Recording
+        CommandRegistryImpl.register(new ToggleVideoRecordCommand(this));
+
+        // View (drawer visibility — also shown in the "Ansicht" menu)
+        CommandRegistryImpl.register(new ToggleLeftDrawerMenuCommand(this));
+        CommandRegistryImpl.register(new ToggleRightDrawerMenuCommand(this));
+
+        // Sub Commands
+        CommandRegistryImpl.register(new ShowComparePanelCommand(this));
+        CommandRegistryImpl.register(new FocusSearchFieldCommand(this));
+        CommandRegistryImpl.register(new SearchMenuCommand(this, tabManager));
+
+        // Navigation
+        CommandRegistryImpl.register(new NavigateBackMenuCommand(tabManager));
+        CommandRegistryImpl.register(new NavigateForwardMenuCommand(tabManager));
+    }
+
+    // MCP Tools
+    private void registerTools() {
+        toolRegistry.registerTool(new OpenFileTool(this));
+        toolRegistry.registerTool(new de.bund.zrb.mcp.ReadFileTool(this));
+        toolRegistry.registerTool(new de.bund.zrb.mcp.SearchFileTool(this));
+        toolRegistry.registerTool(new de.bund.zrb.mcp.StatPathTool(this));
+        toolRegistry.registerTool(new de.bund.zrb.mcp.GrepSearchTool(this));
+        toolRegistry.registerTool(new de.bund.zrb.mcp.ClockTimerTool(this));
+        toolRegistry.registerTool(new FilterColumnTool(this));
+        toolRegistry.registerTool(new SetVariableTool(this));
+
+        // Attachment RAG Tools
+        toolRegistry.registerTool(new de.bund.zrb.mcp.ListAttachmentsTool(this));
+        toolRegistry.registerTool(new de.bund.zrb.mcp.SearchAttachmentsTool(this));
+        toolRegistry.registerTool(new de.bund.zrb.mcp.ReadChunksTool(this));
+        toolRegistry.registerTool(new de.bund.zrb.mcp.ReadDocumentWindowTool(this));
+
+        // Global Search Tool (searches Lucene index across all sources)
+        toolRegistry.registerTool(new de.bund.zrb.mcp.SearchIndexTool(this));
+
+        // Dependency Graph Search Tool (searches Natural dependency index)
+        toolRegistry.registerTool(new de.bund.zrb.mcp.SearchDependencyTool());
+
+        // Natural Analysis Tool (live dependency + call hierarchy analysis for AI)
+        toolRegistry.registerTool(new de.bund.zrb.mcp.AnalyzeNaturalTool());
+    }
+
+    @Override
+    public Map<String, String> loadPluginSettings(String pluginKey) {
+        Settings settings = SettingsHelper.load();
+        return settings.pluginSettings.computeIfAbsent(pluginKey, k -> new LinkedHashMap<>());
+    }
+
+    @Override
+    public void savePluginSettings(String pluginKey, Map<String, String> newValues) {
+        Settings settings = SettingsHelper.load();
+        settings.pluginSettings.put(pluginKey, new LinkedHashMap<>(newValues));
+        SettingsHelper.save(settings);
+    }
+    
+    public MainFrame() {
+        locker = new ApplicationLocker(this, LoginManager.getInstance());
+        LoginManager.getInstance().setCredentialsProvider(locker); // ← locker übernimmt Login
+        locker.start();
+        this.toolRegistry = ToolRegistryImpl.getInstance();
+        this.variableRegistryImpl = VariableRegistryImpl.getInstance();
+        this.chatEventBridge = new de.bund.zrb.service.McpChatEventBridge();
+        this.agentRegistry = new de.bund.zrb.bot.DefaultAgentRegistry();
+        this.browserService = new de.bund.zrb.browser.Wd4jBrowserService();
+        this.mcpService = new McpServiceImpl(toolRegistry, chatEventBridge);
+        this.workflowRunner = new WorkflowRunnerImpl(this, mcpService, getExpressionRegistry());
+        registerTools();
+
+
+        setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                // Close all open tabs — this calls onClose() / shutdownBrowser()
+                // on BrowserConnectionTabs, ensuring browser processes are killed
+                if (tabManager != null) {
+                    try { tabManager.closeAllTabs(); } catch (Exception ignored) {}
+                }
+                // Close shared browser session (used by plugins)
+                if (browserService != null) {
+                    try { browserService.closeSession(); } catch (Exception ignored) {}
+                }
+                de.bund.zrb.runtime.PluginManager.shutdownAll();
+                de.bund.zrb.mcp.registry.McpServerManager.getInstance().stopAll();
+                dispose(); // sauber beenden
+                System.exit(0);
+            }
+        });
+
+        // Sprache explizit setzen (nur zu Demo-Zwecken):
+        Locale.setDefault(Locale.GERMAN); // oder Locale.ENGLISH
+        chatManager = getAiService();
+
+        setTitle("MainframeMate");
+
+        // Apply branding icons to this window (multi-size for OS/taskbar selection)
+        java.util.List<java.awt.Image> brandIcons = de.bund.zrb.ui.branding.IconThemeInstaller.getAppIcons();
+        if (!brandIcons.isEmpty()) {
+            setIconImages(brandIcons);
+        }
+
+        setCompatibleFontIfNecessary();
+        setSize(1000, 700);
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setLocationRelativeTo(null);
+
+        restoreWindowState();
+        initUI();
+
+        // Start enabled MCP servers (after plugins have registered via initUI → PluginManager)
+        de.bund.zrb.mcp.registry.McpServerManager.getInstance().startEnabledServers();
+    }
+
+    private ChatManager getAiService() {
+        Settings settings = SettingsHelper.load();
+        String providerName = settings.aiConfig.getOrDefault("provider", "DISABLED");
+
+        AiProvider provider;
+        try {
+            provider = AiProvider.valueOf(providerName);
+        } catch (IllegalArgumentException ex) {
+            provider = AiProvider.DISABLED;
+        }
+
+        switch (provider) {
+            case OLLAMA:
+                return new OllamaChatManager(); // verwendet intern settings.aiConfig
+            case CLOUD:
+                return new CloudChatManager();
+            case PRIVATE_CLOUD:
+                // Self-hosted OpenAI-compatible endpoint (mode "compatible" or "custom")
+                // — reuses CloudChatManager. AiSettingsPanel derives cloud.* keys on save.
+                return new CloudChatManager();
+            case LOCAL_AI:
+                return new LocalAiChatManager(); // analog auf settings.aiConfig zugreifen
+            case LLAMA_CPP_SERVER:
+                return new LlamaCppChatManager();
+            case CUSTOM:
+                return new CustomChatManager(); // selbstgehosteter Server mit erweiterten Optionen
+            case ONNX_RUNTIME:
+                return new OnnxChatManager(new java.util.function.Supplier<Map<String, String>>() {
+                    @Override public Map<String, String> get() { return SettingsHelper.load().aiConfig; }
+                });   // lokale Inferenz via ONNX Runtime (Phi-3/4)
+            default:
+                return null; // DISABLED oder unbekannt
+        }
+    }
+
+    /**
+     * Setze den Font auf "Segoe UI", wenn verfügbar.
+     */
+    private void setCompatibleFontIfNecessary() {
+        String unicodeTest = "ÄÖÜß 📁";
+        Font testFont = UIManager.getFont("Label.font");
+
+        boolean unicodeOk = testFont.canDisplayUpTo(unicodeTest) == -1;
+
+        System.out.println("Font: " + testFont.getFontName() + " | Unicode OK: " + unicodeOk);
+        System.out.println("file.encoding: " + System.getProperty("file.encoding"));
+        System.out.println("defaultCharset: " + Charset.defaultCharset());
+
+        if (!unicodeOk) {
+            System.out.println("⚠️ Unicode-Darstellung unvollständig – versuche Korrektur...");
+
+            if (isFontAvailable("Segoe UI")) {
+                for (Enumeration<Object> keys = UIManager.getDefaults().keys(); keys.hasMoreElements(); ) {
+                    Object key = keys.nextElement();
+                    Object value = UIManager.get(key);
+                    if (value instanceof FontUIResource) {
+                        UIManager.put(key, new FontUIResource("Segoe UI", Font.PLAIN, 12));
+                    }
+                }
+                System.out.println("→ Font auf 'Segoe UI' gesetzt.");
+            }
+
+            // Benutzer-Hinweis anzeigen
+            JOptionPane.showMessageDialog(this,
+                    "Einige Unicode-Zeichen (z. B. 📁 oder ÄÖÜ) werden auf deinem System nicht korrekt dargestellt.\n\n" +
+                            "Die Darstellung wurde automatisch angepasst.\n\n" +
+                            "💡 Hinweis: Du kannst die App mit folgendem Startparameter ausführen,\n" +
+                            "um das Problem dauerhaft zu vermeiden:\n\n" +
+                            "    -Dfile.encoding=UTF-8\n\n" +
+                            "Beispiel:\n" +
+                            "    java -Dfile.encoding=UTF-8 -jar MainframeMate.jar",
+                    "Darstellungsproblem erkannt", JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    private void initUI() {
+        tabManager = new TabbedPaneManager(this);
+
+        // 1. Command Registry
+        registerCoreCommands();
+
+        // 2. Plugins initialisieren (inkl. Command-Registrierung)
+        PluginManager.initializePlugins(this);
+
+        // 3. Layout
+        setLayout(new BorderLayout());
+
+        // Toolbar ganz oben (nach Plugin-Init, damit Plugin-Commands verfügbar sind)
+        ToolbarCommandRegistry toolbarRegistry = new MainframeMateToolbarCommandRegistry();
+        Path toolbarConfigFile = Paths.get(SettingsHelper.getSettingsFolder().getAbsolutePath(), "toolbar.json");
+        ToolbarConfigRepository toolbarRepo = new JsonToolbarConfigRepository(toolbarConfigFile);
+        actionToolbar = new ConfigurableCommandToolbar(toolbarRegistry, toolbarRepo);
+        add(actionToolbar, BorderLayout.NORTH);
+
+        // Register toolbar config command (needs actionToolbar reference)
+        CommandRegistryImpl.register(new ShowToolbarConfigMenuCommand(actionToolbar));
+        actionToolbar.reload(); // rebuild so the hardcoded gear button is replaced by the command
+
+        // 4. Menübaum aufbauen (nachdem alle Commands + Toolbar da sind!)
+        JMenuBar builtMenuBar = MenuTreeBuilder.buildMenuBar();
+        final MenuBarSearchField menuSearchField = new MenuBarSearchField(tabManager);
+        final de.bund.zrb.ui.mail.MailMarqueePanel mailMarquee = new de.bund.zrb.ui.mail.MailMarqueePanel();
+
+        // ── Custom JMenuBar: true-center search field ───────────
+        // doLayout() positions the search field at the absolute center of the
+        // bar.  If the menus are too wide the field shifts right so it never
+        // overlaps a menu.  The marquee fills the remaining space to the right.
+        final JMenuBar menuBar = new JMenuBar() {
+            @Override
+            public void doLayout() {
+                super.doLayout();
+                int barW = getWidth();
+                int barH = getHeight();
+                if (barW <= 0) return;
+
+                int fieldW = Math.min(360, Math.max(220, barW / 4));
+                int fieldH = barH - 4;
+
+                // Find where the last real menu ends
+                int menusEnd = 0;
+                for (int i = 0; i < getComponentCount(); i++) {
+                    Component c = getComponent(i);
+                    if (c == menuSearchField || c == mailMarquee || c instanceof Box.Filler) continue;
+                    if (c.isVisible()) {
+                        menusEnd = Math.max(menusEnd, c.getX() + c.getWidth());
+                    }
+                }
+
+                int centeredX = (barW - fieldW) / 2;
+                int x = Math.max(centeredX, menusEnd + 16);
+                x = Math.min(x, barW - fieldW - 4);
+                int y = Math.max(2, (barH - fieldH) / 2);
+                menuSearchField.setBounds(x, y, fieldW, fieldH);
+
+                // Marquee: fill space right of search field → right edge
+                int marqueeX = x + fieldW + 8;
+                int marqueeW = barW - marqueeX - 4;
+                if (marqueeW > 30) {
+                    mailMarquee.setBounds(marqueeX, y, marqueeW, fieldH);
+                    mailMarquee.setVisible(true);
+                } else {
+                    mailMarquee.setVisible(false);
+                }
+            }
+        };
+
+        // Transfer menus from built bar → custom bar
+        List<Component> menus = new ArrayList<Component>();
+        for (Component c : builtMenuBar.getComponents()) menus.add(c);
+        for (Component c : menus) menuBar.add(c);
+
+        menuBar.add(Box.createHorizontalGlue());
+        menuBar.add(menuSearchField);
+        menuBar.add(mailMarquee);
+
+        setJMenuBar(menuBar);
+
+        // Wire mail notification marquee
+        de.bund.zrb.ui.mail.MailNotificationBridge mailNotifBridge =
+                new de.bund.zrb.ui.mail.MailNotificationBridge(mailMarquee);
+        mailNotifBridge.install();
+
+        // Initialisiere die mittlere Komponente
+        Component tabContent = tabManager.getComponent();
+
+        // Rechts: ChatDrawer mit SplitPane
+        Component withChat = initChatDrawer(tabContent);
+
+        // Links: BookmarkDrawer mit SplitPane
+        Component withBookmarks = initBookmarkDrawer(withChat);
+
+        // Das ist dann der eigentliche Inhalt
+        add(withBookmarks, BorderLayout.CENTER);
+
+        // After both drawers have registered their tool tabs + named panes, apply the
+        // previously persisted layout (cross-pane moves + intra-pane order).
+        de.bund.zrb.ui.util.ToolTabRegistry.applyPersistedLayout();
+
+        // Now that LeftDrawer + RightDrawer have registered their tool tabs in
+        // ToolTabRegistry, we can build the dynamic "Ansicht" menu that lets the
+        // user toggle individual tool tabs on/off (persisted across restarts).
+        installViewMenu(menuBar);
+
+        initDragAndDropImport();
+        intiShortcuts();
+
+        // Register live settings listener – applies changes without restart
+        SettingsHelper.addChangeListener(this::onSettingsChanged);
+    }
+
+    /** Called whenever settings are saved – applies changes to running UI components. */
+    private void onSettingsChanged(Settings s) {
+        SwingUtilities.invokeLater(() -> {
+            // 1. Update editor font/margin on all open RSyntaxTextArea instances
+            Font editorFont = new Font(s.editorFont, Font.PLAIN, s.editorFontSize);
+            applyFontRecursively(tabManager.getComponent(), editorFont, s.marginColumn);
+
+            // 2. Re-apply log levels
+            de.bund.zrb.util.AppLogger.applySettings();
+
+            // 3. Apply global UI theme
+            de.bund.zrb.ui.theme.ThemeManager.getInstance().applyTheme(s.lockStyle);
+        });
+    }
+
+    /** Recursively find all RSyntaxTextArea components and apply font + margin settings. */
+    private void applyFontRecursively(Component root, Font font, int marginColumn) {
+        if (root instanceof org.fife.ui.rsyntaxtextarea.RSyntaxTextArea) {
+            org.fife.ui.rsyntaxtextarea.RSyntaxTextArea area = (org.fife.ui.rsyntaxtextarea.RSyntaxTextArea) root;
+            area.setFont(font);
+            if (marginColumn > 0) {
+                area.setMarginLineEnabled(true);
+                area.setMarginLinePosition(marginColumn);
+            } else {
+                area.setMarginLineEnabled(false);
+            }
+        }
+        if (root instanceof Container) {
+            for (Component child : ((Container) root).getComponents()) {
+                applyFontRecursively(child, font, marginColumn);
+            }
+        }
+    }
+
+    private void intiShortcuts() {
+        ShortcutManager.loadShortcuts();
+        ShortcutManager.registerGlobalShortcuts(getRootPane());
+    }
+
+    /**
+     * Build the dynamic "Ansicht" (View) menu from the {@link de.bund.zrb.ui.util.ToolTabRegistry}.
+     * Each registered tool tab becomes a {@link JCheckBoxMenuItem} that toggles its
+     * visibility (persisted across restarts via the registry).
+     *
+     * <p>The menu is inserted into {@code bar} at the canonical "view" slot — i.e.
+     * before any later menu (extras / plugin / settings / help) and right after the
+     * existing menus (file / connection / navigate / edit). If a previous run already
+     * created an "Ansicht" menu we replace it so a fresh registry snapshot is shown.
+     */
+    private void installViewMenu(JMenuBar bar) {
+        if (bar == null) return;
+        final java.util.ResourceBundle menuBundle =
+                java.util.ResourceBundle.getBundle("menu", java.util.Locale.getDefault());
+        String viewLabel;
+        try { viewLabel = menuBundle.getString("view"); }
+        catch (java.util.MissingResourceException ex) { viewLabel = "Ansicht"; }
+
+        // Remove any pre-existing "Ansicht" menu so we can rebuild from the live registry.
+        for (int i = bar.getMenuCount() - 1; i >= 0; i--) {
+            JMenu m = bar.getMenu(i);
+            if (m != null && viewLabel.equals(m.getText())) {
+                bar.remove(m);
+            }
+        }
+
+        final JMenu viewMenu = new JMenu(viewLabel);
+
+        Runnable rebuild = new Runnable() {
+            @Override
+            public void run() {
+                viewMenu.removeAll();
+
+                // ── Drawer visibility toggles ──────────────────────
+                final JCheckBoxMenuItem leftItem =
+                        new JCheckBoxMenuItem("\u25C0 Linke Seitenleiste", isLeftDrawerVisible());
+                leftItem.addActionListener(new java.awt.event.ActionListener() {
+                    @Override public void actionPerformed(java.awt.event.ActionEvent e) {
+                        setLeftDrawerVisible(leftItem.isSelected());
+                    }
+                });
+                de.bund.zrb.ui.commands.config.CommandRegistryImpl.getById("view.drawer.left")
+                        .ifPresent(c -> {
+                            javax.swing.KeyStroke ks = ShortcutManager.getKeyStrokeFor(c);
+                            if (ks != null) leftItem.setAccelerator(ks);
+                        });
+                viewMenu.add(leftItem);
+
+                final JCheckBoxMenuItem rightItem =
+                        new JCheckBoxMenuItem("\u25B6 Rechte Seitenleiste", isRightDrawerVisible());
+                rightItem.addActionListener(new java.awt.event.ActionListener() {
+                    @Override public void actionPerformed(java.awt.event.ActionEvent e) {
+                        setRightDrawerVisible(rightItem.isSelected());
+                    }
+                });
+                de.bund.zrb.ui.commands.config.CommandRegistryImpl.getById("view.drawer.right")
+                        .ifPresent(c -> {
+                            javax.swing.KeyStroke ks = ShortcutManager.getKeyStrokeFor(c);
+                            if (ks != null) rightItem.setAccelerator(ks);
+                        });
+                viewMenu.add(rightItem);
+
+                viewMenu.addSeparator();
+
+                // ── Tool-tab visibility toggles (from registry) ────
+                for (final de.bund.zrb.ui.util.ToolTabRegistry.Entry entry
+                        : de.bund.zrb.ui.util.ToolTabRegistry.getEntries()) {
+                    final JCheckBoxMenuItem item = new JCheckBoxMenuItem(entry.label, entry.isVisible());
+                    item.addActionListener(new java.awt.event.ActionListener() {
+                        @Override public void actionPerformed(java.awt.event.ActionEvent e) {
+                            de.bund.zrb.ui.util.ToolTabRegistry.setVisible(entry.key, item.isSelected());
+                        }
+                    });
+                    viewMenu.add(item);
+                }
+                viewMenu.revalidate();
+                viewMenu.repaint();
+            }
+        };
+        rebuild.run();
+        // Keep the menu in sync if visibility is toggled programmatically elsewhere.
+        de.bund.zrb.ui.util.ToolTabRegistry.addChangeListener(new Runnable() {
+            @Override public void run() {
+                SwingUtilities.invokeLater(rebuild);
+            }
+        });
+
+        // Insert at canonical position: after "edit", before "navigate"/extras/plugin/
+        // settings/help. We scan the existing menus and place it before the first menu
+        // whose label matches any of the "later" menu keys. If none are found, append
+        // at the end of the menu region (before the search glue).
+        java.util.List<String> laterLabels = new java.util.ArrayList<String>();
+        for (String key : new String[]{"navigate", "extras", "plugin", "settings", "help"}) {
+            try { laterLabels.add(menuBundle.getString(key)); }
+            catch (java.util.MissingResourceException ignored) { laterLabels.add(key); }
+        }
+        int insertAt = -1;
+        for (int i = 0; i < bar.getComponentCount(); i++) {
+            Component c = bar.getComponent(i);
+            if (c instanceof JMenu) {
+                String t = ((JMenu) c).getText();
+                if (t != null && laterLabels.contains(t)) {
+                    insertAt = i;
+                    break;
+                }
+            } else {
+                // Hit the glue / search field — stop scanning, insert here.
+                insertAt = i;
+                break;
+            }
+        }
+        if (insertAt < 0) bar.add(viewMenu); else bar.add(viewMenu, insertAt);
+        bar.revalidate();
+        bar.repaint();
+    }
+
+    private Component initChatDrawer(Component content) {
+        if (chatManager == null) {
+            System.err.println("⚠️ Kein ChatService verfügbar – Eingabe wird ignoriert");
+        }
+        rightDrawer = new RightDrawer(this, chatManager, toolRegistry, mcpService, chatEventBridge);
+
+        Settings settings = SettingsHelper.load();
+
+        // Restore persisted tab selection
+        rightDrawer.restoreApplicationState(settings.applicationState);
+
+        rightSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, content, rightDrawer);
+        int defaultDivider = content.getPreferredSize().width - 300;
+
+        String dividerValue = settings.applicationState.get("drawer.chat.divider");
+
+        int divider = tryParseInt(dividerValue, defaultDivider);
+        rightSplitPane.setDividerLocation(divider);
+        rightSplitPane.setResizeWeight(1.0);
+        rightSplitPane.setOneTouchExpandable(true);
+        return rightSplitPane;
+    }
+
+
+
+    private Component initBookmarkDrawer(Component content) {
+        leftDrawer = new LeftDrawer(this::openBookmark);
+
+        // Initialize RelationsService
+        Settings s = SettingsHelper.load();
+        relationsService = new de.bund.zrb.service.RelationsService(
+                Math.max(1, s.wikiPrefetchConcurrency));
+
+        // When user double-clicks a relation → open it as tab
+        leftDrawer.setOnRelationOpen(entry -> {
+            if ("WIKI_LINK".equals(entry.getType())) {
+                String targetPath = entry.getTargetPath(); // wiki://siteId/pageTitle
+                if (targetPath != null && targetPath.startsWith("wiki://")) {
+                    String rest = targetPath.substring("wiki://".length());
+                    int slash = rest.indexOf('/');
+                    if (slash > 0) {
+                        String siteId = rest.substring(0, slash);
+                        String pageTitle = rest.substring(slash + 1);
+                        openWikiPageAsTab(siteId, pageTitle);
+                    }
+                }
+            } else if ("JCL_SYSFUNC".equals(entry.getType())) {
+                // Known system function → open Wikipedia article
+                openSystemFunctionInWiki(entry);
+            } else if (entry.getType() != null && entry.getType().startsWith("JCL_NAT_")) {
+                // Natural program from JCL — open via NDV with library mapping
+                openNaturalFromJcl(entry);
+            } else if (entry.getType() != null && entry.getType().startsWith("DEPENDENCY_")) {
+                // NDV dependency navigation: ndv://LIBRARY/OBJECTNAME
+                String targetPath = entry.getTargetPath();
+                if (targetPath != null && targetPath.startsWith("ndv://")) {
+                    openNdvDependencyTarget(targetPath);
+                }
+            } else if (entry.getType() != null && (
+                    "CALL_HIERARCHY".equals(entry.getType()) || "CALL_RECURSIVE".equals(entry.getType()))) {
+                // Call hierarchy entries may also have nat-jcl:// or ndv:// paths
+                String targetPath = entry.getTargetPath();
+                if (targetPath != null && targetPath.startsWith("nat-jcl://")) {
+                    openNaturalFromJcl(entry);
+                } else if (targetPath != null && targetPath.startsWith("ndv://")) {
+                    openNdvDependencyTarget(targetPath);
+                } else if (targetPath != null && targetPath.startsWith("sysfunc://")) {
+                    openSystemFunctionInWiki(entry);
+                } else if (targetPath != null
+                        && (targetPath.startsWith("http://") || targetPath.startsWith("https://"))) {
+                    openHttpUrl(targetPath);
+                }
+            } else if (entry.getType() != null && entry.getType().startsWith("CONFLUENCE_")) {
+                // Confluence ancestor / child / link / label — try to navigate to the
+                // page inside the running app (new reader tab) and fall back to
+                // opening the URL in the system browser.
+                String targetPath = entry.getTargetPath();
+                if (targetPath != null
+                        && (targetPath.startsWith("http://") || targetPath.startsWith("https://"))) {
+                    openHttpUrl(targetPath);
+                }
+            }
+        });
+
+        // When user single-clicks a relation with lineNumber → navigate in current editor
+        leftDrawer.setOnLineNavigate(lineNumber -> {
+            if (tabManager != null) {
+                java.util.Optional<AppTab> selectedOpt = tabManager.getSelectedTab();
+                if (selectedOpt.isPresent()) {
+                    tabManager.navigateToLineInTab(selectedOpt.get(), lineNumber);
+                }
+            }
+        });
+
+        // File-aware variant for hierarchy entries: open the referenced source file
+        // (when the line number belongs to a different file than the current editor)
+        // and jump to the line there.
+        leftDrawer.setOnLineNavigateInFile((sourceFilePath, lineNumber) -> {
+            if (tabManager == null || lineNumber == null || lineNumber <= 0) return;
+
+            // No source file given → navigate in currently selected tab (legacy behavior)
+            if (sourceFilePath == null || sourceFilePath.isEmpty()) {
+                java.util.Optional<AppTab> selectedOpt = tabManager.getSelectedTab();
+                if (selectedOpt.isPresent()) {
+                    tabManager.navigateToLineInTab(selectedOpt.get(), lineNumber);
+                }
+                return;
+            }
+
+            // Check whether the currently selected tab already shows this source file.
+            // If yes, just navigate locally — avoids reopening the file we're already in.
+            java.util.Optional<AppTab> selectedOpt = tabManager.getSelectedTab();
+            if (selectedOpt.isPresent()) {
+                AppTab tab = selectedOpt.get();
+                String currentPath = null;
+                try {
+                    java.lang.reflect.Method m = tab.getClass().getMethod("getPath");
+                    Object res = m.invoke(tab);
+                    if (res instanceof String) currentPath = (String) res;
+                } catch (Exception ignore) { /* tab may not expose getPath */ }
+                if (currentPath != null && pathsRefSameNdvObject(currentPath, sourceFilePath)) {
+                    tabManager.navigateToLineInTab(tab, lineNumber);
+                    return;
+                }
+            }
+
+            // Different file → open the NDV target and navigate to the line after load.
+            if (sourceFilePath.startsWith("ndv://")) {
+                String rest = sourceFilePath.substring("ndv://".length());
+                int slash = rest.indexOf('/');
+                if (slash > 0) {
+                    String library = rest.substring(0, slash);
+                    String objectName = rest.substring(slash + 1);
+                    tabManager.openNdvDependencyTarget(library, objectName, lineNumber);
+                }
+            }
+        });
+
+        leftSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftDrawer, content);
+        leftSplitPane.setOneTouchExpandable(true);
+
+        Settings settings = SettingsHelper.load();
+
+        // Restore persisted tab selection
+        leftDrawer.restoreApplicationState(settings.applicationState);
+
+        String dividerValue = settings.applicationState.get("drawer.bookmark.divider");
+
+        int divider = tryParseInt(dividerValue, 220);
+        leftSplitPane.setDividerLocation(divider);
+
+        return leftSplitPane;
+    }
+
+    private void initDragAndDropImport() {
+        this.importHandler = new DragAndDropImportHandler(this);
+        this.importHandler.init();
+    }
+
+    // Fix Win 11 Problem
+    private boolean isFontAvailable(String fontName) {
+        String[] availableFonts = GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames();
+        for (String name : availableFonts) {
+            if (name.equalsIgnoreCase(fontName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Plugin-Management
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    public TabbedPaneManager getTabManager() {
+        return tabManager;
+    }
+
+    @Override
+    public Optional<Bookmarkable> getSelectedTab() {
+        return tabManager.getSelectedTab()
+                .filter(tab -> tab instanceof Bookmarkable)
+                .map(tab -> (Bookmarkable) tab);
+    }
+
+
+    @Override
+    public FileTab createFile(String content, String sentenceType) {
+        VirtualResource res = new VirtualResource(de.bund.zrb.files.path.VirtualResourceRef.of(""),
+                VirtualResourceKind.FILE,
+                null,
+                true);
+        return getTabManager().openFileTab(res, content, sentenceType, null, false);
+    }
+
+    @Override
+    public AppTab openFileOrDirectory(String path) {
+        return openFileOrDirectory(path, null);
+    }
+
+    @Override
+    public AppTab openFileOrDirectory(String path, @Nullable String sentenceType) {
+        return openFileOrDirectory(path, null, null);
+    }
+
+    @Override
+    public AppTab openFileOrDirectory(String path, @Nullable String sentenceType, String searchPattern) {
+        return openFileOrDirectory(path, null, null, null);
+    }
+
+    @Override
+    public AppTab openFileOrDirectory(String path, @Nullable String sentenceType, String searchPattern, Boolean toCompare) {
+        if (path == null || path.isEmpty()) return null;
+
+        // Route search-* paths to search bookmark handler
+        if (path.startsWith(de.bund.zrb.model.BookmarkEntry.SEARCH_PREFIX)) {
+            de.bund.zrb.model.BookmarkEntry searchEntry = new de.bund.zrb.model.BookmarkEntry(null, path, false);
+            openSearchBookmark(searchEntry);
+            return null;
+        }
+
+        // Route mail:// paths to the mail-opening logic (same as bookmarks)
+        if (path.startsWith(de.bund.zrb.files.path.VirtualResourceRef.MAIL_PREFIX)) {
+            String mailPath = path.substring(de.bund.zrb.files.path.VirtualResourceRef.MAIL_PREFIX.length());
+            openMailBookmark(mailPath);
+            return null; // opened async via SwingWorker
+        }
+
+        // Route ndv:// paths to the NDV-opening logic (same as bookmarks)
+        if (path.startsWith(de.bund.zrb.files.path.VirtualResourceRef.NDV_PREFIX)) {
+            String ndvPath = path.substring(de.bund.zrb.files.path.VirtualResourceRef.NDV_PREFIX.length());
+            // Create a minimal BookmarkEntry with the raw path – openNdvFileBookmark
+            // handles the fallback (no NDV metadata) via resolvePath(rawPath)
+            de.bund.zrb.model.BookmarkEntry ndvEntry = new de.bund.zrb.model.BookmarkEntry();
+            ndvEntry.path = de.bund.zrb.model.BookmarkEntry.PREFIX_NDV + ndvPath;
+            ndvEntry.resourceKind = "FILE";
+            openNdvFileBookmark(ndvEntry);
+            return null; // opened async
+        }
+
+        // Route sp:// paths to SharePoint
+        if (path.startsWith(de.bund.zrb.model.BookmarkEntry.PREFIX_SHAREPOINT)) {
+            String spPath = path.substring(de.bund.zrb.model.BookmarkEntry.PREFIX_SHAREPOINT.length());
+            openSharePointBookmark(spPath);
+            return null;
+        }
+
+        // Route confluence:// paths to Confluence handler
+        if (path.startsWith(de.bund.zrb.model.BookmarkEntry.PREFIX_CONFLUENCE)) {
+            String confPath = path.substring(de.bund.zrb.model.BookmarkEntry.PREFIX_CONFLUENCE.length());
+            openConfluenceBookmark(confPath);
+            return null;
+        }
+
+        // Route wiki:// paths to Wiki handler
+        if (path.startsWith(de.bund.zrb.model.BookmarkEntry.PREFIX_WIKI)) {
+            String wikiPath = path.substring(de.bund.zrb.model.BookmarkEntry.PREFIX_WIKI.length());
+            openWikiBookmark(wikiPath);
+            return null;
+        }
+
+        return new VirtualResourceOpener(tabManager)
+                .open(path, sentenceType, searchPattern, toCompare);
+    }
+
+    /**
+     * Open a bookmark – routes to the correct backend based on the bookmark's protocol prefix.
+     * Search bookmarks (path starts with "search-") open the connection tab with the query pre-filled.
+     */
+    private void openBookmark(de.bund.zrb.model.BookmarkEntry entry) {
+        if (entry == null || entry.path == null) return;
+
+        // ── Search bookmarks ────────────────────────────────────
+        if (entry.isSearch()) {
+            openSearchBookmark(entry);
+            return;
+        }
+
+        String backend = entry.getBackendType();
+        String rawPath = entry.getRawPath();
+        boolean isFile = !"DIRECTORY".equals(entry.resourceKind); // bookmarks from FileTabs are always files
+
+        switch (backend) {
+            case "FTP":
+                // Use ftp: prefix so VirtualResourceResolver routes it to FTP
+                // forceFile=true skips the list() probe that misclassifies MVS members as directories
+                new VirtualResourceOpener(tabManager)
+                        .open("ftp:" + rawPath, null, null, null, isFile);
+                break;
+            case "NDV":
+                if ("DIRECTORY".equals(entry.resourceKind)) {
+                    openNdvDirectoryBookmark(rawPath);
+                } else {
+                    openNdvFileBookmark(entry);
+                }
+                break;
+            case "MAIL":
+                openMailBookmark(rawPath);
+                break;
+            case "BETAVIEW":
+                // BetaView bookmarks: open as read-only file tab
+                tabManager.openFileTab(
+                        new VirtualResource(null, VirtualResourceKind.FILE, entry.path,
+                                VirtualBackendType.BETAVIEW, null, null),
+                        "[BetaView Dokument]\nLaden...", null, null, null);
+                break;
+            case "TN3270":
+                openTn3270Bookmark(entry);
+                break;
+            case "BROWSER":
+                openBrowserBookmark(rawPath);
+                break;
+            case "SHAREPOINT":
+                openSharePointBookmark(rawPath);
+                break;
+            case "CONFLUENCE":
+                openConfluenceBookmark(rawPath);
+                break;
+            case "WIKI":
+                openWikiBookmark(rawPath);
+                break;
+            default:
+                // LOCAL — route through openFileOrDirectory so that legacy bookmarks
+                // with nested prefixes (e.g. "local://wiki://…") are correctly dispatched.
+                openFileOrDirectory(rawPath);
+                break;
+        }
+    }
+
+    /**
+     * Open a Confluence bookmark.
+     * rawPath format: "&lt;baseUrl&gt;" (connection) or "&lt;baseUrl&gt;/page/&lt;pageId&gt;" (reader).
+     * Reuses an existing ConfluenceConnectionTab if present, otherwise opens a new one.
+     */
+    private void openConfluenceBookmark(String rawPath) {
+        // Try to find an existing ConfluenceConnectionTab
+        ConfluenceConnectionTab existingTab = tabManager.findTabOfType(ConfluenceConnectionTab.class);
+        if (existingTab != null) {
+            tabManager.selectTab(existingTab);
+            // If the bookmark points to a specific page, open it
+            String pageId = extractConfluencePageId(rawPath);
+            if (pageId != null) {
+                existingTab.openPageByIdAsReaderTab(pageId);
+            }
+            return;
+        }
+
+        // No existing tab — invoke the connection command to create one
+        java.util.Optional<de.zrb.bund.api.MenuCommand> cmd =
+                de.bund.zrb.ui.commands.config.CommandRegistryImpl.getById("connection.confluence");
+        if (cmd.isPresent()) {
+            cmd.get().perform();
+            // After the command opens a tab, try to navigate to the specific page
+            String pageId = extractConfluencePageId(rawPath);
+            if (pageId != null) {
+                // Give the tab a moment to initialise, then navigate
+                SwingUtilities.invokeLater(() -> {
+                    ConfluenceConnectionTab newTab = tabManager.findTabOfType(ConfluenceConnectionTab.class);
+                    if (newTab != null) {
+                        newTab.openPageByIdAsReaderTab(pageId);
+                    }
+                });
+            }
+        }
+    }
+
+    /** Extract a Confluence page ID from a bookmark rawPath like "https://host/page/12345". */
+    private static String extractConfluencePageId(String rawPath) {
+        if (rawPath == null) return null;
+        int idx = rawPath.indexOf("/page/");
+        if (idx >= 0) {
+            return rawPath.substring(idx + "/page/".length());
+        }
+        return null;
+    }
+
+    /**
+     * Open a Wiki bookmark.
+     * rawPath format: "" (connection), or "&lt;siteId&gt;/&lt;pageTitle&gt;" (page).
+     * Reuses an existing WikiConnectionTab if present, otherwise opens a new one.
+     */
+    private void openWikiBookmark(String rawPath) {
+        // Strip residual wiki:// prefix (legacy bookmarks may have had double prefix)
+        while (rawPath != null && rawPath.startsWith(de.bund.zrb.model.BookmarkEntry.PREFIX_WIKI)) {
+            rawPath = rawPath.substring(de.bund.zrb.model.BookmarkEntry.PREFIX_WIKI.length());
+        }
+
+        // Try to find an existing WikiConnectionTab
+        de.bund.zrb.wiki.ui.WikiConnectionTab existingTab =
+                tabManager.findTabOfType(de.bund.zrb.wiki.ui.WikiConnectionTab.class);
+        if (existingTab != null) {
+            tabManager.selectTab(existingTab);
+            // If the bookmark points to a specific page, open it directly as reader tab
+            String siteId = extractWikiSiteId(rawPath);
+            String pageTitle = extractWikiPageTitle(rawPath);
+            if (pageTitle != null && siteId != null) {
+                existingTab.openPageExternally(siteId, pageTitle);
+            } else if (pageTitle != null) {
+                existingTab.searchFor(pageTitle);
+            }
+            return;
+        }
+
+        // No existing tab — invoke the connection command to create one
+        java.util.Optional<de.zrb.bund.api.MenuCommand> cmd =
+                de.bund.zrb.ui.commands.config.CommandRegistryImpl.getById("connection.wiki");
+        if (cmd.isPresent()) {
+            cmd.get().perform();
+            // After the command opens a tab, try to open the specific page
+            String siteId = extractWikiSiteId(rawPath);
+            String pageTitle = extractWikiPageTitle(rawPath);
+            if (pageTitle != null) {
+                SwingUtilities.invokeLater(() -> {
+                    de.bund.zrb.wiki.ui.WikiConnectionTab newTab =
+                            tabManager.findTabOfType(de.bund.zrb.wiki.ui.WikiConnectionTab.class);
+                    if (newTab != null) {
+                        if (siteId != null) {
+                            newTab.openPageExternally(siteId, pageTitle);
+                        } else {
+                            newTab.searchFor(pageTitle);
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    /** Extract wiki site id from a bookmark rawPath like "siteId/PageTitle". */
+    private static String extractWikiSiteId(String rawPath) {
+        if (rawPath == null || rawPath.isEmpty()) return null;
+        int slash = rawPath.indexOf('/');
+        if (slash > 0) {
+            return rawPath.substring(0, slash);
+        }
+        return null;
+    }
+
+    /** Extract a wiki page title from a bookmark rawPath like "siteId/PageTitle". */
+    private static String extractWikiPageTitle(String rawPath) {
+        if (rawPath == null || rawPath.isEmpty()) return null;
+        int slash = rawPath.indexOf('/');
+        if (slash >= 0 && slash < rawPath.length() - 1) {
+            return rawPath.substring(slash + 1);
+        }
+        return null;
+    }
+
+    /**
+     * Open a search bookmark.
+     * The search query is stored in the raw path, the backend type determines which connection tab to target.
+     */
+    private void openSearchBookmark(de.bund.zrb.model.BookmarkEntry entry) {
+        String backend = entry.getBackendType();
+        String query = entry.getSearchQuery();
+        if (query == null || query.isEmpty()) return;
+
+        switch (backend) {
+            case "WIKI":
+                openWikiSearchBookmark(query);
+                break;
+            case "CONFLUENCE":
+                openConfluenceSearchBookmark(query);
+                break;
+            default:
+                // For other backends, fall back to the global SearchTab
+                de.bund.zrb.ui.search.SearchTab searchTab =
+                        new de.bund.zrb.ui.search.SearchTab(tabManager);
+                tabManager.addTab(searchTab);
+                searchTab.searchFor(query);
+                break;
+        }
+    }
+
+    /** Open a wiki search bookmark — reuses or creates a WikiConnectionTab and triggers search. */
+    private void openWikiSearchBookmark(String query) {
+        de.bund.zrb.wiki.ui.WikiConnectionTab existingTab =
+                tabManager.findTabOfType(de.bund.zrb.wiki.ui.WikiConnectionTab.class);
+        if (existingTab != null) {
+            tabManager.selectTab(existingTab);
+            existingTab.searchFor(query);
+            return;
+        }
+        // Create new tab via command
+        java.util.Optional<de.zrb.bund.api.MenuCommand> cmd =
+                de.bund.zrb.ui.commands.config.CommandRegistryImpl.getById("connection.wiki");
+        if (cmd.isPresent()) {
+            cmd.get().perform();
+            SwingUtilities.invokeLater(() -> {
+                de.bund.zrb.wiki.ui.WikiConnectionTab newTab =
+                        tabManager.findTabOfType(de.bund.zrb.wiki.ui.WikiConnectionTab.class);
+                if (newTab != null) {
+                    newTab.searchFor(query);
+                }
+            });
+        }
+    }
+
+    /** Open a confluence search bookmark — reuses or creates a ConfluenceConnectionTab and triggers search. */
+    private void openConfluenceSearchBookmark(String query) {
+        ConfluenceConnectionTab existingTab = tabManager.findTabOfType(ConfluenceConnectionTab.class);
+        if (existingTab != null) {
+            tabManager.selectTab(existingTab);
+            existingTab.searchFor(query);
+            return;
+        }
+        // Create new tab via command
+        java.util.Optional<de.zrb.bund.api.MenuCommand> cmd =
+                de.bund.zrb.ui.commands.config.CommandRegistryImpl.getById("connection.confluence");
+        if (cmd.isPresent()) {
+            cmd.get().perform();
+            SwingUtilities.invokeLater(() -> {
+                ConfluenceConnectionTab newTab = tabManager.findTabOfType(ConfluenceConnectionTab.class);
+                if (newTab != null) {
+                    newTab.searchFor(query);
+                }
+            });
+        }
+    }
+
+    /**
+     * Open a browser bookmark. Navigates an existing BrowserConnectionTab to the URL,
+     * or opens a new one via the OpenBrowserMenuCommand.
+     */
+    private void openBrowserBookmark(String url) {
+        if (url == null || url.isEmpty()) return;
+
+        // Try to find an existing BrowserConnectionTab
+        BrowserConnectionTab existingTab = tabManager.findTabOfType(BrowserConnectionTab.class);
+        if (existingTab != null) {
+            tabManager.selectTab(existingTab);
+            existingTab.navigateTo(url);
+            return;
+        }
+
+        // No existing tab – create a new one via OpenBrowserMenuCommand, then navigate
+        BrowserConnectionTab browserTab = new BrowserConnectionTab(url);
+
+        // Wire callbacks (same as OpenBrowserMenuCommand)
+        de.bund.zrb.ui.drawer.LeftDrawer leftDrawer = getBookmarkDrawer();
+        if (leftDrawer != null) {
+            browserTab.setLinksCallback(entries ->
+                    javax.swing.SwingUtilities.invokeLater(() ->
+                            leftDrawer.updateRelations("Browser-Links", entries)));
+            leftDrawer.setOnRelationOpen(entry -> {
+                if ("BROWSER_LINK".equals(entry.getType())) {
+                    browserTab.navigateToLink(entry.getTargetPath());
+                }
+            });
+        }
+        de.bund.zrb.ui.drawer.RightDrawer rightDrawer = getRightDrawer();
+        if (rightDrawer != null) {
+            browserTab.setOutlineCallback(outline ->
+                    javax.swing.SwingUtilities.invokeLater(() ->
+                            rightDrawer.updateWikiOutline(outline,
+                                    browserTab.getCurrentTitle(),
+                                    (java.util.function.Consumer<String>) null)));
+        }
+
+        tabManager.addTab(browserTab);
+
+        setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR));
+        new javax.swing.SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() throws Exception {
+                browserTab.launchBrowser();
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                setCursor(java.awt.Cursor.getDefaultCursor());
+                try {
+                    get();
+                    browserTab.navigateTo(url);
+                    tabManager.updateTitleFor(browserTab);
+                } catch (Exception e) {
+                    javax.swing.JOptionPane.showMessageDialog(MainFrame.this,
+                            "Browser konnte nicht gestartet werden:\n"
+                                    + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()),
+                            "Browser-Fehler", javax.swing.JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    /**
+     * Open a SharePoint bookmark. Navigates an existing SharePointConnectionTab to the URL,
+     * or opens a new one.
+     */
+    private void openSharePointBookmark(String rawPath) {
+        if (rawPath == null || rawPath.isEmpty()) return;
+
+        // Try to find an existing SharePointConnectionTab
+        SharePointConnectionTab existingTab = tabManager.findTabOfType(SharePointConnectionTab.class);
+        if (existingTab != null) {
+            tabManager.selectTab(existingTab);
+            existingTab.navigateToUrl(rawPath);
+            return;
+        }
+
+        // No existing tab — create and navigate
+        SharePointConnectionTab spTab = new SharePointConnectionTab();
+        spTab.setTabbedPaneManager(tabManager);
+
+        de.bund.zrb.ui.drawer.LeftDrawer leftDrawer = getBookmarkDrawer();
+        if (leftDrawer != null) {
+            spTab.setLinksCallback(entries ->
+                    javax.swing.SwingUtilities.invokeLater(() ->
+                            leftDrawer.updateRelations("SharePoint-Dateien", entries)));
+            leftDrawer.setOnRelationOpen(entry -> {
+                if ("SP_FILE".equals(entry.getType())) {
+                    spTab.navigateToUrl(entry.getTargetPath());
+                }
+            });
+        }
+
+        tabManager.addTab(spTab);
+        spTab.navigateToUrl(rawPath);
+        tabManager.updateTitleFor(spTab);
+    }
+
+    /**
+     * Open a mail bookmark. rawPath format: "mailboxPath#folderPath#descriptorNodeId"
+     */
+    private void openMailBookmark(String rawPath) {
+        if (rawPath == null || rawPath.isEmpty()) return;
+
+        // Parse: mailboxPath#folderPath#nodeId
+        String[] parts = rawPath.split("#", 3);
+        if (parts.length < 3) {
+            javax.swing.JOptionPane.showMessageDialog(this,
+                    "Ungültiges Mail-Bookmark-Format:\n" + rawPath,
+                    "Mail-Bookmark", javax.swing.JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        String mailboxPath = parts[0];
+        String folderPath = parts[1];
+        long nodeId;
+        try {
+            nodeId = Long.parseLong(parts[2]);
+        } catch (NumberFormatException e) {
+            javax.swing.JOptionPane.showMessageDialog(this,
+                    "Ungültige Nachrichten-ID im Bookmark:\n" + parts[2],
+                    "Mail-Bookmark", javax.swing.JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        // Load message in background
+        javax.swing.SwingWorker<de.bund.zrb.mail.model.MailMessageContent, Void> worker =
+                new javax.swing.SwingWorker<de.bund.zrb.mail.model.MailMessageContent, Void>() {
+            @Override
+            protected de.bund.zrb.mail.model.MailMessageContent doInBackground() throws Exception {
+                de.bund.zrb.mail.infrastructure.PstMailboxReader reader =
+                        new de.bund.zrb.mail.infrastructure.PstMailboxReader();
+                return reader.readMessage(mailboxPath, folderPath, nodeId);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    de.bund.zrb.mail.model.MailMessageContent content = get();
+                    de.bund.zrb.ui.mail.MailPreviewTab tab =
+                            new de.bund.zrb.ui.mail.MailPreviewTab(content, mailboxPath);
+                    tabManager.addTab(tab);
+                } catch (Exception e) {
+                    javax.swing.JOptionPane.showMessageDialog(MainFrame.this,
+                            "Fehler beim Öffnen der Mail aus Bookmark:\n" + e.getMessage(),
+                            "Mail-Bookmark", javax.swing.JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    /**
+     * Open a TN3270 macro bookmark: connect, auto-login, replay recorded macro steps.
+     */
+    private void openTn3270Bookmark(de.bund.zrb.model.BookmarkEntry entry) {
+        Settings settings = SettingsHelper.load();
+        String host = settings.host;
+        String user = settings.user;
+        int port = settings.tn3270Port;
+        String termType = settings.tn3270TermType;
+        boolean tls = settings.tn3270Tls;
+        int keepAlive = settings.tn3270KeepAliveTimeout;
+        boolean autoLogin = settings.tn3270AutoLogin;
+        String autoCmd = (settings.tn3270AutoCommand && settings.tn3270AutoCommandText != null)
+                ? settings.tn3270AutoCommandText : null;
+
+        if (host == null || host.isEmpty() || user == null || user.isEmpty()) {
+            javax.swing.JOptionPane.showMessageDialog(this,
+                    "Bitte zuerst Server-Einstellungen konfigurieren.",
+                    "3270-Verbindung", javax.swing.JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        String password = LoginManager.getInstance().getPassword(host, user);
+        if (password == null || password.isEmpty()) return;
+
+        // Parse macro steps from bookmark
+        final java.util.List<java.util.Map<String, String>> replaySteps =
+                de.bund.zrb.ui.terminal.TerminalMacroRecorder.fromJson(entry.tn3270MacroSteps);
+
+        final String fHost = host;
+        final String fUser = user;
+        final String fPassword = password;
+
+        setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR));
+
+        new javax.swing.SwingWorker<de.bund.zrb.ui.terminal.TerminalConnectionTab, Void>() {
+            @Override
+            protected de.bund.zrb.ui.terminal.TerminalConnectionTab doInBackground() throws Exception {
+                de.bund.zrb.ui.terminal.TerminalConnectionTab tab =
+                        new de.bund.zrb.ui.terminal.TerminalConnectionTab(
+                                fHost, port, termType, tls, keepAlive,
+                                fUser, fPassword, autoLogin, autoCmd, replaySteps);
+                tab.connect();
+                return tab;
+            }
+
+            @Override
+            protected void done() {
+                setCursor(java.awt.Cursor.getDefaultCursor());
+                try {
+                    de.bund.zrb.ui.terminal.TerminalConnectionTab tab = get();
+                    tabManager.addTab(tab);
+                } catch (Exception e) {
+                    Throwable cause = e.getCause() != null ? e.getCause() : e;
+                    javax.swing.JOptionPane.showMessageDialog(MainFrame.this,
+                            "3270-Bookmark fehlgeschlagen:\n" + cause.getMessage(),
+                            "Verbindungsfehler", javax.swing.JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    /**
+     * Open an NDV directory bookmark: connect, open NdvConnectionTab, navigate to library.
+     */
+    private void openNdvDirectoryBookmark(String rawPath) {
+        // rawPath format: "LIBRARY/OBJECTNAME" or just "LIBRARY"
+        Settings settings = SettingsHelper.load();
+        String host = settings.host;
+        String user = settings.user;
+        int port = settings.ndvPort;
+
+        if (host == null || host.isEmpty() || user == null || user.isEmpty()) {
+            javax.swing.JOptionPane.showMessageDialog(this,
+                    "Bitte zuerst Server-Einstellungen konfigurieren.",
+                    "NDV-Verbindung", javax.swing.JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        String password = LoginManager.getInstance().getPassword(host, user);
+        if (password == null || password.isEmpty()) return;
+
+        // Parse library and object name from rawPath
+        String library = "";
+        String objectName = null;
+        if (rawPath != null && !rawPath.isEmpty()) {
+            if (rawPath.contains("/")) {
+                int slash = rawPath.indexOf('/');
+                library = rawPath.substring(0, slash);
+                objectName = rawPath.substring(slash + 1);
+                if (objectName != null && objectName.isEmpty()) objectName = null;
+            } else {
+                library = rawPath;
+            }
+        }
+        // Fallback to default library from settings if raw path was empty
+        if (library.isEmpty() && settings.ndvDefaultLibrary != null && !settings.ndvDefaultLibrary.trim().isEmpty()) {
+            library = settings.ndvDefaultLibrary.trim();
+        }
+
+        final String fHost = host;
+        final String fUser = user;
+        final int fPort = port;
+        final String fPassword = password;
+        final String fLibrary = library.toUpperCase();
+        final String fObjectName = objectName;
+
+        setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR));
+
+        // Only connect in background, create UI on EDT
+        new javax.swing.SwingWorker<de.bund.zrb.ndv.NdvService, Void>() {
+            @Override
+            protected de.bund.zrb.ndv.NdvService doInBackground() throws Exception {
+                de.bund.zrb.ndv.NdvService service = new de.bund.zrb.ndv.NdvService();
+                service.connect(fHost, fPort, fUser, fPassword);
+                LoginManager.getInstance().onLoginSuccess(fHost, fUser);
+
+                return service;
+            }
+
+            @Override
+            protected void done() {
+                setCursor(java.awt.Cursor.getDefaultCursor());
+                try {
+                    de.bund.zrb.ndv.NdvService service = get();
+                    // Create tab on EDT - skip auto-load if we navigate to library immediately
+                    boolean hasLibrary = !fLibrary.isEmpty();
+                    NdvConnectionTab tab = new NdvConnectionTab(tabManager, service, !hasLibrary);
+                    tabManager.addTab(tab);
+                    // Navigate to library (and optionally auto-open object)
+                    if (hasLibrary) {
+                        if (fObjectName != null && !fObjectName.isEmpty()) {
+                            tab.navigateToLibraryAndOpen(fLibrary, fObjectName);
+                        } else {
+                            tab.navigateToLibrary(fLibrary);
+                        }
+                    }
+                } catch (Exception e) {
+                    String msg = e.getCause() != null ? e.getCause().getMessage() : e.getMessage();
+                    if (msg != null && (msg.contains("Login") || msg.contains("login")
+                            || msg.contains("NAT0873") || msg.contains("NAT7734"))) {
+                        LoginManager.getInstance().invalidatePassword(fHost, fUser);
+                    }
+                    javax.swing.JOptionPane.showMessageDialog(MainFrame.this,
+                            "NDV-Verbindung fehlgeschlagen:\n" + msg,
+                            "Fehler", javax.swing.JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    /**
+     * Open an NDV FILE bookmark directly: connect, read source, open FileTab.
+     * Uses the NDV metadata stored in the bookmark entry (objectName, typSchluessel, dbid, fnr)
+     * so no ConnectionTab is needed.
+     * Falls back to directory flow if metadata is missing (legacy bookmarks).
+     */
+    private void openNdvFileBookmark(de.bund.zrb.model.BookmarkEntry entry) {
+        Settings settings = SettingsHelper.load();
+        String host = settings.host;
+        String user = settings.user;
+        int port = settings.ndvPort;
+
+        if (host == null || host.isEmpty() || user == null || user.isEmpty()) {
+            javax.swing.JOptionPane.showMessageDialog(this,
+                    "Bitte zuerst Server-Einstellungen konfigurieren.",
+                    "NDV-Verbindung", javax.swing.JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        String password = LoginManager.getInstance().getPassword(host, user);
+        if (password == null || password.isEmpty()) return;
+
+        // Use NdvService resolver to parse the path and reconstruct NdvObjectInfo
+        de.bund.zrb.ndv.NdvService tempResolver = new de.bund.zrb.ndv.NdvService();
+        final de.bund.zrb.ndv.NdvService.ResolvedNdvPath resolved;
+        final boolean hasRichMetadata =
+                entry.ndvLibrary != null && !entry.ndvLibrary.isEmpty()
+                        && entry.ndvObjectName != null && !entry.ndvObjectName.isEmpty();
+
+        if (hasRichMetadata) {
+            // Rich metadata from bookmark: use the full resolver with DATENBANK_NUMMER/DATEI_NUMMER
+            resolved = tempResolver.resolvePath(
+                    entry.ndvLibrary + "/" + entry.ndvObjectName
+                            + (entry.ndvTypeExtension != null && !entry.ndvTypeExtension.isEmpty()
+                            ? "." + entry.ndvTypeExtension : ""),
+                    entry.ndvObjectType,
+                    entry.ndvTypeExtension,
+                    entry.ndvDbid,
+                    entry.ndvFnr
+            );
+        } else {
+            // No metadata (legacy bookmark / drawer link): parse from raw path.
+            // The objInfo here will have an empty/defaulted typeExtension; we'll probe
+            // the server inside the SwingWorker to get the real object info.
+            resolved = tempResolver.resolvePath(entry.getRawPath());
+        }
+
+        if (!resolved.isFile()) {
+            // Resolved as library, not a file → fall back to directory flow
+            openNdvDirectoryBookmark(entry.getRawPath());
+            return;
+        }
+
+        final de.bund.zrb.ndv.NdvObjectInfo initialObjInfo = resolved.getObjectInfo();
+        final String fHost = host;
+        final String fUser = user;
+        final int fPort = port;
+        final String fPassword = password;
+        final String fLibrary = resolved.getLibrary();
+        final boolean probeServer = !hasRichMetadata;
+
+        setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR));
+
+        new javax.swing.SwingWorker<String, Void>() {
+            de.bund.zrb.ndv.NdvService service;
+            de.bund.zrb.ndv.NdvObjectInfo resolvedObjInfo = initialObjInfo;
+
+            @Override
+            protected String doInBackground() throws Exception {
+                service = new de.bund.zrb.ndv.NdvService();
+                service.connect(fHost, fPort, fUser, fPassword);
+                LoginManager.getInstance().onLoginSuccess(fHost, fUser);
+
+                // For drawer-link opens (no metadata), probe the server to get the
+                // real object info – correct type, extension, dbid/fnr. This ensures
+                // the resulting FileTab carries a Natural file extension so features
+                // like the "Visuell" toolbar button, call hierarchy and dependency
+                // analysis behave the same as when opened from NdvConnectionTab.
+                if (probeServer) {
+                    try {
+                        de.bund.zrb.ndv.NdvObjectInfo probed =
+                                service.findObject(fLibrary, initialObjInfo.getEffectiveName());
+                        if (probed != null) {
+                            resolvedObjInfo = probed;
+                        }
+                    } catch (Exception probeFailure) {
+                        // Stay with initialObjInfo (forBookmark now derives a sensible default).
+                    }
+                }
+                return service.readSource(fLibrary, resolvedObjInfo);
+            }
+
+            @Override
+            protected void done() {
+                setCursor(java.awt.Cursor.getDefaultCursor());
+                try {
+                    String source = get();
+                    if (source == null) source = "";
+
+                    final de.bund.zrb.ndv.NdvObjectInfo objInfo = resolvedObjInfo;
+                    String fullPath = fLibrary + "/" + objInfo.getEffectiveName()
+                            + (objInfo.getTypeExtension().isEmpty() ? "" : "." + objInfo.getTypeExtension());
+
+                    // Update cache with freshly downloaded source (always overwrite)
+                    de.bund.zrb.service.NdvSourceCacheService.getInstance()
+                            .cacheSource(fLibrary, objInfo.getEffectiveName(),
+                                    objInfo.getTypeExtension(), source,
+                                    objInfo.getSourceSize(), objInfo.getSourceDate());
+
+                    NdvResourceState ndvState = new NdvResourceState(service, fLibrary, objInfo);
+                    VirtualResource resource = new VirtualResource(
+                            de.bund.zrb.files.path.VirtualResourceRef.of(fullPath),
+                            VirtualResourceKind.FILE,
+                            fullPath,
+                            VirtualBackendType.NDV,
+                            null, ndvState
+                    );
+
+                    FileTabImpl fileTab = new FileTabImpl(
+                            tabManager, resource, source, null, null, false
+                    );
+                    tabManager.addTab(fileTab);
+                } catch (Exception e) {
+                    String msg = e.getCause() != null ? e.getCause().getMessage() : e.getMessage();
+                    if (msg != null && (msg.contains("Login") || msg.contains("login")
+                            || msg.contains("NAT0873") || msg.contains("NAT7734"))) {
+                        LoginManager.getInstance().invalidatePassword(fHost, fUser);
+                    }
+                    javax.swing.JOptionPane.showMessageDialog(MainFrame.this,
+                            "NDV-Datei konnte nicht geöffnet werden:\n" + msg,
+                            "Fehler", javax.swing.JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    @Override
+    public JFrame getMainFrame() {
+        return this;
+    }
+
+    @Override
+    public BookmarkManager getBookmarkManager() {
+        return new BookmarkHelper();
+    }
+
+    @Override
+    public List<Bookmarkable> getAllFileTabs() {
+        return tabManager.getAllTabs().stream()
+                .filter(t -> t instanceof Bookmarkable)
+                .map(t -> (Bookmarkable) t)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<AppTab> getAllOpenTabs() {
+        return tabManager.getAllOpenTabs();
+    }
+
+    @Override
+    public void focusFileTab(Bookmarkable tab) {
+        tabManager.focusTabByAdapter(tab);
+    }
+
+    @Override
+    public void refresh() {
+        SwingUtilities.invokeLater(() -> leftDrawer.refreshBookmarks());
+        // ToDo: And mayby active tabs too..
+    }
+
+    /**
+     * Get the right drawer for outline updates etc.
+     */
+    public RightDrawer getRightDrawer() {
+        return rightDrawer;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    //  Drawer visibility (used by the "Ansicht" menu)
+    // ─────────────────────────────────────────────────────────────
+
+    /** Saved divider positions so the drawer can be restored to its previous width. */
+    private int savedLeftDividerLocation = -1;
+    private int savedRightDividerLocation = -1;
+    private int savedLeftDividerSize = -1;
+    private int savedRightDividerSize = -1;
+
+    /** True if the left bookmark drawer is currently shown (not collapsed). */
+    public boolean isLeftDrawerVisible() {
+        return leftDrawer != null && leftDrawer.isVisible();
+    }
+
+    /** True if the right chat/outline drawer is currently shown (not collapsed). */
+    public boolean isRightDrawerVisible() {
+        return rightDrawer != null && rightDrawer.isVisible();
+    }
+
+    /** Show or hide the left bookmark drawer (collapsing the surrounding split pane). */
+    public void setLeftDrawerVisible(boolean visible) {
+        if (leftDrawer == null || leftSplitPane == null) return;
+        if (leftDrawer.isVisible() == visible) return;
+        if (!visible) {
+            savedLeftDividerLocation = leftSplitPane.getDividerLocation();
+            savedLeftDividerSize = leftSplitPane.getDividerSize();
+            leftDrawer.setVisible(false);
+            leftSplitPane.setDividerSize(0);
+            leftSplitPane.setDividerLocation(0);
+        } else {
+            leftDrawer.setVisible(true);
+            if (savedLeftDividerSize > 0) leftSplitPane.setDividerSize(savedLeftDividerSize);
+            if (savedLeftDividerLocation > 0) leftSplitPane.setDividerLocation(savedLeftDividerLocation);
+            else leftSplitPane.setDividerLocation(220);
+        }
+        leftSplitPane.revalidate();
+        leftSplitPane.repaint();
+    }
+
+    /** Show or hide the right chat/outline drawer (collapsing the surrounding split pane). */
+    public void setRightDrawerVisible(boolean visible) {
+        if (rightDrawer == null || rightSplitPane == null) return;
+        if (rightDrawer.isVisible() == visible) return;
+        if (!visible) {
+            savedRightDividerLocation = rightSplitPane.getDividerLocation();
+            savedRightDividerSize = rightSplitPane.getDividerSize();
+            rightDrawer.setVisible(false);
+            rightSplitPane.setDividerSize(0);
+            rightSplitPane.setDividerLocation(rightSplitPane.getWidth());
+        } else {
+            rightDrawer.setVisible(true);
+            if (savedRightDividerSize > 0) rightSplitPane.setDividerSize(savedRightDividerSize);
+            int restore = savedRightDividerLocation;
+            if (restore <= 0) restore = Math.max(0, rightSplitPane.getWidth() - 300);
+            rightSplitPane.setDividerLocation(restore);
+        }
+        rightSplitPane.revalidate();
+        rightSplitPane.repaint();
+    }
+
+    private void restoreWindowState() {
+        Settings settings = SettingsHelper.load();
+        Map<String, String> state = settings.applicationState;
+
+        // Fenstergröße
+        int width = tryParseInt(state.get("window.width"), 1000);
+        int height = tryParseInt(state.get("window.height"), 700);
+        setSize(width, height);
+
+        // Fensterposition
+        int x = tryParseInt(state.get("window.x"), -1);
+        int y = tryParseInt(state.get("window.y"), -1);
+        if (x >= 0 && y >= 0) {
+            setLocation(x, y);
+        } else {
+            setLocationRelativeTo(null);
+        }
+
+        // Maximierungsstatus (muss nach setSize erfolgen)
+        int extendedState = tryParseInt(state.get("window.extendedState"), JFrame.NORMAL);
+        setExtendedState(extendedState);
+    }
+
+    private void saveApplicationState() {
+        Settings settings = SettingsHelper.load();
+        Map<String, String> state = settings.applicationState;
+
+        saveWindowState(state);
+        saveDrawerState(state);
+
+        SettingsHelper.save(settings);
+        ShortcutManager.saveShortcuts();
+    }
+
+    private void saveWindowState(Map<String, String> state) {
+        // Allgemeine Fensterinformationen
+        state.put("window.width", String.valueOf(getWidth()));
+        state.put("window.height", String.valueOf(getHeight()));
+        state.put("window.x", String.valueOf(getX()));
+        state.put("window.y", String.valueOf(getY()));
+        state.put("window.extendedState", String.valueOf(getExtendedState()));
+    }
+
+    private void saveDrawerState(Map<String, String> state) {
+        // Drawer-Zustände
+        if (leftSplitPane != null) {
+            state.put("drawer.bookmark.divider", String.valueOf(leftSplitPane.getDividerLocation()));
+        }
+
+        if (rightSplitPane != null) {
+            state.put("drawer.chat.divider", String.valueOf(rightSplitPane.getDividerLocation()));
+        }
+
+        // ChatDrawer-interne Settings
+        if (rightDrawer != null) {
+            rightDrawer.addApplicationState(state);
+        }
+
+        // LeftDrawer-interne Settings (selected tab)
+        if (leftDrawer != null) {
+            leftDrawer.addApplicationState(state);
+        }
+
+    }
+
+    @Override
+    public void dispose() {
+        if(chatManager != null)
+        {
+            chatManager.onDispose();
+        }
+        saveApplicationState();
+        super.dispose();
+    }
+
+    @Override
+    public ToolRegistry getToolRegistry() {
+        return toolRegistry;
+    }
+
+    @Override
+    public VariableRegistryImpl getVariableRegistry() {
+        return variableRegistryImpl;
+    }
+
+    @Override
+    public SentenceTypeRegistry getSentenceTypeRegistry() {
+        return SentenceTypeRegistryImpl.getInstance();
+    }
+
+    @Override
+    public ExpressionRegistry getExpressionRegistry() {
+        return ExpressionRegistryImpl.getInstance();
+    }
+
+    @Override
+    public File getSettingsFolder() {
+        return SettingsHelper.getSettingsFolder();
+    }
+
+    @Override
+    public WorkflowRunner getWorkflowRunner() {
+        return workflowRunner;
+    }
+
+    @Override
+    public de.zrb.bund.newApi.browser.BrowserService getBrowserService() {
+        return browserService;
+    }
+
+    @Override
+    public de.zrb.bund.newApi.bot.AgentRegistry getAgentRegistry() {
+        return agentRegistry;
+    }
+
+    public LeftDrawer getBookmarkDrawer() {
+        return leftDrawer;
+    }
+
+    public de.bund.zrb.service.RelationsService getRelationsService() {
+        return relationsService;
+    }
+
+    /**
+     * Open a wiki page from a relation entry as a new WikiFileTab.
+     * Delegates to TabbedPaneManager's existing wiki open mechanism.
+     */
+    private void openWikiPageAsTab(String siteId, String pageTitle) {
+        if (tabManager != null) {
+            tabManager.openWikiRelationAsTab(siteId, pageTitle);
+        }
+    }
+
+    /**
+     * Open an http(s) URL coming from a hierarchy / relations entry. Tries to
+     * route the URL into an existing {@link de.bund.zrb.ui.ConfluenceConnectionTab}
+     * (or {@link de.bund.zrb.ui.ConfluenceReaderTab}) when the URL points to the
+     * same host as the connection's {@code baseUrl} and a Confluence page id can
+     * be extracted — that way Confluence-internal links open as in-app reader
+     * tabs (with working back/forward navigation). External URLs fall back to
+     * the system browser.
+     */
+    private void openHttpUrl(String url) {
+        if (url == null || url.isEmpty()) return;
+        try {
+            String urlHost = new java.net.URL(url).getHost();
+            de.bund.zrb.ui.ConfluenceConnectionTab confTab =
+                    tabManager.findTabOfType(de.bund.zrb.ui.ConfluenceConnectionTab.class);
+            if (confTab != null && urlHost != null) {
+                String baseUrl = confTab.getBaseUrl();
+                String confHost = baseUrl != null ? new java.net.URL(baseUrl).getHost() : null;
+                if (confHost != null && confHost.equalsIgnoreCase(urlHost)) {
+                    String pageId = de.bund.zrb.ui.ConfluenceReaderTab.extractPageId(url);
+                    if (pageId != null) {
+                        confTab.openPageByIdAsReaderTab(pageId);
+                        return;
+                    }
+                }
+            }
+        } catch (Exception ignore) {
+            // fall through to browser
+        }
+        try {
+            java.awt.Desktop.getDesktop().browse(new java.net.URI(url));
+        } catch (Exception ex) {
+            // best-effort
+        }
+    }
+
+    /**
+     * Open the Wikipedia article for a known system function (IDCAMS, IEFBR14, …).
+     * <p>
+     * Strategy:
+     * <ol>
+     *   <li>Look up the function in system_functions.json</li>
+     *   <li>If a WikiConnectionTab is open → use it to search/navigate (preferred: stays in-app)</li>
+     *   <li>Otherwise → open the Wikipedia article directly in the system browser</li>
+     * </ol>
+     */
+    private void openSystemFunctionInWiki(de.bund.zrb.ui.drawer.LeftDrawer.RelationEntry entry) {
+        String targetPath = entry.getTargetPath(); // sysfunc://IDCAMS
+        if (targetPath == null || !targetPath.startsWith("sysfunc://")) return;
+
+        String pgmName = targetPath.substring("sysfunc://".length());
+        java.util.Map<String, de.bund.zrb.model.SystemFunctionEntry> lookup =
+                de.bund.zrb.helper.SystemFunctionSettingsHelper.buildLookup();
+        de.bund.zrb.model.SystemFunctionEntry sysFunc = lookup.get(pgmName.toUpperCase());
+
+        // Determine search/article title based on locale
+        String wikiTitle = null;
+        String siteId = null;
+        if (sysFunc != null) {
+            // Prefer German, fall back to English, then program name
+            if (sysFunc.getWikiTitleDe() != null && !sysFunc.getWikiTitleDe().isEmpty()) {
+                wikiTitle = sysFunc.getWikiTitleDe();
+                siteId = "wikipedia_de";
+            } else if (sysFunc.getWikiTitleEn() != null && !sysFunc.getWikiTitleEn().isEmpty()) {
+                wikiTitle = sysFunc.getWikiTitleEn();
+                siteId = "wikipedia_en";
+            }
+        }
+        if (wikiTitle == null) {
+            wikiTitle = pgmName;
+            siteId = "wikipedia_de";
+        }
+
+        // Try in-app wiki connection first
+        if (tabManager != null) {
+            final String searchTerm = wikiTitle;
+            final String targetSiteId = siteId;
+            boolean opened = tabManager.searchInWikiConnectionTab(targetSiteId, searchTerm);
+            if (opened) return;
+        }
+
+        // Fallback: open in system browser
+        String baseUrl = "wikipedia_en".equals(siteId)
+                ? "https://en.wikipedia.org/wiki/"
+                : "https://de.wikipedia.org/wiki/";
+        try {
+            java.awt.Desktop.getDesktop().browse(new java.net.URI(baseUrl + java.net.URLEncoder.encode(wikiTitle, "UTF-8").replace("+", "_")));
+        } catch (Exception ex) {
+            javax.swing.JOptionPane.showMessageDialog(this,
+                    "Konnte Wikipedia nicht öffnen: " + ex.getMessage(),
+                    "Fehler", javax.swing.JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /**
+     * Check whether two paths refer to the same NDV object (LIBRARY/OBJECT).
+     * Used to decide if a single-click navigation from the call hierarchy can stay
+     * in the currently selected tab instead of reopening the file.
+     */
+    private static boolean pathsRefSameNdvObject(String currentPath, String sourceFilePath) {
+        if (currentPath == null || sourceFilePath == null) return false;
+        String a = currentPath.trim().toUpperCase();
+        String b = sourceFilePath.trim().toUpperCase();
+        if (a.equals(b)) return true;
+        // Both might be "ndv://LIB/OBJ[.ext]" — compare suffix "LIB/OBJ" without protocol & extension
+        String aTail = stripNdvPrefixAndExt(a);
+        String bTail = stripNdvPrefixAndExt(b);
+        return aTail != null && aTail.equals(bTail);
+    }
+
+    private static String stripNdvPrefixAndExt(String path) {
+        if (path == null) return null;
+        String p = path;
+        int proto = p.indexOf("://");
+        if (proto >= 0) p = p.substring(proto + 3);
+        int dot = p.lastIndexOf('.');
+        int slash = p.lastIndexOf('/');
+        if (dot > slash) p = p.substring(0, dot);
+        return p;
+    }
+
+    /**
+     * Open an NDV dependency target from a relation entry.
+     * Finds an open NdvConnectionTab and navigates to the target object.
+     *
+     * @param ndvUrl ndv://LIBRARY/OBJECTNAME
+     */
+    private void openNdvDependencyTarget(String ndvUrl) {
+        if (ndvUrl == null || !ndvUrl.startsWith("ndv://")) return;
+        String rest = ndvUrl.substring("ndv://".length());
+        int slash = rest.indexOf('/');
+        String library;
+        String objectName;
+        if (slash > 0) {
+            library = rest.substring(0, slash);
+            objectName = rest.substring(slash + 1);
+        } else {
+            library = rest;
+            objectName = null;
+        }
+
+        if (tabManager != null) {
+            tabManager.openNdvDependencyTarget(library, objectName);
+        }
+    }
+
+    /**
+     * Open a Natural program from JCL (via STEPLIB mapping).
+     * <p>
+     * The entry has a targetPath of "nat-jcl://STEPLIB_LIB/PROGRAM" or the type "JCL_NAT_LIB".
+     * We look up the STEPLIB library in Settings.naturalLibraryMappings to find the NDV library.
+     * If no mapping exists, prompt the user for it and save it for future use.
+     */
+    private void openNaturalFromJcl(de.bund.zrb.ui.drawer.LeftDrawer.RelationEntry entry) {
+        String targetPath = entry.getTargetPath();
+        String stepLib = null;
+        String program = null;
+
+        if (targetPath != null && targetPath.startsWith("nat-jcl://")) {
+            String rest = targetPath.substring("nat-jcl://".length());
+            int slash = rest.indexOf('/');
+            if (slash > 0) {
+                stepLib = rest.substring(0, slash);
+                program = rest.substring(slash + 1);
+            }
+        }
+
+        // Fallback: try to extract from the type (JCL_NAT_LIBNAME)
+        if (stepLib == null && entry.getType() != null && entry.getType().startsWith("JCL_NAT_")) {
+            stepLib = entry.getType().substring("JCL_NAT_".length());
+        }
+
+        if (program == null) {
+            javax.swing.JOptionPane.showMessageDialog(this,
+                    "Konnte Natural-Programm nicht identifizieren.",
+                    "Fehler", javax.swing.JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        // Look up mapping: STEPLIB → NDV library
+        Settings settings = SettingsHelper.load();
+        String ndvLibrary = stepLib != null ? settings.naturalLibraryMappings.get(stepLib.toUpperCase()) : null;
+
+        if (ndvLibrary == null || ndvLibrary.isEmpty()) {
+            // Try library search order from settings
+            ndvLibrary = resolveNdvLibraryForSymbol(program, settings);
+        }
+
+        if (ndvLibrary == null || ndvLibrary.isEmpty()) {
+            // Suggest a default: replace trailing letter with T (e.g. ABAK-M → ABAK-T)
+            String suggested = stepLib != null ? stepLib : "";
+            if (suggested.length() > 2 && suggested.charAt(suggested.length() - 2) == '-') {
+                suggested = suggested.substring(0, suggested.length() - 1) + "T";
+            }
+
+            // Prompt the user for the mapping
+            ndvLibrary = (String) javax.swing.JOptionPane.showInputDialog(
+                    this,
+                    "In der JCL wird die STEPLIB \"" + (stepLib != null ? stepLib : "?") + "\" verwendet.\n"
+                            + "Welche NDV-Bibliothek entspricht dieser STEPLIB?\n\n"
+                            + "Beispiel: " + (stepLib != null ? stepLib : "?") + " → " + suggested + "\n\n"
+                            + "Das Mapping wird für zukünftige Zugriffe gespeichert.",
+                    "Natural-Bibliothek Mapping",
+                    javax.swing.JOptionPane.QUESTION_MESSAGE,
+                    null, null,
+                    suggested);
+
+            if (ndvLibrary == null || ndvLibrary.trim().isEmpty()) {
+                return; // User cancelled
+            }
+            ndvLibrary = ndvLibrary.trim().toUpperCase();
+
+            // Save mapping for future use
+            if (stepLib != null) {
+                settings.naturalLibraryMappings.put(stepLib.toUpperCase(), ndvLibrary);
+                SettingsHelper.save(settings);
+            }
+        }
+
+        // Open directly as FileTab (no ConnectionTab switch)
+        if (tabManager != null) {
+            tabManager.openNdvDependencyTarget(ndvLibrary, program);
+        }
+    }
+
+    /**
+     * Try to find the NDV library for an unqualified symbol name using the
+     * configured library search order. Checks the default library first,
+     * then each library in {@code ndvLibrarySearchOrder}.
+     *
+     * @return the library name where the object was found, or null if not found
+     */
+    private String resolveNdvLibraryForSymbol(String objectName, Settings settings) {
+        java.util.List<String> searchOrder = new java.util.ArrayList<String>();
+        // Default library first
+        if (settings.ndvDefaultLibrary != null && !settings.ndvDefaultLibrary.trim().isEmpty()) {
+            searchOrder.add(settings.ndvDefaultLibrary.trim().toUpperCase());
+        }
+        // Then configured search order
+        if (settings.ndvLibrarySearchOrder != null) {
+            for (String lib : settings.ndvLibrarySearchOrder) {
+                if (!searchOrder.contains(lib.toUpperCase())) {
+                    searchOrder.add(lib.toUpperCase());
+                }
+            }
+        }
+        if (searchOrder.isEmpty()) return null;
+
+        // Try cache first (fast, no network)
+        de.bund.zrb.service.NdvSourceCacheService cache = de.bund.zrb.service.NdvSourceCacheService.getInstance();
+        for (String lib : searchOrder) {
+            String cached = cache.getCachedSource(lib, objectName);
+            if (cached != null) return lib;
+        }
+
+        // No cache hit → return the first library in the search order as best guess
+        // (actual resolution will happen when the file is opened)
+        return searchOrder.get(0);
+    }
+
+    public de.bund.zrb.service.McpChatEventBridge getChatEventBridge() {
+        return chatEventBridge;
+    }
+
+    private java.util.UUID getActiveChatSessionIdOrNull() {
+        try {
+            if (rightDrawer == null) {
+                return null;
+            }
+            // RightDrawer -> Chat -> selected tab may be a ChatSession
+            java.awt.Component drawerComponent = rightDrawer;
+            // Find any ChatSession within the right drawer hierarchy that is currently selected
+            java.util.List<de.bund.zrb.ui.components.ChatSession> sessions = new java.util.ArrayList<>();
+            findChatSessions(drawerComponent, sessions);
+            if (sessions.isEmpty()) {
+                return null;
+            }
+            // Prefer the one that is currently showing
+            for (de.bund.zrb.ui.components.ChatSession s : sessions) {
+                if (s != null && s.isShowing()) {
+                    return s.getSessionId();
+                }
+            }
+            return sessions.get(0).getSessionId();
+        } catch (Exception ignore) {
+            return null;
+        }
+    }
+
+    private void findChatSessions(java.awt.Component root, java.util.List<de.bund.zrb.ui.components.ChatSession> out) {
+        if (root == null || out == null) {
+            return;
+        }
+        if (root instanceof de.bund.zrb.ui.components.ChatSession) {
+            out.add((de.bund.zrb.ui.components.ChatSession) root);
+        }
+        if (root instanceof java.awt.Container) {
+            for (java.awt.Component c : ((java.awt.Container) root).getComponents()) {
+                findChatSessions(c, out);
+            }
+        }
+    }
+}
+

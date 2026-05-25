@@ -1,0 +1,175 @@
+package de.bund.zrb.websearch.plugin;
+
+import de.bund.zrb.mcpserver.browser.BrowserLauncher;
+import de.bund.zrb.mcpserver.browser.BrowserSession;
+import de.bund.zrb.event.WDLogEvent;
+import de.bund.zrb.helper.SettingsHelper;
+import de.bund.zrb.model.Settings;
+import de.bund.zrb.type.log.WDLogEntry;
+import de.bund.zrb.type.session.WDSubscriptionRequest;
+import de.zrb.bund.api.MainframeContext;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Map;
+import java.util.function.Consumer;
+import java.util.logging.Logger;
+
+/**
+ * Manages the shared BrowserSession lifecycle for the WebSearch plugin.
+ * The browser is launched and connected lazily on first tool call.
+ * All chat sessions share the same browser connection.
+ */
+public class WebSearchBrowserManager {
+
+    private static final Logger LOG = Logger.getLogger(WebSearchBrowserManager.class.getName());
+    private static final String PLUGIN_KEY = "webSearch";
+
+    private final MainframeContext context;
+    private BrowserSession session;
+
+    public WebSearchBrowserManager(MainframeContext context) {
+        this.context = context;
+    }
+
+    /**
+     * Get the shared browser session. If the browser is not yet running,
+     * it is launched and connected automatically using the plugin settings.
+     */
+    public synchronized BrowserSession getSession() {
+        if (session != null && session.isConnected()) {
+            return session;
+        }
+
+        // Close stale session if any
+        if (session != null) {
+            try { session.close(); } catch (Exception ignored) {}
+            session = null;
+        }
+
+        String browserPath = getBrowserPath();
+        if (browserPath == null || browserPath.trim().isEmpty()) {
+            throw new IllegalStateException(
+                    "Browser-Pfad ist nicht konfiguriert. "
+                  + "Bitte unter Einstellungen \u2192 Browser setzen.");
+        }
+
+        boolean headless = isHeadless();
+        int debugPort = getDebugPort();
+        LOG.info("[WebSearch] Launching browser: " + browserPath + " (headless=" + headless + ", debugPort=" + debugPort + ")");
+
+        // Apply saved timeout to system property
+        Settings settings = SettingsHelper.load();
+        System.setProperty("websearch.navigate.timeout.seconds",
+                String.valueOf(settings.browserNavigateTimeoutSeconds));
+
+        session = new BrowserSession();
+        try {
+            session.launchAndConnect(browserPath, new ArrayList<String>(), headless, 30000L, debugPort);
+            LOG.info("[WebSearch] Browser connected, contextId=" + session.getContextId());
+            subscribeToBrowserConsoleLogs();
+        } catch (Exception e) {
+            LOG.severe("[WebSearch] Failed to launch browser: " + e.getMessage());
+            try { session.close(); } catch (Exception ignored) {}
+            session = null;
+            throw new RuntimeException("Browser konnte nicht gestartet werden: " + e.getMessage(), e);
+        }
+
+        return session;
+    }
+
+    /**
+     * Subscribe to BiDi log.entryAdded events and output them to stderr
+     * with [BROWSER] prefix for debugging.
+     */
+    private void subscribeToBrowserConsoleLogs() {
+        try {
+            WDSubscriptionRequest logSubscription = new WDSubscriptionRequest(
+                    Collections.singletonList("log.entryAdded"));
+            Consumer<WDLogEvent.EntryAdded> logListener = event -> {
+                if (event != null && event.getParams() != null) {
+                    WDLogEntry entry = event.getParams();
+                    String level = "INFO";
+                    String text = "(no text)";
+                    if (entry instanceof WDLogEntry.BaseWDLogEntry) {
+                        WDLogEntry.BaseWDLogEntry base = (WDLogEntry.BaseWDLogEntry) entry;
+                        level = base.getLevel() != null ? base.getLevel().value().toUpperCase() : "INFO";
+                        text = base.getText() != null ? base.getText() : "(no text)";
+                    }
+                    System.err.println("[BROWSER] [" + level + "] " + text);
+                }
+            };
+            session.getDriver().addEventListener(logSubscription, logListener);
+            LOG.info("[WebSearch] Subscribed to browser console logs (log.entryAdded)");
+        } catch (Exception e) {
+            LOG.warning("[WebSearch] Failed to subscribe to browser console logs: " + e.getMessage());
+        }
+    }
+
+    public synchronized void closeSession() {
+        if (session != null) {
+            try {
+                session.close();
+            } catch (Exception e) {
+                LOG.warning("[WebSearch] Error closing browser session: " + e.getMessage());
+                // close() failed – force-kill as fallback (only our own process)
+                try { session.killBrowserProcess(); } catch (Exception ignored) {}
+            }
+            session = null;
+        }
+    }
+
+
+    public String getBrowser() {
+        Settings s = SettingsHelper.load();
+        return s.browserType != null ? s.browserType : "Firefox";
+    }
+
+    public boolean isHeadless() {
+        // TODO: vorübergehend deaktiviert zum Debuggen – später wieder aktivieren
+        return false;
+        // return SettingsHelper.load().browserHeadless;
+    }
+
+    public String getBrowserPath() {
+        Settings s = SettingsHelper.load();
+        String path = s.browserPath;
+        if (path != null && !path.trim().isEmpty()) {
+            return path;
+        }
+        String browser = getBrowser();
+        if ("Chrome".equalsIgnoreCase(browser)) {
+            return BrowserLauncher.DEFAULT_CHROME_PATH;
+        }
+        if ("Edge".equalsIgnoreCase(browser)) {
+            return BrowserLauncher.resolveEdgePath();
+        }
+        return BrowserLauncher.DEFAULT_FIREFOX_PATH;
+    }
+
+    /**
+     * Returns the configured debugging port.
+     * 0 = auto-select a free port (default for Firefox),
+     * 9222 = typical Chrome default.
+     */
+    public int getDebugPort() {
+        return SettingsHelper.load().browserDebugPort;
+    }
+
+    /**
+     * Returns the current BrowserSession if one exists and is connected,
+     * WITHOUT creating a new one. Returns null if no session is active.
+     * Use this for diagnostics/settings dialogs that should not trigger a browser launch.
+     */
+    public synchronized BrowserSession getExistingSession() {
+        if (session != null && session.isConnected()) {
+            return session;
+        }
+        return null;
+    }
+
+    public Map<String, String> loadSettings() {
+        return context.loadPluginSettings(PLUGIN_KEY);
+    }
+}
+

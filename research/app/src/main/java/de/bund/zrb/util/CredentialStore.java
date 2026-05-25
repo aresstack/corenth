@@ -1,0 +1,434 @@
+package de.bund.zrb.util;
+
+import de.bund.zrb.helper.SettingsHelper;
+import de.bund.zrb.model.Settings;
+
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+/**
+ * Central credential store backed by {@link Settings#componentCredentials}.
+ * <p>
+ * Every component in MainframeMate can store its own credentials here
+ * using a namespaced key, for example:
+ * <ul>
+ *   <li>{@code "wiki:wikipedia_de"} — Wiki site credentials</li>
+ *   <li>{@code "betaview"} — BetaView credentials</li>
+ *   <li>{@code "ftp:myhost.example.com"} — FTP host credentials</li>
+ * </ul>
+ * <p>
+ * Values are encrypted via {@link WindowsCryptoUtil} as {@code "user|password"}.
+ * The store persists immediately to {@code settings.json}.
+ *
+ * @see Settings#componentCredentials
+ */
+public final class CredentialStore {
+
+    private static final Logger LOG = Logger.getLogger(CredentialStore.class.getName());
+
+    /** Separator between username and password inside the encrypted value. */
+    static final char SEPARATOR = '|';
+
+    /**
+     * RAM-only session cache for credentials that must NOT be persisted to disk.
+     * Entries are encrypted with {@link SessionCipher} (pure Java, fast).
+     * Cleared on application exit via {@link #clearSessionCache()}.
+     * Key = component key (e.g. "pwd:my_entry"), Value = SessionCipher-encrypted "user|password".
+     */
+    private static final Map<String, String> sessionCache = new HashMap<String, String>();
+
+    private CredentialStore() { /* utility */ }
+
+    // ── Read ────────────────────────────────────────────────────────────────
+
+    /**
+     * Resolve stored credentials for the given component key.
+     * Checks session cache first, then persistent storage (KeePass / encrypted file).
+     *
+     * @param componentKey namespaced key, e.g. {@code "wiki:wikipedia_de"}
+     * @return {@code String[]{user, password}} or {@code null} if no credentials are stored
+     * @throws JnaBlockedException          if DPAPI/JNA is blocked
+     * @throws PowerShellBlockedException   if PowerShell DPAPI is blocked
+     * @throws KeePassNotAvailableException if KeePass is misconfigured
+     */
+    public static String[] resolve(String componentKey) {
+        // 1) Check RAM-only session cache first (fast, no I/O)
+        String[] fromSession = resolveFromSessionCache(componentKey);
+        if (fromSession != null) {
+            return fromSession;
+        }
+
+        // 2) Persistent storage
+        Settings settings = SettingsHelper.load();
+
+        // When using KeePass and the key is a password entry, look up in KeePass
+        if (isKeePass(settings) && componentKey != null && componentKey.startsWith("pwd:")) {
+            String entryTitle = componentKey.substring(4);
+            return resolveFromKeePass(settings, entryTitle);
+        }
+
+        String encrypted = settings.componentCredentials.get(componentKey);
+        if (encrypted == null || encrypted.isEmpty()) return null;
+
+        try {
+            String decrypted = WindowsCryptoUtil.decrypt(encrypted);
+            int sep = decrypted.indexOf(SEPARATOR);
+            if (sep >= 0) {
+                String user = decrypted.substring(0, sep);
+                String pass = decrypted.substring(sep + 1);
+                if (!user.isEmpty()) {
+                    return new String[]{user, pass};
+                }
+            }
+            LOG.warning("Credential for '" + componentKey + "' has unexpected format (no separator).");
+        } catch (JnaBlockedException e) {
+            throw e;
+        } catch (PowerShellBlockedException e) {
+            throw e;
+        } catch (KeePassNotAvailableException e) {
+            throw e;
+        } catch (Exception e) {
+            LOG.log(Level.WARNING, "Failed to decrypt credential for '" + componentKey + "'", e);
+        }
+        return null;
+    }
+
+    /**
+     * Resolve stored credentials, returning both user and password even when the
+     * username is empty. Unlike {@link #resolve(String)}, this never returns
+     * {@code null} — the fallback is {@code {"", ""}}.
+     * Checks session cache first, then persistent storage.
+     *
+     * @param componentKey namespaced key, e.g. {@code "pwd:wikipedia_de"}
+     * @return {@code String[]{user, password}} — never {@code null}
+     */
+    public static String[] resolveIncludingEmpty(String componentKey) {
+        // 1) Check RAM-only session cache first (fast, no I/O)
+        String[] fromSession = resolveFromSessionCache(componentKey);
+        if (fromSession != null) {
+            return fromSession;
+        }
+
+        // 2) Persistent storage
+        Settings settings = SettingsHelper.load();
+
+        // When using KeePass and the key is a password entry, look up in KeePass
+        if (isKeePass(settings) && componentKey != null && componentKey.startsWith("pwd:")) {
+            String entryTitle = componentKey.substring(4);
+            String[] cred = resolveFromKeePass(settings, entryTitle);
+            return cred != null ? cred : new String[]{"", ""};
+        }
+
+        String encrypted = settings.componentCredentials.get(componentKey);
+        if (encrypted == null || encrypted.isEmpty()) return new String[]{"", ""};
+
+        try {
+            String decrypted = WindowsCryptoUtil.decrypt(encrypted);
+            int sep = decrypted.indexOf(SEPARATOR);
+            if (sep >= 0) {
+                return new String[]{decrypted.substring(0, sep), decrypted.substring(sep + 1)};
+            }
+        } catch (Exception e) {
+            LOG.log(Level.WARNING, "Failed to decrypt credential for '" + componentKey + "'", e);
+        }
+        return new String[]{"", ""};
+    }
+
+    // ── Write ───────────────────────────────────────────────────────────────
+
+    /**
+     * Store (or update) credentials for the given component key.
+     * Encrypts and persists immediately to {@code settings.json}.
+     *
+     * @param componentKey namespaced key, e.g. {@code "wiki:wikipedia_de"}
+     * @param user         username
+     * @param password     password (plaintext)
+     * @throws JnaBlockedException          if DPAPI/JNA is blocked
+     * @throws PowerShellBlockedException   if PowerShell DPAPI is blocked
+     * @throws KeePassNotAvailableException if KeePass is misconfigured
+     */
+    public static void store(String componentKey, String user, String password) {
+        String encrypted = WindowsCryptoUtil.encrypt(user + SEPARATOR + password);
+        Settings settings = SettingsHelper.load();
+        settings.componentCredentials.put(componentKey, encrypted);
+        SettingsHelper.save(settings);
+        LOG.fine("Stored credential for '" + componentKey + "' user='" + user + "'");
+    }
+
+    // ── Delete ──────────────────────────────────────────────────────────────
+
+    /**
+     * Remove stored credentials for the given component key.
+     *
+     * @param componentKey namespaced key
+     */
+    public static void remove(String componentKey) {
+        Settings settings = SettingsHelper.load();
+        if (settings.componentCredentials.remove(componentKey) != null) {
+            SettingsHelper.save(settings);
+            LOG.fine("Removed credential for '" + componentKey + "'");
+        }
+        // Also clear session cache entry
+        synchronized (sessionCache) {
+            sessionCache.remove(componentKey);
+        }
+    }
+
+    // ── Session-only cache (RAM, not persisted) ─────────────────────────────
+
+    /**
+     * Store credentials in the RAM-only session cache.
+     * These credentials are encrypted with {@link SessionCipher} and are
+     * <b>never persisted</b> to disk (not to settings.json, not to KeePass).
+     * They are lost when the application exits.
+     *
+     * @param componentKey namespaced key, e.g. {@code "pwd:my_entry"}
+     * @param user         username
+     * @param password     password (plaintext)
+     */
+    public static void storeInSession(String componentKey, String user, String password) {
+        String plain = user + SEPARATOR + password;
+        String encrypted = SessionCipher.encrypt(plain);
+        synchronized (sessionCache) {
+            sessionCache.put(componentKey, encrypted);
+        }
+        LOG.fine("Stored credential in session cache for '" + componentKey + "' user='" + user + "'");
+    }
+
+    /**
+     * Remove a single entry from the session cache.
+     *
+     * @param componentKey namespaced key
+     */
+    public static void removeFromSession(String componentKey) {
+        synchronized (sessionCache) {
+            sessionCache.remove(componentKey);
+        }
+    }
+
+    /**
+     * Clear the entire session cache. Called on application exit.
+     */
+    public static void clearSessionCache() {
+        synchronized (sessionCache) {
+            sessionCache.clear();
+        }
+        LOG.fine("Session cache cleared");
+    }
+
+    /**
+     * Check if credentials exist in the session cache for the given key.
+     */
+    public static boolean hasSessionCredentials(String componentKey) {
+        synchronized (sessionCache) {
+            return sessionCache.containsKey(componentKey);
+        }
+    }
+
+    // ── List ────────────────────────────────────────────────────────────────
+
+    /**
+     * Return an unmodifiable snapshot of all stored component credentials.
+     * Keys are component identifiers, values are encrypted strings.
+     */
+    public static Map<String, String> getAll() {
+        Settings settings = SettingsHelper.load();
+        return Collections.unmodifiableMap(
+                new LinkedHashMap<String, String>(settings.componentCredentials));
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────────
+
+    /**
+     * Build a wiki-specific credential key.
+     *
+     * @param siteId the wiki site id (e.g. {@code "wikipedia_de"})
+     * @return {@code "wiki:<siteId>"}
+     */
+    public static String wikiKey(String siteId) {
+        return "wiki:" + siteId;
+    }
+
+    /**
+     * Extract a human-readable component label from a credential key.
+     * <p>Examples:
+     * <ul>
+     *   <li>{@code "wiki:wikipedia_de"} → {@code "Wiki"}</li>
+     *   <li>{@code "betaview"} → {@code "BetaView"}</li>
+     *   <li>{@code "ftp:myhost"} → {@code "FTP"}</li>
+     * </ul>
+     */
+    public static String componentLabel(String key) {
+        if (key == null) return "";
+        int colon = key.indexOf(':');
+        String prefix = colon > 0 ? key.substring(0, colon) : key;
+        switch (prefix.toLowerCase()) {
+            case "wiki":     return "Wiki";
+            case "betaview": return "BetaView";
+            case "ftp":      return "FTP";
+            case "ndv":      return "NDV";
+            default:         return prefix;
+        }
+    }
+
+    /**
+     * Extract the identifier part (after the colon) from a credential key.
+     * Returns the full key if no colon is present.
+     */
+    public static String componentId(String key) {
+        if (key == null) return "";
+        int colon = key.indexOf(':');
+        return colon > 0 ? key.substring(colon + 1) : key;
+    }
+
+    /**
+     * Try to extract the username from a stored credential without
+     * throwing on crypto failures (returns {@code null} on error).
+     * <p>
+     * When the password method is {@link PasswordMethod#KEEPASS},
+     * {@link WindowsCryptoUtil#decrypt} does not actually decrypt the
+     * stored value — it fetches the main password from KeePass, which
+     * would trigger the full KeePass/RPC flow (including pairing).
+     * We must not let that happen for a simple username lookup.
+     */
+    public static String resolveUserNameQuietly(String componentKey) {
+        try {
+            Settings settings = SettingsHelper.load();
+            if ("KEEPASS".equalsIgnoreCase(settings.passwordMethod)) {
+                return null;
+            }
+            String[] cred = resolve(componentKey);
+            return cred != null ? cred[0] : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // ── KeePass integration ─────────────────────────────────────────────────
+
+    /**
+     * List all entries from the KeePass database via PowerShell + KeePass.exe.
+     * Only works when the password method is {@link PasswordMethod#KEEPASS}.
+     *
+     * @return formatted entry list output
+     * @throws KeePassNotAvailableException if KeePass is misconfigured or the call fails
+     */
+    public static String listKeePassEntries() {
+        return KeePassProvider.listEntries();
+    }
+
+    /**
+     * Create a new entry in KeePass.
+     * Uses RPC or PowerShell depending on the configured access method.
+     */
+    public static void addKeePassEntry(String title, String userName, String password, String url,
+                                       String displayName, String category,
+                                       boolean requiresLogin, boolean useProxy, boolean autoIndex,
+                                       String certAlias, boolean savePassword, boolean sessionCache) {
+        Settings settings = SettingsHelper.load();
+        if ("RPC".equalsIgnoreCase(settings.keepassAccessMethod)) {
+            KeePassProvider.rpcAddEntry(title, userName, password, url,
+                    displayName, category, requiresLogin, useProxy, autoIndex, certAlias, savePassword, sessionCache);
+        } else {
+            KeePassProvider.psAddEntry(title, userName, password, url,
+                    displayName, category, requiresLogin, useProxy, autoIndex, certAlias, savePassword, sessionCache);
+        }
+    }
+
+    /**
+     * Update an existing entry in KeePass.
+     * Uses RPC or PowerShell depending on the configured access method.
+     */
+    public static void updateKeePassEntry(String title, String userName, String password, String url,
+                                          String displayName, String category,
+                                          boolean requiresLogin, boolean useProxy, boolean autoIndex,
+                                          String certAlias, boolean savePassword, boolean sessionCache) {
+        Settings settings = SettingsHelper.load();
+        if ("RPC".equalsIgnoreCase(settings.keepassAccessMethod)) {
+            KeePassProvider.rpcUpdateEntry(title, userName, password, url,
+                    displayName, category, requiresLogin, useProxy, autoIndex, certAlias, savePassword, sessionCache);
+        } else {
+            KeePassProvider.psUpdateEntry(title, userName, password, url,
+                    displayName, category, requiresLogin, useProxy, autoIndex, certAlias, savePassword, sessionCache);
+        }
+    }
+
+    /**
+     * Remove an entry from KeePass.
+     * Uses RPC (by uniqueID, with title-based fallback) or PowerShell (by title)
+     * depending on the configured access method.
+     *
+     * @param title    entry title (used for PowerShell mode and RPC fallback)
+     * @param uniqueID entry unique ID (used for RPC mode, may be {@code null})
+     */
+    public static void removeKeePassEntry(String title, String uniqueID) {
+        Settings settings = SettingsHelper.load();
+        if ("RPC".equalsIgnoreCase(settings.keepassAccessMethod)) {
+            KeePassProvider.rpcRemoveEntry(title, uniqueID);
+        } else {
+            KeePassProvider.psRemoveEntry(title);
+        }
+    }
+
+    // ── Private helpers ─────────────────────────────────────────────────────
+
+    /**
+     * Try to resolve credentials from the RAM-only session cache.
+     *
+     * @return {@code String[]{user, password}} or {@code null} if not cached
+     */
+    private static String[] resolveFromSessionCache(String componentKey) {
+        if (componentKey == null) return null;
+        String encrypted;
+        synchronized (sessionCache) {
+            encrypted = sessionCache.get(componentKey);
+        }
+        if (encrypted == null) return null;
+        try {
+            String decrypted = SessionCipher.decrypt(encrypted);
+            int sep = decrypted.indexOf(SEPARATOR);
+            if (sep >= 0) {
+                return new String[]{decrypted.substring(0, sep), decrypted.substring(sep + 1)};
+            }
+        } catch (Exception e) {
+            LOG.log(Level.WARNING, "Failed to decrypt session-cached credential for '" + componentKey + "'", e);
+        }
+        return null;
+    }
+
+    /** Check if the password method is set to KeePass. */
+    private static boolean isKeePass(Settings settings) {
+        try {
+            return PasswordMethod.valueOf(settings.passwordMethod) == PasswordMethod.KEEPASS;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Look up user + password from KeePass by entry title.
+     * Uses RPC or PowerShell depending on the configured access method.
+     *
+     * @return {@code String[]{user, password}} or {@code null} if not found
+     */
+    private static String[] resolveFromKeePass(Settings settings, String entryTitle) {
+        try {
+            if ("RPC".equalsIgnoreCase(settings.keepassAccessMethod)) {
+                return KeePassProvider.rpcGetCredentialsByTitle(entryTitle);
+            } else {
+                // PowerShell: build a script to read user + password by title
+                return KeePassProvider.psGetCredentialsByTitle(entryTitle);
+            }
+        } catch (KeePassNotAvailableException e) {
+            throw e;
+        } catch (Exception e) {
+            LOG.log(Level.WARNING, "Failed to resolve KeePass entry '" + entryTitle + "'", e);
+            return null;
+        }
+    }
+}
+
