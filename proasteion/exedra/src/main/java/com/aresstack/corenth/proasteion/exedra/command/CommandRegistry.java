@@ -7,26 +7,29 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Central registry of {@link MenuCommand}s.
+ * Central registry of {@link ShellCommand}s.
  * Commands are stored by their dot-separated id and retrieved in insertion order.
+ *
+ * <p>A single command id is usable for menu, toolbar, and shortcut binding
+ * through the unified {@link ShellCommand} interface.
  */
 public final class CommandRegistry {
 
-    private final Map<String, MenuCommand> commands = new LinkedHashMap<>();
+    private final Map<String, ShellCommand> commands = new LinkedHashMap<>();
 
-    /** Register a command. Replaces any existing command with the same id. */
-    public void register(MenuCommand command) {
+    /** Register a unified shell command. Replaces any existing command with the same id. */
+    public void register(ShellCommand command) {
         if (command == null) throw new IllegalArgumentException("command must not be null");
         commands.put(command.getId(), command);
     }
 
     /** Look up a command by its id. */
-    public Optional<MenuCommand> findById(String id) {
+    public Optional<ShellCommand> findById(String id) {
         return Optional.ofNullable(commands.get(id));
     }
 
     /** All registered commands in insertion order. */
-    public Collection<MenuCommand> getAll() {
+    public Collection<ShellCommand> getAll() {
         return Collections.unmodifiableCollection(commands.values());
     }
 

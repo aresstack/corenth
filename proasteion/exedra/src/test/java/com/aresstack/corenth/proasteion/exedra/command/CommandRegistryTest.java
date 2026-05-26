@@ -3,8 +3,6 @@ package com.aresstack.corenth.proasteion.exedra.command;
 import org.junit.Before;
 import org.junit.Test;
 
-import javax.swing.Icon;
-import javax.swing.KeyStroke;
 import java.util.Collection;
 import java.util.Optional;
 
@@ -21,10 +19,10 @@ public class CommandRegistryTest {
 
     @Test
     public void registerAndFindById() {
-        MenuCommand cmd = stubCommand("file.save", "Save");
+        ShellCommand cmd = stubCommand("file.save", "Save");
         registry.register(cmd);
 
-        Optional<MenuCommand> found = registry.findById("file.save");
+        Optional<ShellCommand> found = registry.findById("file.save");
         assertTrue(found.isPresent());
         assertEquals("Save", found.get().getLabel());
     }
@@ -40,9 +38,9 @@ public class CommandRegistryTest {
         registry.register(stubCommand("b.second", "Second"));
         registry.register(stubCommand("c.third", "Third"));
 
-        Collection<MenuCommand> all = registry.getAll();
+        Collection<ShellCommand> all = registry.getAll();
         assertEquals(3, all.size());
-        String[] labels = all.stream().map(MenuCommand::getLabel).toArray(String[]::new);
+        String[] labels = all.stream().map(ShellCommand::getLabel).toArray(String[]::new);
         assertArrayEquals(new String[]{"First", "Second", "Third"}, labels);
     }
 
@@ -66,8 +64,23 @@ public class CommandRegistryTest {
         registry.register(null);
     }
 
-    private static MenuCommand stubCommand(String id, String label) {
-        return new MenuCommand() {
+    @Test
+    public void shortcutRegistry_resolveUsesDefault() {
+        ShortcutRegistry shortcuts = new ShortcutRegistry();
+        ShellCommand cmd = stubCommand("file.save", "Save");
+        assertNull(shortcuts.resolve(cmd));
+    }
+
+    @Test
+    public void shortcutRegistry_userOverridesDefault() {
+        ShortcutRegistry shortcuts = new ShortcutRegistry();
+        javax.swing.KeyStroke ks = javax.swing.KeyStroke.getKeyStroke("ctrl S");
+        shortcuts.set("file.save", ks);
+        assertEquals(ks, shortcuts.getShortcut("file.save"));
+    }
+
+    private static ShellCommand stubCommand(String id, String label) {
+        return new ShellCommand() {
             @Override public String getId() { return id; }
             @Override public String getLabel() { return label; }
             @Override public void perform() { }

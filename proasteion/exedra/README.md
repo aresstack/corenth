@@ -18,22 +18,29 @@ research prototype and made framework-agnostic:
 
 | Component | Package | Description |
 |-----------|---------|-------------|
+| `ShellCommand` | `command` | Unified command interface for menu, toolbar, and shortcut binding |
 | `CommandRegistry` | `command` | Register/lookup commands by dot-separated ID |
-| `MenuCommand` | `command` | Interface for menu-capable commands |
-| `MenuTreeBuilder` | `command` | Auto-generates `JMenuBar` from registry contents |
-| `ToolbarCommand` | `toolbar` | Interface for toolbar-capable commands |
-| `ToolbarCommandRegistry` | `toolbar` | Registry of toolbar commands |
+| `MenuConfig` | `command` | Configurable menu structure with separators, labels, and item ordering |
+| `MenuTreeBuilder` | `command` | Auto-generates `JMenuBar` from registry with separator and ordering support |
+| `ShortcutRegistry` | `command` | Keyboard shortcut registry with load/save/apply and root-pane binding |
+| `ShortcutRepository` | `command` | SPI for shortcut persistence |
+| `ToolbarCommandRegistry` | `toolbar` | Registry backed by unified `CommandRegistry` |
 | `ToolbarConfig` / `ToolbarConfigRepository` | `toolbar` | Toolbar layout persistence SPI |
 | `ConfigurableToolbar` | `toolbar` | Renders configurable toolbar from config |
-| `ToolWindowDescriptor` | `toolwindow` | Descriptor for a dockable tool window |
-| `ToolWindowRegistry` | `toolwindow` | Four-pane tool-window management with visibility toggling |
+| `ToolWindowDescriptor` | `toolwindow` | Descriptor with lazy `Supplier<JComponent>` support |
+| `ToolWindowRegistry` | `toolwindow` | Four-pane management with full layout persistence (area, order, selected tab) |
+| `ToolWindowLayout` | `toolwindow` | Immutable layout snapshot for persistence |
 | `DraggableTabbedPaneSupport` | `toolwindow` | Drag-and-drop tabs between panes |
 | `SettingsCategory` | `settings` | Interface for a settings page |
-| `SettingsCategoryRegistry` | `settings` | Ordered registry of settings categories |
+| `SettingsCategoryRegistry` | `settings` | Ordered registry with provider support |
+| `SettingsCategoryProvider` / `SettingsContext` | `settings` | Dynamic category creation with shell context |
 | `OutlookStyleSettingsDialog` | `settings` | Generic category-list settings dialog |
-| `UiEvent` / `UiEventBus` / `Subscription` | `event` | Typed pub/sub event bus with unsubscribe handle |
+| `UiEvent` / `AbstractUiEvent` | `event` | Timestamped event base with typed payload |
+| `UiEventBus` / `Subscription` | `event` | Typed pub/sub event bus with logged failures |
+| Shell event types | `event.shell` | `StatusEvent`, `SettingsChangedEvent`, `CommandExecutedEvent`, `ToolWindowChangedEvent` |
 | `ShellStatePersistence` / `ShellStateStore` | `persistence` | Save/restore window bounds, dividers, visibility |
-| `ShellFrame` | `shell` | Four-pane main frame wiring all of the above together |
+| `ShellFrame` | `shell` | Four-pane main frame with shortcut binding and default commands |
+| Default commands | `shell.commands` | Settings, shortcuts, toolbar, sidebar toggles, tool-window toggles, about |
 
 ## What was intentionally left out
 
@@ -53,14 +60,27 @@ part of this generic framework:
 ## Usage
 
 ```java
+// Unified command model — one id for menu + toolbar + shortcut
 CommandRegistry commands = new CommandRegistry();
-commands.register(myCommand);
+commands.register(mySaveCommand); // implements ShellCommand
 
-ToolbarCommandRegistry toolbar = new ToolbarCommandRegistry();
-toolbar.register(myToolbarCmd);
+// Toolbar backed by the same registry
+ToolbarCommandRegistry toolbar = new ToolbarCommandRegistry(commands);
 
+// Settings with provider support
 SettingsCategoryRegistry settings = new SettingsCategoryRegistry();
-settings.register(myCategory);
+settings.registerProvider(myProvider); // creates categories lazily with context
+
+// Shortcut registry with persistence
+ShortcutRegistry shortcuts = new ShortcutRegistry();
+shortcuts.load(myShortcutRepo);
+
+// Menu configuration with separators and ordering
+MenuConfig menuConfig = MenuConfig.builder()
+    .menuOrder(Arrays.asList("file", "edit", "view", "tools", "help"))
+    .itemOrder("file", Arrays.asList("new", "open", "---", "save", "---", "exit"))
+    .label("file", "File")
+    .build();
 
 UiEventBus eventBus = new UiEventBus();
 
@@ -68,12 +88,14 @@ ShellFrame frame = new ShellFrame(
     "My App",
     commands, toolbar, toolbarConfigRepo,
     settings, eventBus, persistence,
-    Arrays.asList("file", "edit", "view", "help")
+    menuConfig, shortcuts
 );
 
+// Lazy tool window (component only created when first shown)
 frame.getToolWindowRegistry().register(
     new ToolWindowDescriptor("explorer", "Explorer",
-        ToolWindowDescriptor.Position.LEFT_TOP, myPanel)
+        ToolWindowDescriptor.Position.LEFT_TOP,
+        () -> new ExplorerPanel())
 );
 
 frame.setVisible(true);

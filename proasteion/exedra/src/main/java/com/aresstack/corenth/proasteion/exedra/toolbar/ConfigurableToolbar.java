@@ -1,5 +1,7 @@
 package com.aresstack.corenth.proasteion.exedra.toolbar;
 
+import com.aresstack.corenth.proasteion.exedra.command.ShellCommand;
+
 import javax.swing.JButton;
 import javax.swing.JToolBar;
 import java.awt.event.ActionEvent;
@@ -53,9 +55,9 @@ public class ConfigurableToolbar extends JToolBar {
 
         for (ToolbarConfig.ToolbarEntry entry : config.getEntries()) {
             if (!entry.isVisible()) continue;
-            Optional<ToolbarCommand> opt = registry.findById(entry.getCommandId());
+            Optional<ShellCommand> opt = registry.findById(entry.getCommandId());
             if (!opt.isPresent()) continue;
-            ToolbarCommand cmd = opt.get();
+            ShellCommand cmd = opt.get();
 
             JButton btn = new JButton();
             if (cmd.getIcon() != null) {
@@ -77,7 +79,7 @@ public class ConfigurableToolbar extends JToolBar {
 
     private ToolbarConfig createDefaultConfig() {
         java.util.List<ToolbarConfig.ToolbarEntry> entries = new java.util.ArrayList<>();
-        for (ToolbarCommand cmd : registry.getAll()) {
+        for (ShellCommand cmd : registry.getToolbarCommands()) {
             entries.add(new ToolbarConfig.ToolbarEntry(cmd.getId(), true));
         }
         return new ToolbarConfig(entries);

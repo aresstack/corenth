@@ -1,33 +1,19 @@
 package com.aresstack.corenth.proasteion.exedra.toolbar;
 
-import javax.swing.Icon;
+import com.aresstack.corenth.proasteion.exedra.command.ShellCommand;
 
 /**
- * A command that can be placed on the configurable toolbar.
+ * Backward-compatible marker for toolbar commands.
+ * New code should implement {@link ShellCommand} with
+ * {@link ShellCommand#isToolbarVisible()} returning true.
+ *
+ * @deprecated use {@link ShellCommand} directly
  */
-public interface ToolbarCommand {
+@Deprecated
+public interface ToolbarCommand extends ShellCommand {
 
-    /** Unique stable identifier. */
-    String getId();
-
-    /** Display label (used in config dialog and tooltip). */
-    String getLabel();
-
-    /** Execute the command. */
-    void perform();
-
-    /** Optional icon text (emoji or short text rendered on the button). */
-    default String getIconText() {
-        return null;
-    }
-
-    /** Optional Swing icon. */
-    default Icon getIcon() {
-        return null;
-    }
-
-    /** Whether the command is currently enabled. */
-    default boolean isEnabled() {
+    @Override
+    default boolean isToolbarVisible() {
         return true;
     }
 }

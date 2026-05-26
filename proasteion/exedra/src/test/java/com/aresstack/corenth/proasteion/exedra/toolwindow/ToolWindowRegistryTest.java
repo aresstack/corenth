@@ -6,6 +6,7 @@ import org.junit.Test;
 import javax.swing.JLabel;
 import javax.swing.JTabbedPane;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.*;
 
@@ -79,5 +80,43 @@ public class ToolWindowRegistryTest {
         Map<String, Boolean> state = registry.getVisibilityState();
         assertTrue(state.get("a"));
         assertFalse(state.get("b"));
+    }
+
+    @Test
+    public void lazyComponent_notCreatedUntilShown() {
+        AtomicInteger createCount = new AtomicInteger(0);
+        ToolWindowDescriptor desc = new ToolWindowDescriptor(
+                "lazy", "Lazy Tool", ToolWindowDescriptor.Position.LEFT_TOP,
+                () -> { createCount.incrementAndGet(); return new JLabel("lazy"); },
+                null, false);
+
+        registry.register(desc);
+        assertEquals(0, createCount.get());
+
+        registry.setVisible("lazy", true);
+        assertEquals(1, createCount.get());
+    }
+
+    @Test
+    public void moveTo_changesPosition() {
+        ToolWindowDescriptor desc = new ToolWindowDescriptor(
+                "mover", "Mover", ToolWindowDescriptor.Position.LEFT_TOP,
+                new JLabel("m"), null, true);
+        registry.register(desc);
+        assertEquals(1, leftTop.getTabCount());
+
+        registry.moveTo("mover", ToolWindowDescriptor.Position.RIGHT_TOP);
+        assertEquals(0, leftTop.getTabCount());
+        assertEquals(1, rightTop.getTabCount());
+    }
+
+    @Test
+    public void getLayout_capturesFullState() {
+        registry.register(new ToolWindowDescriptor("x", "X",
+                ToolWindowDescriptor.Position.LEFT_TOP, new JLabel(), null, true));
+        ToolWindowLayout layout = registry.getLayout();
+        assertNotNull(layout.getToolStates().get("x"));
+        assertEquals(ToolWindowDescriptor.Position.LEFT_TOP, layout.getToolStates().get("x").getPosition());
+        assertTrue(layout.getToolStates().get("x").isVisible());
     }
 }

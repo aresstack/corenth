@@ -1,32 +1,49 @@
 package com.aresstack.corenth.proasteion.exedra.toolbar;
 
+import com.aresstack.corenth.proasteion.exedra.command.CommandRegistry;
+import com.aresstack.corenth.proasteion.exedra.command.ShellCommand;
+
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.List;
 import java.util.Optional;
 
 /**
- * Registry of toolbar commands available for placement on the configurable toolbar.
+ * Registry of toolbar-visible commands.
+ * Backed by the unified {@link CommandRegistry} — a command's
+ * {@link ShellCommand#isToolbarVisible()} flag determines default visibility.
+ *
+ * <p>This class provides toolbar-specific operations while the command
+ * identity is shared across menu, toolbar, and shortcut surfaces.
  */
 public final class ToolbarCommandRegistry {
 
-    private final Map<String, ToolbarCommand> commands = new LinkedHashMap<>();
+    private final CommandRegistry commandRegistry;
 
-    public void register(ToolbarCommand command) {
-        if (command == null) throw new IllegalArgumentException("command must not be null");
-        commands.put(command.getId(), command);
+    public ToolbarCommandRegistry(CommandRegistry commandRegistry) {
+        if (commandRegistry == null) throw new IllegalArgumentException("commandRegistry must not be null");
+        this.commandRegistry = commandRegistry;
     }
 
-    public Optional<ToolbarCommand> findById(String id) {
-        return Optional.ofNullable(commands.get(id));
+    /** Find a command by id (delegates to the shared registry). */
+    public Optional<ShellCommand> findById(String id) {
+        return commandRegistry.findById(id);
     }
 
-    public Collection<ToolbarCommand> getAll() {
-        return Collections.unmodifiableCollection(commands.values());
+    /** All commands that are marked as toolbar-visible by default. */
+    public Collection<ShellCommand> getToolbarCommands() {
+        List<ShellCommand> result = new ArrayList<>();
+        for (ShellCommand cmd : commandRegistry.getAll()) {
+            if (cmd.isToolbarVisible()) {
+                result.add(cmd);
+            }
+        }
+        return Collections.unmodifiableCollection(result);
     }
 
-    public void clear() {
-        commands.clear();
+    /** All commands (for toolbar configuration dialog). */
+    public Collection<ShellCommand> getAll() {
+        return commandRegistry.getAll();
     }
 }

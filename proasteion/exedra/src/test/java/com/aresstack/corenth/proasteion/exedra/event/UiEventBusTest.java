@@ -78,17 +78,33 @@ public class UiEventBusTest {
         bus.subscribe(TestEvent.class, null);
     }
 
-    // ---- test event types ----
-
-    private static class TestEvent implements UiEvent<String> {
-        private final String payload;
-        TestEvent(String payload) { this.payload = payload; }
-        @Override public String getPayload() { return payload; }
+    @Test
+    public void event_hasTimestamp() {
+        long before = System.currentTimeMillis();
+        TestEvent event = new TestEvent("ts");
+        long after = System.currentTimeMillis();
+        assertTrue(event.getTimestamp() >= before);
+        assertTrue(event.getTimestamp() <= after);
     }
 
-    private static class OtherEvent implements UiEvent<Integer> {
-        private final int payload;
-        OtherEvent(int payload) { this.payload = payload; }
-        @Override public Integer getPayload() { return payload; }
+    @Test
+    public void listenerFailure_doesNotPreventOtherListeners() {
+        List<String> received = new ArrayList<>();
+        bus.subscribe(TestEvent.class, e -> { throw new RuntimeException("fail"); });
+        bus.subscribe(TestEvent.class, e -> received.add(e.getPayload()));
+
+        bus.publish(new TestEvent("ok"));
+        assertEquals(1, received.size());
+        assertEquals("ok", received.get(0));
+    }
+
+    // ---- test event types ----
+
+    private static class TestEvent extends AbstractUiEvent<String> {
+        TestEvent(String payload) { super(payload); }
+    }
+
+    private static class OtherEvent extends AbstractUiEvent<Integer> {
+        OtherEvent(int payload) { super(payload); }
     }
 }

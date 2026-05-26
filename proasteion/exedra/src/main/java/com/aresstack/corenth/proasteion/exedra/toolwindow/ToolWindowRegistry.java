@@ -13,6 +13,9 @@ import java.util.Map;
  * Registry of tool windows that can be shown/hidden via the View menu.
  * Each tool window has a stable id, a default position (one of the four panes),
  * and visibility state that can be toggled.
+ *
+ * <p>Persists full layout: area by tool id, order within pane, selected tab per pane.
+ * Drag-and-drop updates are reflected in the layout model.
  */
 public final class ToolWindowRegistry {
 
@@ -30,7 +33,7 @@ public final class ToolWindowRegistry {
         if (descriptor == null) throw new IllegalArgumentException("descriptor must not be null");
         JTabbedPane pane = panes.get(descriptor.getDefaultPosition());
         boolean visible = descriptor.isVisibleByDefault();
-        entries.put(descriptor.getId(), new Entry(descriptor, pane, visible));
+        entries.put(descriptor.getId(), new Entry(descriptor, descriptor.getDefaultPosition(), pane, visible));
 
         if (visible && pane != null) {
             pane.addTab(descriptor.getTitle(), descriptor.getIcon(), descriptor.getComponent());
@@ -60,13 +63,36 @@ public final class ToolWindowRegistry {
         }
     }
 
+    /** Move a tool to a different position (updates the layout model). */
+    public void moveTo(String id, ToolWindowDescriptor.Position newPosition) {
+        Entry entry = entries.get(id);
+        if (entry == null) return;
+        JTabbedPane newPane = panes.get(newPosition);
+        if (newPane == null) return;
+
+        // Remove from current host
+        JTabbedPane oldHost = findCurrentHost(entry);
+        if (oldHost != null && entry.descriptor.isComponentCreated()) {
+            int idx = oldHost.indexOfComponent(entry.descriptor.getComponent());
+            if (idx >= 0) oldHost.removeTabAt(idx);
+        }
+
+        entry.currentPosition = newPosition;
+        entry.homePane = newPane;
+
+        if (entry.visible) {
+            newPane.addTab(entry.descriptor.getTitle(), entry.descriptor.getIcon(),
+                    entry.descriptor.getComponent());
+        }
+    }
+
     /** Whether a given tool window is currently visible. */
     public boolean isVisible(String id) {
         Entry entry = entries.get(id);
         return entry != null && entry.visible;
     }
 
-    /** Get all registered entries (unmodifiable). */
+    /** Get all registered descriptors (unmodifiable). */
     public List<ToolWindowDescriptor> getAll() {
         List<ToolWindowDescriptor> result = new ArrayList<>();
         for (Entry e : entries.values()) {
@@ -75,7 +101,57 @@ public final class ToolWindowRegistry {
         return Collections.unmodifiableList(result);
     }
 
-    /** Get the visibility map (id → visible) for persistence. */
+    /** Get the full layout state for persistence. */
+    public ToolWindowLayout getLayout() {
+        Map<String, ToolWindowLayout.ToolState> tools = new LinkedHashMap<>();
+        for (Map.Entry<String, Entry> e : entries.entrySet()) {
+            Entry entry = e.getValue();
+            JTabbedPane host = findCurrentHost(entry);
+            ToolWindowDescriptor.Position pos = entry.currentPosition;
+            int tabIndex = -1;
+            if (host != null && entry.descriptor.isComponentCreated()) {
+                tabIndex = host.indexOfComponent(entry.descriptor.getComponent());
+            }
+            tools.put(e.getKey(), new ToolWindowLayout.ToolState(pos, entry.visible, tabIndex));
+        }
+
+        // Selected tab per pane
+        Map<ToolWindowDescriptor.Position, Integer> selectedTabs = new LinkedHashMap<>();
+        for (Map.Entry<ToolWindowDescriptor.Position, JTabbedPane> pe : panes.entrySet()) {
+            selectedTabs.put(pe.getKey(), pe.getValue().getSelectedIndex());
+        }
+
+        return new ToolWindowLayout(tools, selectedTabs);
+    }
+
+    /** Restore layout from persisted state. */
+    public void applyLayout(ToolWindowLayout layout) {
+        if (layout == null) return;
+
+        for (Map.Entry<String, ToolWindowLayout.ToolState> e : layout.getToolStates().entrySet()) {
+            String id = e.getKey();
+            ToolWindowLayout.ToolState ts = e.getValue();
+            Entry entry = entries.get(id);
+            if (entry == null) continue;
+
+            // Move to persisted position if different
+            if (ts.getPosition() != null && ts.getPosition() != entry.currentPosition) {
+                moveTo(id, ts.getPosition());
+            }
+            // Apply visibility
+            setVisible(id, ts.isVisible());
+        }
+
+        // Restore selected tabs
+        for (Map.Entry<ToolWindowDescriptor.Position, Integer> se : layout.getSelectedTabs().entrySet()) {
+            JTabbedPane pane = panes.get(se.getKey());
+            if (pane != null && se.getValue() >= 0 && se.getValue() < pane.getTabCount()) {
+                pane.setSelectedIndex(se.getValue());
+            }
+        }
+    }
+
+    /** Get the visibility map (id → visible) for backward compatibility. */
     public Map<String, Boolean> getVisibilityState() {
         Map<String, Boolean> state = new LinkedHashMap<>();
         for (Map.Entry<String, Entry> e : entries.entrySet()) {
@@ -84,7 +160,7 @@ public final class ToolWindowRegistry {
         return state;
     }
 
-    /** Restore visibility state from persisted data. */
+    /** Restore visibility state from persisted data (backward compatible). */
     public void applyVisibilityState(Map<String, Boolean> state) {
         if (state == null) return;
         for (Map.Entry<String, Boolean> e : state.entrySet()) {
@@ -93,6 +169,7 @@ public final class ToolWindowRegistry {
     }
 
     private JTabbedPane findCurrentHost(Entry entry) {
+        if (!entry.descriptor.isComponentCreated()) return null;
         JComponent comp = entry.descriptor.getComponent();
         for (JTabbedPane pane : panes.values()) {
             int idx = pane.indexOfComponent(comp);
@@ -103,11 +180,14 @@ public final class ToolWindowRegistry {
 
     private static final class Entry {
         final ToolWindowDescriptor descriptor;
-        final JTabbedPane homePane;
+        ToolWindowDescriptor.Position currentPosition;
+        JTabbedPane homePane;
         boolean visible;
 
-        Entry(ToolWindowDescriptor descriptor, JTabbedPane homePane, boolean visible) {
+        Entry(ToolWindowDescriptor descriptor, ToolWindowDescriptor.Position position,
+              JTabbedPane homePane, boolean visible) {
             this.descriptor = descriptor;
+            this.currentPosition = position;
             this.homePane = homePane;
             this.visible = visible;
         }
