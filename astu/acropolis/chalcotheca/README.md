@@ -33,7 +33,7 @@ Chalcotheca sits between resource acquisition (`holkas`/`deigma`) and indexing (
 
 - **Change detection** — content hashing via `ContentHasher` determines whether a resource needs reprocessing.
 - **Lifecycle tracking** — `ArchivedResource` and `ResourceLifecycleState` record each resource's journey from discovery to indexing or deletion.
-- **Snapshot history** — `ResourceSnapshot` / `ResourceVersion` capture point-in-time digest records.
+- **Current version tracking** — `ResourceSnapshot` / `ResourceVersion` record the most recent digest for a resource. Full version history (retaining all past versions) is left for a later persistent archive implementation.
 - **Persistence abstraction** — `ResourceArchiveRepository` is storage-agnostic; implementations may use in-memory maps, filesystem, databases or any other backend.
 
 ## Key types
@@ -42,7 +42,7 @@ Chalcotheca sits between resource acquisition (`holkas`/`deigma`) and indexing (
 |------|---------|
 | `ContentHasher` | Reusable SHA-256 hashing (shared with tamias, anagraphai, pinakes). |
 | `ResourceDigest` | Fingerprint + size for a specific content blob. |
-| `ResourceVersion` | A digest observation at a point in time. |
+| `ResourceVersion` | Current digest observation at a point in time. |
 | `ResourceSnapshot` | Lightweight change-detection record (ref + digest + timestamp). |
 | `ArchivedResource` | Full lifecycle aggregate for a tracked resource. |
 | `ResourceLifecycleState` | Enum of lifecycle states. |

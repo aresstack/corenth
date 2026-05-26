@@ -281,6 +281,49 @@ public class WalkingSkeletonIntegrationTest {
     }
 
     @Test
+    public void deniedThenReaccepted_unchangedContent_reindexes() throws IOException {
+        // Shared archive so snapshot state is consistent across cycles
+        InMemoryResourceArchive sharedArchive = new InMemoryResourceArchive();
+
+        // Accept-all policy for .txt files
+        PatternResourcePolicy acceptPolicy = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                "allow-txt", Arrays.asList("file"), Arrays.asList("**/*.txt"),
+                Collections.<String>emptyList(), Long.MAX_VALUE)));
+
+        // Deny-all-txt policy (only .md accepted)
+        PatternResourcePolicy denyPolicy = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                "md-only", Arrays.asList("file"), Arrays.asList("**/*.md"),
+                Collections.<String>emptyList(), Long.MAX_VALUE)));
+
+        // Step 1: Index a .txt file with accepting policy
+        ResourceLifecycleCoordinator acceptCoordinator = new ResourceLifecycleCoordinator(
+                createFileResourceProvider(), createDeigmaInspector(),
+                acceptPolicy, sharedArchive, lexicalIndex);
+
+        File txtFile = tempFolder.newFile("reaccept.txt");
+        writeFile(txtFile, "reacceptable unique content");
+        VirtualResourceRef ref = fileRef(txtFile);
+
+        ProcessingResult first = acceptCoordinator.process(ref);
+        assertEquals(ProcessingResult.Status.INDEXED, first.status());
+        assertFalse(searchCoordinator.search("reacceptable", 10).isEmpty());
+
+        // Step 2: Deny the same ref — lexical entry + archive snapshot removed
+        ResourceLifecycleCoordinator denyCoordinator = new ResourceLifecycleCoordinator(
+                createFileResourceProvider(), createDeigmaInspector(),
+                denyPolicy, sharedArchive, lexicalIndex);
+
+        ProcessingResult denied = denyCoordinator.process(ref);
+        assertEquals(ProcessingResult.Status.DENIED, denied.status());
+        assertTrue(searchCoordinator.search("reacceptable", 10).isEmpty());
+
+        // Step 3: Re-accept the same unchanged file — should re-index (not UNCHANGED)
+        ProcessingResult reindexed = acceptCoordinator.process(ref);
+        assertEquals(ProcessingResult.Status.INDEXED, reindexed.status());
+        assertFalse(searchCoordinator.search("reacceptable", 10).isEmpty());
+    }
+
+    @Test
     public void unchangedContentSkipsReindexing() throws IOException {
         File txtFile = tempFolder.newFile("stable.txt");
         writeFile(txtFile, "Stable content that does not change.");
@@ -355,6 +398,50 @@ public class WalkingSkeletonIntegrationTest {
         ProcessingResult failed = emptyCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.FAILED, failed.status());
         assertTrue(searchCoordinator.search("stale", 10).isEmpty());
+    }
+
+    @Test
+    public void noTextThenReprocessed_unchangedContent_reindexes() throws IOException {
+        // Shared archive so snapshot state is consistent across cycles
+        InMemoryResourceArchive sharedArchive = new InMemoryResourceArchive();
+        PatternResourcePolicy acceptPolicy = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                "allow-all", Arrays.asList("file"), Arrays.asList("**/*"),
+                Collections.<String>emptyList(), Long.MAX_VALUE)));
+
+        // Step 1: Index with normal inspector
+        ResourceLifecycleCoordinator normalCoordinator = new ResourceLifecycleCoordinator(
+                createFileResourceProvider(), createDeigmaInspector(),
+                acceptPolicy, sharedArchive, lexicalIndex);
+
+        File txtFile = tempFolder.newFile("notext-reindex.txt");
+        writeFile(txtFile, "notext reindex unique content");
+        VirtualResourceRef ref = fileRef(txtFile);
+
+        ProcessingResult first = normalCoordinator.process(ref);
+        assertEquals(ProcessingResult.Status.INDEXED, first.status());
+        assertFalse(searchCoordinator.search("notext", 10).isEmpty());
+
+        // Step 2: Change the file content so digest changes, then use empty inspector
+        // which produces no indexable text — triggers cleanup path
+        writeFile(txtFile, "changed content that empty inspector ignores");
+        ContentInspector emptyInspector = new ContentInspector() {
+            @Override
+            public InspectionResult inspect(VirtualResourceRef r, byte[] content, String filenameHint) {
+                return InspectionResult.success("text/plain", Arrays.asList(null, "", " "));
+            }
+        };
+        ResourceLifecycleCoordinator emptyCoordinator = new ResourceLifecycleCoordinator(
+                createFileResourceProvider(), emptyInspector,
+                acceptPolicy, sharedArchive, lexicalIndex);
+
+        ProcessingResult noText = emptyCoordinator.process(ref);
+        assertEquals(ProcessingResult.Status.FAILED, noText.status());
+        assertTrue(searchCoordinator.search("notext", 10).isEmpty());
+
+        // Step 3: Re-process same file with normal inspector — archive snapshot was
+        // removed during cleanup, so hasChanged returns true and file is re-indexed
+        ProcessingResult reindexed = normalCoordinator.process(ref);
+        assertEquals(ProcessingResult.Status.INDEXED, reindexed.status());
     }
 
     @Test

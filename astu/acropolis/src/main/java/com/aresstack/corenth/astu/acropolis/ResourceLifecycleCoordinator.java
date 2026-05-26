@@ -1,7 +1,7 @@
 package com.aresstack.corenth.astu.acropolis;
 
-import com.aresstack.corenth.astu.ResourceFingerprint;
 import com.aresstack.corenth.astu.VirtualResourceRef;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.ContentHasher;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceDigest;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceSnapshot;
@@ -14,8 +14,6 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PolicyReason;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
 
 import java.io.IOException;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.List;
 
 /**
@@ -130,7 +128,7 @@ public final class ResourceLifecycleCoordinator {
 
         // 3. Compute digest and check archive (chalcotheca)
         byte[] bytes = raw.bytes();
-        ResourceDigest digest = computeDigest(bytes);
+        ResourceDigest digest = ContentHasher.digest(bytes);
         if (!archive.hasChanged(ref, digest)) {
             return ProcessingResult.unchanged(ref);
         }
@@ -183,24 +181,11 @@ public final class ResourceLifecycleCoordinator {
         return ProcessingResult.indexed(ref);
     }
 
-    private static ResourceDigest computeDigest(byte[] content) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] hash = md.digest(content);
-            StringBuilder hex = new StringBuilder();
-            for (byte b : hash) {
-                hex.append(String.format("%02x", b & 0xff));
-            }
-            return new ResourceDigest(new ResourceFingerprint("SHA-256", hex.toString()), content.length);
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("SHA-256 not available", e);
-        }
-    }
-
     private ProcessingResult cleanupAndReturn(ProcessingResult result) {
         try {
             lexicalIndex.remove(result.ref());
             lexicalIndex.commit();
+            archive.remove(result.ref());
             return result;
         } catch (IOException e) {
             return ProcessingResult.failed(result.ref(),
