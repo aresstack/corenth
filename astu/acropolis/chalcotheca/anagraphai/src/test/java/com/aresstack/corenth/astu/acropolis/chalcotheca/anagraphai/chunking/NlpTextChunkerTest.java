@@ -2,6 +2,7 @@ package com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking;
 
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalChunk;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -11,7 +12,12 @@ import static org.junit.jupiter.api.Assertions.*;
 class NlpTextChunkerTest {
 
     private final SentenceSegmenter segmenter = new BreakIteratorSentenceSegmenter();
-    private final TokenCounter tokenCounter = new LuceneTokenCounter();
+    private final LuceneTokenCounter tokenCounter = new LuceneTokenCounter();
+
+    @AfterEach
+    void closeTokenCounter() {
+        tokenCounter.close();
+    }
 
     @Test
     void blankInputReturnsNoChunks() {
@@ -78,6 +84,16 @@ class NlpTextChunkerTest {
             }
         }
         assertTrue(hasHeading, "At least one chunk should retain a markdown heading");
+    }
+
+    @Test
+    void headingOnlyMarkdownSectionIsEmitted() {
+        LexicalChunkingConfig config = new LexicalChunkingConfig(1000, 0);
+        NlpTextChunker chunker = new NlpTextChunker(segmenter, tokenCounter, config);
+
+        List<LexicalChunk> chunks = chunker.chunk("# Title");
+        assertEquals(1, chunks.size());
+        assertEquals("# Title", chunks.get(0).text());
     }
 
     @Test

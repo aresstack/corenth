@@ -3,6 +3,7 @@ package com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalAnalyzerFactory;
 
 import org.apache.lucene.analysis.Analyzer;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -10,6 +11,11 @@ import static org.junit.jupiter.api.Assertions.*;
 class LuceneTokenCounterTest {
 
     private final LuceneTokenCounter counter = new LuceneTokenCounter();
+
+    @AfterEach
+    void closeDefaultCounter() {
+        counter.close();
+    }
 
     @Test
     void countsTokensConsistentWithStandardAnalyzer() {
@@ -50,6 +56,7 @@ class LuceneTokenCounterTest {
         String sample = "The Corenth architecture uses modular resource indexing.";
         assertEquals(factoryCounter.countTokens(sample), counter.countTokens(sample),
                 "Default counter and factory-based counter must agree on token count");
+        factoryCounter.close();
         factoryAnalyzer.close();
     }
 
@@ -63,5 +70,23 @@ class LuceneTokenCounterTest {
         int short_ = counter.countTokens("Short text.");
         int long_ = counter.countTokens("This is a much longer text with many more words that should produce more tokens overall.");
         assertTrue(long_ > short_);
+    }
+
+    @Test
+    void closeMakesDefaultCounterAnalyzerUnavailable() {
+        LuceneTokenCounter ownedCounter = new LuceneTokenCounter();
+        ownedCounter.close();
+        assertThrows(RuntimeException.class, () -> ownedCounter.countTokens("text after close"));
+    }
+
+    @Test
+    void closeDoesNotCloseInjectedAnalyzer() {
+        Analyzer analyzer = LexicalAnalyzerFactory.create();
+        LuceneTokenCounter injectedCounter = new LuceneTokenCounter(analyzer);
+        injectedCounter.close();
+        LuceneTokenCounter stillUsable = new LuceneTokenCounter(analyzer);
+        assertTrue(stillUsable.countTokens("still open") > 0);
+        stillUsable.close();
+        analyzer.close();
     }
 }

@@ -14,20 +14,32 @@ import java.io.IOException;
  * <p>Both this counter and the index obtain their analyzer from
  * {@link LexicalAnalyzerFactory#create()}, ensuring that any future analyzer
  * change applies to both by construction.
+ *
+ * <p>Analyzer ownership:
+ * <ul>
+ *   <li>Default constructor: this counter owns the analyzer and closes it in {@link #close()}.</li>
+ *   <li>Injected analyzer constructor: caller retains ownership; {@link #close()} is a no-op.</li>
+ * </ul>
  */
-public final class LuceneTokenCounter implements TokenCounter {
+public final class LuceneTokenCounter implements TokenCounter, AutoCloseable {
 
     private final Analyzer analyzer;
+    private final boolean ownsAnalyzer;
 
     /** Creates a counter using the shared {@link LexicalAnalyzerFactory} analyzer. */
     public LuceneTokenCounter() {
-        this(LexicalAnalyzerFactory.create());
+        this(LexicalAnalyzerFactory.create(), true);
     }
 
-    /** Creates a counter using the provided analyzer for shared usage. */
+    /** Creates a counter using the provided analyzer for shared usage. Caller retains ownership. */
     public LuceneTokenCounter(Analyzer analyzer) {
+        this(analyzer, false);
+    }
+
+    private LuceneTokenCounter(Analyzer analyzer, boolean ownsAnalyzer) {
         if (analyzer == null) throw new IllegalArgumentException("analyzer must not be null");
         this.analyzer = analyzer;
+        this.ownsAnalyzer = ownsAnalyzer;
     }
 
     /** Returns the analyzer used by this counter (for shared use with index). */
@@ -60,6 +72,13 @@ public final class LuceneTokenCounter implements TokenCounter {
                     // best effort
                 }
             }
+        }
+    }
+
+    @Override
+    public void close() {
+        if (ownsAnalyzer) {
+            analyzer.close();
         }
     }
 }

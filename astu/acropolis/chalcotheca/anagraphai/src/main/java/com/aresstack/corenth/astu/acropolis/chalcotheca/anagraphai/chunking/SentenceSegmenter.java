@@ -10,7 +10,7 @@ public interface SentenceSegmenter {
      * Segments text into sentence ranges.
      *
      * @param text the input text
-     * @return ordered list of sentence ranges (non-overlapping, covering the text)
+     * @return ordered, non-overlapping sentence ranges (whitespace/gap-only text may be omitted)
      */
     List<TextRange> segment(String text);
 }

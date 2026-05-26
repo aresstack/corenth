@@ -69,6 +69,9 @@ public final class NlpTextChunker implements LexicalChunker {
         List<LexicalChunk> chunks = new ArrayList<LexicalChunk>();
         String sectionText = section.body;
         if (sectionText.trim().isEmpty()) {
+            if (section.heading != null && !section.heading.trim().isEmpty()) {
+                chunks.add(new LexicalChunk(startIndex, section.heading));
+            }
             return chunks;
         }
 
@@ -95,13 +98,7 @@ public final class NlpTextChunker implements LexicalChunker {
                 TextRange sentRange = sentences.get(sentIdx);
                 String sentText = sectionText.substring(sentRange.start(), sentRange.end());
 
-                String candidate;
-                if (chunkBuilder.length() == 0
-                        || (section.heading != null && chunkBuilder.toString().trim().equals(section.heading))) {
-                    candidate = chunkBuilder.toString() + sentText;
-                } else {
-                    candidate = chunkBuilder.toString() + sentText;
-                }
+                String candidate = chunkBuilder.toString() + sentText;
 
                 int tokenCount = tokenCounter.countTokens(candidate);
 
@@ -126,7 +123,6 @@ public final class NlpTextChunker implements LexicalChunker {
             if (sentIdx < sentences.size() && config.overlapSentences() > 0) {
                 int overlapStart = lastSentInChunk - config.overlapSentences() + 1;
                 if (overlapStart > firstSentInChunk) {
-                    sentIdx = overlapStart + config.overlapSentences();
                     sentIdx = lastSentInChunk + 1 - config.overlapSentences();
                     if (sentIdx <= firstSentInChunk) {
                         sentIdx = lastSentInChunk + 1;
