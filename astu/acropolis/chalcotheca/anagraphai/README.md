@@ -120,7 +120,7 @@ Model absence is a normal operational condition — the segmenter falls back to 
 - `org.apache.lucene:lucene-core:8.11.4`
 - `org.apache.lucene:lucene-analyzers-common:8.11.4`
 - `org.apache.lucene:lucene-queryparser:8.11.4`
-- `org.apache.opennlp:opennlp-tools:1.9.4` (compile-only / optional — runtime fallback to BreakIterator)
+- `org.apache.opennlp:opennlp-tools:2.5.9` (compile-only / optional — runtime fallback to BreakIterator)
 
 ## Migration inventory
 
