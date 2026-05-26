@@ -1,10 +1,14 @@
 package com.aresstack.corenth.proasteion.exedra.toolwindow;
 
+import com.aresstack.corenth.proasteion.exedra.event.UiEventBus;
+import com.aresstack.corenth.proasteion.exedra.event.shell.ToolWindowChangedEvent;
 import org.junit.Before;
 import org.junit.Test;
 
 import javax.swing.JLabel;
 import javax.swing.JTabbedPane;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -118,5 +122,91 @@ public class ToolWindowRegistryTest {
         assertNotNull(layout.getToolStates().get("x"));
         assertEquals(ToolWindowDescriptor.Position.LEFT_TOP, layout.getToolStates().get("x").getPosition());
         assertTrue(layout.getToolStates().get("x").isVisible());
+    }
+
+    @Test
+    public void applyLayout_restoresState() {
+        JLabel comp = new JLabel("x");
+        registry.register(new ToolWindowDescriptor("x", "X",
+                ToolWindowDescriptor.Position.LEFT_TOP, comp, null, true));
+
+        // Move to right
+        registry.moveTo("x", ToolWindowDescriptor.Position.RIGHT_TOP);
+        ToolWindowLayout layout = registry.getLayout();
+
+        // Fresh registry
+        ToolWindowRegistry fresh = new ToolWindowRegistry();
+        JTabbedPane lt2 = new JTabbedPane();
+        JTabbedPane rt2 = new JTabbedPane();
+        fresh.bindPane(ToolWindowDescriptor.Position.LEFT_TOP, lt2);
+        fresh.bindPane(ToolWindowDescriptor.Position.RIGHT_TOP, rt2);
+        fresh.register(new ToolWindowDescriptor("x", "X",
+                ToolWindowDescriptor.Position.LEFT_TOP, new JLabel(), null, true));
+        fresh.applyLayout(layout);
+
+        assertEquals(ToolWindowDescriptor.Position.RIGHT_TOP,
+                fresh.getLayout().getToolStates().get("x").getPosition());
+    }
+
+    @Test
+    public void updatePositionAfterDrag_updatesModelOnly() {
+        JLabel comp = new JLabel("m");
+        registry.register(new ToolWindowDescriptor("d", "D",
+                ToolWindowDescriptor.Position.LEFT_TOP, comp, null, true));
+
+        // Simulate tab already moved by DnD
+        leftTop.removeTabAt(0);
+        rightTop.addTab("D", comp);
+
+        registry.updatePositionAfterDrag("d", ToolWindowDescriptor.Position.RIGHT_TOP);
+        assertEquals(ToolWindowDescriptor.Position.RIGHT_TOP,
+                registry.getLayout().getToolStates().get("d").getPosition());
+    }
+
+    @Test
+    public void setVisible_emitsEvent() {
+        UiEventBus bus = new UiEventBus();
+        registry.setEventBus(bus);
+        List<ToolWindowChangedEvent> events = new ArrayList<>();
+        bus.subscribe(ToolWindowChangedEvent.class, events::add);
+
+        registry.register(new ToolWindowDescriptor("ev", "Ev",
+                ToolWindowDescriptor.Position.LEFT_TOP, new JLabel(), null, false));
+        registry.setVisible("ev", true);
+        registry.setVisible("ev", false);
+
+        assertEquals(2, events.size());
+        assertEquals(ToolWindowChangedEvent.ChangeType.SHOWN, events.get(0).getChangeType());
+        assertEquals(ToolWindowChangedEvent.ChangeType.HIDDEN, events.get(1).getChangeType());
+    }
+
+    @Test
+    public void moveTo_emitsEvent() {
+        UiEventBus bus = new UiEventBus();
+        registry.setEventBus(bus);
+        List<ToolWindowChangedEvent> events = new ArrayList<>();
+        bus.subscribe(ToolWindowChangedEvent.class, events::add);
+
+        registry.register(new ToolWindowDescriptor("mv", "Mv",
+                ToolWindowDescriptor.Position.LEFT_TOP, new JLabel(), null, true));
+        registry.moveTo("mv", ToolWindowDescriptor.Position.RIGHT_TOP);
+
+        assertEquals(1, events.size());
+        assertEquals(ToolWindowChangedEvent.ChangeType.MOVED, events.get(0).getChangeType());
+    }
+
+    @Test
+    public void findIdByComponent_findsRegistered() {
+        JLabel comp = new JLabel("find");
+        registry.register(new ToolWindowDescriptor("finder", "Finder",
+                ToolWindowDescriptor.Position.LEFT_TOP, comp, null, true));
+        assertEquals("finder", registry.findIdByComponent(comp));
+    }
+
+    @Test
+    public void getPositionForPane_returnsCorrectPosition() {
+        assertEquals(ToolWindowDescriptor.Position.LEFT_TOP, registry.getPositionForPane(leftTop));
+        assertEquals(ToolWindowDescriptor.Position.RIGHT_TOP, registry.getPositionForPane(rightTop));
+        assertNull(registry.getPositionForPane(new JTabbedPane()));
     }
 }

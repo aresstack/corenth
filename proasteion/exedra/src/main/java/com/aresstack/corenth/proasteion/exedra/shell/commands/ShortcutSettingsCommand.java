@@ -7,9 +7,8 @@ import com.aresstack.corenth.proasteion.exedra.command.ShortcutRegistry;
 import javax.swing.JFrame;
 
 /**
- * Opens the keyboard shortcut settings. Registered as {@code "tools.shortcuts"}.
- * The actual editor UI is left to application integrators — this command serves
- * as the registration point and performs a reload of root-pane bindings.
+ * Opens the keyboard shortcut editor dialog. Registered as {@code "tools.shortcuts"}.
+ * After editing, re-applies bindings to the root pane.
  */
 public final class ShortcutSettingsCommand implements ShellCommand {
 
@@ -29,7 +28,11 @@ public final class ShortcutSettingsCommand implements ShellCommand {
 
     @Override
     public void perform() {
-        // Re-apply shortcuts to root pane (in case they were edited externally)
-        shortcutRegistry.applyToRootPane(frame.getRootPane(), commandRegistry);
+        ShortcutEditorDialog dialog = new ShortcutEditorDialog(frame, shortcutRegistry, commandRegistry);
+        dialog.setVisible(true);
+        if (dialog.wasApplied()) {
+            // Re-apply shortcuts to root pane after editing
+            shortcutRegistry.applyToRootPane(frame.getRootPane(), commandRegistry);
+        }
     }
 }

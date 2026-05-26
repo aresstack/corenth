@@ -49,7 +49,7 @@ public final class MenuTreeBuilder {
                 Node child = root.children.get(key);
                 if (child != null) {
                     String label = resolveLabel(key, config);
-                    JMenu menu = buildMenu(child, label, key, config, shortcuts);
+                    JMenu menu = buildMenu(child, label, key, config, shortcuts, registry);
                     if (menu != null && menu.getItemCount() > 0) {
                         menuBar.add(menu);
                     }
@@ -61,7 +61,7 @@ public final class MenuTreeBuilder {
         for (Map.Entry<String, Node> entry : root.children.entrySet()) {
             if (menuOrder != null && menuOrder.contains(entry.getKey())) continue;
             String label = resolveLabel(entry.getKey(), config);
-            JMenu menu = buildMenu(entry.getValue(), label, entry.getKey(), config, shortcuts);
+            JMenu menu = buildMenu(entry.getValue(), label, entry.getKey(), config, shortcuts, registry);
             if (menu != null && menu.getItemCount() > 0) {
                 menuBar.add(menu);
             }
@@ -92,7 +92,8 @@ public final class MenuTreeBuilder {
     }
 
     private static JMenu buildMenu(Node node, String title, String menuPath,
-                                    MenuConfig config, ShortcutRegistry shortcuts) {
+                                    MenuConfig config, ShortcutRegistry shortcuts,
+                                    CommandRegistry registry) {
         JMenu menu = new JMenu(title);
 
         List<String> itemOrder = config != null ? config.getItemOrder(menuPath) : null;
@@ -101,14 +102,14 @@ public final class MenuTreeBuilder {
         // If item order specified, follow it
         if (itemOrder != null) {
             for (String key : itemOrder) {
-                if (MenuConfig.SEPARATOR.equals(key)) {
+                if (MenuConfig.SEPARATOR.equals(key) || isSeparatorKey(key)) {
                     if (addedAny) menu.addSeparator();
                     continue;
                 }
                 // Check leaves first
                 ShellCommand leafCmd = node.leaves.get(key);
                 if (leafCmd != null) {
-                    menu.add(createMenuItem(leafCmd, shortcuts));
+                    menu.add(createMenuItem(leafCmd, shortcuts, registry));
                     addedAny = true;
                     continue;
                 }
@@ -117,7 +118,7 @@ public final class MenuTreeBuilder {
                 if (sub != null) {
                     String subLabel = resolveLabel(key, config);
                     String subPath = menuPath + "." + key;
-                    JMenu subMenu = buildMenu(sub, subLabel, subPath, config, shortcuts);
+                    JMenu subMenu = buildMenu(sub, subLabel, subPath, config, shortcuts, registry);
                     if (subMenu != null && subMenu.getItemCount() > 0) {
                         menu.add(subMenu);
                         addedAny = true;
@@ -129,7 +130,12 @@ public final class MenuTreeBuilder {
         // Add remaining leaves not in order
         for (Map.Entry<String, ShellCommand> leaf : node.leaves.entrySet()) {
             if (itemOrder != null && itemOrder.contains(leaf.getKey())) continue;
-            menu.add(createMenuItem(leaf.getValue(), shortcuts));
+            // Separator-like command ids: leaf keys starting with "---"
+            if (isSeparatorKey(leaf.getKey())) {
+                if (addedAny) menu.addSeparator();
+                continue;
+            }
+            menu.add(createMenuItem(leaf.getValue(), shortcuts, registry));
             addedAny = true;
         }
 
@@ -138,7 +144,7 @@ public final class MenuTreeBuilder {
             if (itemOrder != null && itemOrder.contains(sub.getKey())) continue;
             String subLabel = resolveLabel(sub.getKey(), config);
             String subPath = menuPath + "." + sub.getKey();
-            JMenu subMenu = buildMenu(sub.getValue(), subLabel, subPath, config, shortcuts);
+            JMenu subMenu = buildMenu(sub.getValue(), subLabel, subPath, config, shortcuts, registry);
             if (subMenu != null && subMenu.getItemCount() > 0) {
                 menu.add(subMenu);
                 addedAny = true;
@@ -148,9 +154,10 @@ public final class MenuTreeBuilder {
         return menu;
     }
 
-    private static JMenuItem createMenuItem(ShellCommand cmd, ShortcutRegistry shortcuts) {
+    private static JMenuItem createMenuItem(ShellCommand cmd, ShortcutRegistry shortcuts,
+                                            CommandRegistry registry) {
         JMenuItem item = new JMenuItem(cmd.getLabel());
-        item.addActionListener((ActionEvent e) -> cmd.perform());
+        item.addActionListener((ActionEvent e) -> registry.execute(cmd));
         if (cmd.getIcon() != null) item.setIcon(cmd.getIcon());
 
         // Resolve accelerator: shortcut registry overrides default
@@ -177,6 +184,15 @@ public final class MenuTreeBuilder {
     private static String capitalize(String s) {
         if (s == null || s.isEmpty()) return s;
         return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+
+    /**
+     * Returns true for separator-like keys: keys starting with "---".
+     * This allows contributors to add separator commands with ids like "file.---1"
+     * without central menu config changes.
+     */
+    private static boolean isSeparatorKey(String key) {
+        return key != null && key.startsWith("---");
     }
 
     private static final class Node {

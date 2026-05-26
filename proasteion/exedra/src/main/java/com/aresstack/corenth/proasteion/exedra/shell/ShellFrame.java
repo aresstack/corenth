@@ -117,6 +117,7 @@ public class ShellFrame extends JFrame {
 
         // Tool window registry
         this.toolWindowRegistry = new ToolWindowRegistry();
+        toolWindowRegistry.setEventBus(eventBus);
         toolWindowRegistry.bindPane(ToolWindowDescriptor.Position.LEFT_TOP, leftTopPane);
         toolWindowRegistry.bindPane(ToolWindowDescriptor.Position.LEFT_BOTTOM, leftBottomPane);
         toolWindowRegistry.bindPane(ToolWindowDescriptor.Position.RIGHT_TOP, rightTopPane);
@@ -146,8 +147,31 @@ public class ShellFrame extends JFrame {
 
         add(outerSplit, BorderLayout.CENTER);
 
-        // Draggable tabs between all four panes
-        DraggableTabbedPaneSupport.install(leftTopPane, leftBottomPane, rightTopPane, rightBottomPane);
+        // Draggable tabs between all four panes — with model callback
+        DraggableTabbedPaneSupport.install(
+                (component, sourcePane, targetPane) -> {
+                    // Find the tool id for the moved component
+                    String toolId = toolWindowRegistry.findIdByComponent(component);
+                    if (toolId != null) {
+                        ToolWindowDescriptor.Position newPos = toolWindowRegistry.getPositionForPane(targetPane);
+                        if (newPos != null) {
+                            // Update the internal model (position tracking only, tab already moved)
+                            toolWindowRegistry.updatePositionAfterDrag(toolId, newPos);
+                            // Emit event
+                            if (eventBus != null) {
+                                eventBus.publish(new com.aresstack.corenth.proasteion.exedra.event.shell.ToolWindowChangedEvent(
+                                        toolId, com.aresstack.corenth.proasteion.exedra.event.shell.ToolWindowChangedEvent.ChangeType.MOVED));
+                            }
+                        }
+                    }
+                },
+                leftTopPane, leftBottomPane, rightTopPane, rightBottomPane);
+
+        // Register execution listener to emit CommandExecutedEvent
+        if (eventBus != null) {
+            commandRegistry.addExecutionListener(cmd ->
+                    eventBus.publish(new com.aresstack.corenth.proasteion.exedra.event.shell.CommandExecutedEvent(cmd.getId())));
+        }
 
         // Register default shell commands
         registerDefaultCommands(title);
@@ -246,18 +270,25 @@ public class ShellFrame extends JFrame {
         rebuildMenuBar(menuOrder != null ? MenuConfig.withOrder(menuOrder) : null);
     }
 
-    /** Restore divider positions from persistence. */
+    /** Restore divider positions and tool-window layout from persistence. */
     public void restoreDividers() {
         if (persistence == null) return;
         leftSplit.setDividerLocation(persistence.getDividerPosition("left", leftSplit.getHeight() / 2));
         rightSplit.setDividerLocation(persistence.getDividerPosition("right", rightSplit.getHeight() / 2));
         mainHSplit.setDividerLocation(persistence.getDividerPosition("mainH", 200));
         outerSplit.setDividerLocation(persistence.getDividerPosition("outer", outerSplit.getWidth() - 200));
+
+        // Restore full tool-window layout (area, order, selected tab)
+        com.aresstack.corenth.proasteion.exedra.toolwindow.ToolWindowLayout layout =
+                persistence.loadToolWindowLayout();
+        if (layout != null) {
+            toolWindowRegistry.applyLayout(layout);
+        }
     }
 
     private void registerDefaultCommands(String appTitle) {
         // Settings
-        commandRegistry.register(new OpenSettingsCommand(this, settingsRegistry, settingsContext));
+        commandRegistry.register(new OpenSettingsCommand(this, settingsRegistry, settingsContext, eventBus));
         // Toolbar settings
         commandRegistry.register(new ToolbarSettingsCommand(toolbar));
         // Shortcut settings
@@ -280,9 +311,7 @@ public class ShellFrame extends JFrame {
         persistence.saveDividerPosition("mainH", mainHSplit.getDividerLocation());
         persistence.saveDividerPosition("outer", outerSplit.getDividerLocation());
 
-        // Persist tool-window layout
-        for (java.util.Map.Entry<String, Boolean> entry : toolWindowRegistry.getVisibilityState().entrySet()) {
-            persistence.saveToolVisibility(entry.getKey(), entry.getValue());
-        }
+        // Persist full tool-window layout (area, order, selected tab per pane)
+        persistence.saveToolWindowLayout(toolWindowRegistry.getLayout());
     }
 }

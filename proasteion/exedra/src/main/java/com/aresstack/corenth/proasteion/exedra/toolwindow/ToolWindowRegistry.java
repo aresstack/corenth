@@ -1,5 +1,8 @@
 package com.aresstack.corenth.proasteion.exedra.toolwindow;
 
+import com.aresstack.corenth.proasteion.exedra.event.UiEventBus;
+import com.aresstack.corenth.proasteion.exedra.event.shell.ToolWindowChangedEvent;
+
 import javax.swing.JComponent;
 import javax.swing.JTabbedPane;
 import java.awt.Component;
@@ -16,16 +19,45 @@ import java.util.Map;
  *
  * <p>Persists full layout: area by tool id, order within pane, selected tab per pane.
  * Drag-and-drop updates are reflected in the layout model.
+ *
+ * <p>When an {@link UiEventBus} is set, visibility and position changes publish
+ * {@link ToolWindowChangedEvent}.
  */
 public final class ToolWindowRegistry {
 
     private final Map<String, Entry> entries = new LinkedHashMap<>();
     private final Map<ToolWindowDescriptor.Position, JTabbedPane> panes = new LinkedHashMap<>();
+    private UiEventBus eventBus;
+
+    /** Set the event bus for publishing tool-window change events. */
+    public void setEventBus(UiEventBus eventBus) {
+        this.eventBus = eventBus;
+    }
 
     /** Assign a JTabbedPane to a position. Must be called before registering tools at that position. */
     public void bindPane(ToolWindowDescriptor.Position position, JTabbedPane pane) {
         if (position == null || pane == null) throw new IllegalArgumentException("position and pane must not be null");
         panes.put(position, pane);
+    }
+
+    /** Find the position for a given JTabbedPane. Returns null if not bound. */
+    public ToolWindowDescriptor.Position getPositionForPane(JTabbedPane pane) {
+        for (Map.Entry<ToolWindowDescriptor.Position, JTabbedPane> e : panes.entrySet()) {
+            if (e.getValue() == pane) return e.getKey();
+        }
+        return null;
+    }
+
+    /** Find the tool id whose component matches the given component. Returns null if not found. */
+    public String findIdByComponent(java.awt.Component component) {
+        if (component == null) return null;
+        for (Map.Entry<String, Entry> e : entries.entrySet()) {
+            if (e.getValue().descriptor.isComponentCreated()
+                    && e.getValue().descriptor.getComponent() == component) {
+                return e.getKey();
+            }
+        }
+        return null;
     }
 
     /** Register a tool window descriptor. Adds the tab to its pane if visible. */
@@ -61,6 +93,13 @@ public final class ToolWindowRegistry {
                 if (idx >= 0) host.removeTabAt(idx);
             }
         }
+
+        // Emit event
+        if (eventBus != null) {
+            eventBus.publish(new ToolWindowChangedEvent(id,
+                    visible ? ToolWindowChangedEvent.ChangeType.SHOWN
+                            : ToolWindowChangedEvent.ChangeType.HIDDEN));
+        }
     }
 
     /** Move a tool to a different position (updates the layout model). */
@@ -84,6 +123,24 @@ public final class ToolWindowRegistry {
             newPane.addTab(entry.descriptor.getTitle(), entry.descriptor.getIcon(),
                     entry.descriptor.getComponent());
         }
+
+        // Emit event
+        if (eventBus != null) {
+            eventBus.publish(new ToolWindowChangedEvent(id, ToolWindowChangedEvent.ChangeType.MOVED));
+        }
+    }
+
+    /**
+     * Update internal position tracking after a DnD operation that already moved the tab.
+     * Unlike {@link #moveTo}, this does NOT manipulate tab panes — only the model.
+     */
+    public void updatePositionAfterDrag(String id, ToolWindowDescriptor.Position newPosition) {
+        Entry entry = entries.get(id);
+        if (entry == null) return;
+        JTabbedPane newPane = panes.get(newPosition);
+        if (newPane == null) return;
+        entry.currentPosition = newPosition;
+        entry.homePane = newPane;
     }
 
     /** Whether a given tool window is currently visible. */

@@ -2,8 +2,6 @@ package com.aresstack.corenth.proasteion.exedra.toolwindow;
 
 import javax.swing.JTabbedPane;
 import java.awt.Component;
-import java.awt.Point;
-import java.awt.Rectangle;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
 import java.awt.datatransfer.Transferable;
@@ -22,24 +20,50 @@ import java.util.List;
  * Installs drag-and-drop support between JTabbedPanes so that tabs
  * can be moved between the four tool-window areas.
  *
- * <p>Usage: call {@link #install(JTabbedPane...)} with all panes that
+ * <p>When a {@link MoveCallback} is provided, DnD moves are routed through the
+ * callback so the layout model stays consistent with the visual state.
+ *
+ * <p>Usage: call {@link #install(MoveCallback, JTabbedPane...)} with all panes that
  * should participate in tab dragging.
  */
 public final class DraggableTabbedPaneSupport {
 
     private static final List<JTabbedPane> participants = new ArrayList<>();
     private static final DataFlavor TAB_FLAVOR = DataFlavor.stringFlavor;
+    private static MoveCallback moveCallback;
 
     private DraggableTabbedPaneSupport() { }
 
-    /** Install drag-and-drop on the given panes. */
-    public static void install(JTabbedPane... panes) {
+    /**
+     * Callback invoked after a tab is moved via drag-and-drop.
+     * Implementations should update the registry model (e.g. call
+     * {@link ToolWindowRegistry#moveTo(String, ToolWindowDescriptor.Position)}).
+     */
+    public interface MoveCallback {
+        /**
+         * Called after a tab has been physically moved between panes.
+         *
+         * @param component  the moved component
+         * @param sourcePane the pane the tab was dragged from
+         * @param targetPane the pane the tab was dropped on
+         */
+        void tabMoved(Component component, JTabbedPane sourcePane, JTabbedPane targetPane);
+    }
+
+    /** Install drag-and-drop on the given panes with a model update callback. */
+    public static void install(MoveCallback callback, JTabbedPane... panes) {
+        moveCallback = callback;
         for (JTabbedPane pane : panes) {
             if (participants.contains(pane)) continue;
             participants.add(pane);
             installDragSource(pane);
             installDropTarget(pane);
         }
+    }
+
+    /** Install drag-and-drop on the given panes (no callback). */
+    public static void install(JTabbedPane... panes) {
+        install(null, panes);
     }
 
     private static void installDragSource(final JTabbedPane pane) {
@@ -80,6 +104,11 @@ public final class DraggableTabbedPaneSupport {
                     sourcePane.removeTabAt(sourceIdx);
                     targetPane.addTab(title, icon, comp);
                     targetPane.setSelectedComponent(comp);
+
+                    // Notify callback so registry model is updated
+                    if (moveCallback != null) {
+                        moveCallback.tabMoved(comp, sourcePane, targetPane);
+                    }
 
                     dtde.dropComplete(true);
                 } catch (Exception e) {
