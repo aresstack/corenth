@@ -31,10 +31,21 @@ public final class InspectionResult {
      * Creates a successful result with extracted text blocks.
      *
      * @param mimeType   the detected MIME type
-     * @param textBlocks the text-bearing blocks (null/empty entries already filtered)
+     * @param textBlocks the extracted text blocks (null/blank entries are filtered)
      */
     public static InspectionResult success(String mimeType, List<String> textBlocks) {
-        return new InspectionResult(true, mimeType, textBlocks, null);
+        if (mimeType == null || mimeType.trim().isEmpty()) {
+            throw new IllegalArgumentException("mimeType must not be null or empty");
+        }
+        List<String> filtered = new ArrayList<String>();
+        if (textBlocks != null) {
+            for (String block : textBlocks) {
+                if (block != null && !block.trim().isEmpty()) {
+                    filtered.add(block);
+                }
+            }
+        }
+        return new InspectionResult(true, mimeType, filtered, null);
     }
 
     /**

@@ -136,6 +136,17 @@ public class WalkingSkeletonIntegrationTest {
     }
 
     @Test
+    public void searchWithNonPositiveMaxResults_returnsEmpty() throws IOException {
+        File txtFile = tempFolder.newFile("queryable.txt");
+        writeFile(txtFile, "searchable text");
+        ProcessingResult result = coordinator.process(fileRef(txtFile));
+        assertEquals(ProcessingResult.Status.INDEXED, result.status());
+
+        assertTrue(searchCoordinator.search("searchable", 0).isEmpty());
+        assertTrue(searchCoordinator.search("searchable", -1).isEmpty());
+    }
+
+    @Test
     public void policyDenies_unsupportedExtension() throws IOException {
         // Create a .pdf file (not in include patterns)
         File pdfFile = tempFolder.newFile("document.pdf");
@@ -190,6 +201,42 @@ public class WalkingSkeletonIntegrationTest {
     }
 
     @Test
+    public void policyDenies_fileTooLarge_beforeFetch() throws IOException {
+        File bigFile = tempFolder.newFile("big-before-fetch.txt");
+        writeFile(bigFile, "This content is definitely larger than 10 bytes.");
+        VirtualResourceRef ref = fileRef(bigFile);
+
+        final int[] fetchCalls = new int[1];
+        RawResourceProvider countingProvider = new RawResourceProvider() {
+            @Override
+            public FetchedResource fetch(VirtualResourceRef ignored) {
+                fetchCalls[0]++;
+                return new FetchedResource(new byte[]{1}, "x.txt", 1);
+            }
+        };
+
+        PatternResourcePolicy tinyPolicy = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                "tiny-rule",
+                Arrays.asList("file"),
+                Arrays.asList("**/*.txt"),
+                Collections.<String>emptyList(),
+                10
+        )));
+
+        ResourceLifecycleCoordinator tinyCoordinator = new ResourceLifecycleCoordinator(
+                countingProvider,
+                createDeigmaInspector(),
+                tinyPolicy,
+                new InMemoryResourceArchive(),
+                lexicalIndex);
+
+        ProcessingResult result = tinyCoordinator.process(ref);
+        assertEquals(ProcessingResult.Status.DENIED, result.status());
+        assertTrue(result.message().contains("maxBytes"));
+        assertEquals(0, fetchCalls[0]);
+    }
+
+    @Test
     public void unchangedContentSkipsReindexing() throws IOException {
         File txtFile = tempFolder.newFile("stable.txt");
         writeFile(txtFile, "Stable content that does not change.");
@@ -233,6 +280,67 @@ public class WalkingSkeletonIntegrationTest {
         ProcessingResult result = coord.process(ref);
         assertEquals(ProcessingResult.Status.FAILED, result.status());
         assertTrue(result.message().contains("No indexable text"));
+    }
+
+    @Test
+    public void extractionWithMixedTextAndMetadataBlocks_indexesTextBlocksOnly() throws IOException {
+        File txtFile = tempFolder.newFile("mixed-blocks.txt");
+        writeFile(txtFile, "content");
+
+        VirtualResourceRef ref = fileRef(txtFile);
+
+        ContentInspector mixedInspector = new ContentInspector() {
+            @Override
+            public InspectionResult inspect(VirtualResourceRef r, byte[] content, String filenameHint) {
+                return InspectionResult.success("text/plain", Arrays.asList(null, "", "kept text", " "));
+            }
+        };
+
+        ResourceLifecycleCoordinator coord = new ResourceLifecycleCoordinator(
+                createFileResourceProvider(),
+                mixedInspector,
+                new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                        "allow-all", Arrays.asList("file"), Arrays.asList("**/*"),
+                        Collections.<String>emptyList(), Long.MAX_VALUE))),
+                new InMemoryResourceArchive(),
+                lexicalIndex);
+
+        ProcessingResult result = coord.process(ref);
+        assertEquals(ProcessingResult.Status.INDEXED, result.status());
+    }
+
+    @Test
+    public void processWithNullRef_producesFailedResult() {
+        ProcessingResult result = coordinator.process(null);
+        assertEquals(ProcessingResult.Status.FAILED, result.status());
+        assertTrue(result.message().contains("must not be null"));
+    }
+
+    @Test
+    public void processWithInvalidRef_producesFailedResult() throws IOException {
+        File txtFile = tempFolder.newFile("invalid-ref.txt");
+        writeFile(txtFile, "content");
+        final VirtualResourceRef fileRef = fileRef(txtFile);
+
+        RawResourceProvider invalidProvider = new RawResourceProvider() {
+            @Override
+            public FetchedResource fetch(VirtualResourceRef ref) {
+                throw new IllegalArgumentException("unsupported scheme");
+            }
+        };
+
+        ResourceLifecycleCoordinator localCoordinator = new ResourceLifecycleCoordinator(
+                invalidProvider,
+                createDeigmaInspector(),
+                new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                        "allow-all", Arrays.asList("file"), Arrays.asList("**/*"),
+                        Collections.<String>emptyList(), Long.MAX_VALUE))),
+                new InMemoryResourceArchive(),
+                lexicalIndex);
+
+        ProcessingResult result = localCoordinator.process(fileRef);
+        assertEquals(ProcessingResult.Status.FAILED, result.status());
+        assertTrue(result.message().contains("Invalid resource reference"));
     }
 
     // --- Adapter wiring: bridges proasteion implementations to acropolis ports ---

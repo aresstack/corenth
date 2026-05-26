@@ -13,6 +13,9 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PolicyReason;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.List;
@@ -65,12 +68,30 @@ public final class ResourceLifecycleCoordinator {
      * @return the processing result
      */
     public ProcessingResult process(VirtualResourceRef ref) {
+        if (ref == null) {
+            return ProcessingResult.failed(null, "Resource reference must not be null");
+        }
+
+        Long sizeHint = tryResolveSizeHint(ref);
+        if (sizeHint != null) {
+            PolicyReason preFetchPolicyResult = policy.evaluate(ref, sizeHint.longValue());
+            if (preFetchPolicyResult.decision() == AcceptanceDecision.DENY) {
+                return ProcessingResult.denied(ref, preFetchPolicyResult.reason());
+            }
+        }
+
         // 1. Fetch raw content
         FetchedResource raw;
         try {
             raw = resourceProvider.fetch(ref);
         } catch (IOException e) {
             return ProcessingResult.failed(ref, "Failed to fetch resource: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            return ProcessingResult.failed(ref, "Invalid resource reference: " + e.getMessage());
+        }
+
+        if (raw == null) {
+            return ProcessingResult.failed(ref, "Resource provider returned null content");
         }
 
         long sizeBytes = raw.sizeBytes();
@@ -137,6 +158,21 @@ public final class ResourceLifecycleCoordinator {
             return new ResourceDigest(new ResourceFingerprint("SHA-256", hex.toString()), content.length);
         } catch (NoSuchAlgorithmException e) {
             throw new RuntimeException("SHA-256 not available", e);
+        }
+    }
+
+    private static Long tryResolveSizeHint(VirtualResourceRef ref) {
+        if (ref.uri() == null || ref.uri().toURI() == null) {
+            return null;
+        }
+        if (!"file".equals(ref.uri().scheme().name())) {
+            return null;
+        }
+        try {
+            Path path = Paths.get(ref.uri().toURI());
+            return Long.valueOf(Files.size(path));
+        } catch (Exception ignored) {
+            return null;
         }
     }
 }

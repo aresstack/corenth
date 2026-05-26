@@ -104,7 +104,7 @@ public final class PatternResourcePolicy implements ResourcePolicy {
                 i++;
             } else if (c == '.' || c == '(' || c == ')' || c == '+'
                     || c == '{' || c == '}' || c == '[' || c == ']'
-                    || c == '^' || c == '$' || c == '|') {
+                    || c == '^' || c == '$' || c == '|' || c == '\\') {
                 regex.append('\\').append(c);
                 i++;
             } else {

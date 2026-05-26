@@ -34,7 +34,7 @@ public final class SearchCoordinator {
      * @throws IOException if the index cannot be read
      */
     public List<LexicalSearchResult> search(String queryText, int maxResults) throws IOException {
-        if (queryText == null || queryText.trim().isEmpty()) {
+        if (queryText == null || queryText.trim().isEmpty() || maxResults < 1) {
             return Collections.emptyList();
         }
         LexicalQuery query = new LexicalQuery(queryText, maxResults);
