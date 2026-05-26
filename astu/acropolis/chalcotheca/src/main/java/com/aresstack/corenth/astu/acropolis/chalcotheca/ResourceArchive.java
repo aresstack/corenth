@@ -35,4 +35,14 @@ public interface ResourceArchive {
      * @return {@code true} if reindexing is needed
      */
     boolean hasChanged(VirtualResourceRef ref, ResourceDigest digest);
+
+    /**
+     * Removes the snapshot for the given resource.
+     *
+     * <p>Used when a resource is tombstoned or permanently deleted.
+     *
+     * @param ref the resource reference to remove
+     * @return {@code true} if a snapshot was removed, {@code false} if not found
+     */
+    boolean remove(VirtualResourceRef ref);
 }
