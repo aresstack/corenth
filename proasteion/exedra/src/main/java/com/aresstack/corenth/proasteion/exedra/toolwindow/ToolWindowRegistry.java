@@ -3,6 +3,7 @@ package com.aresstack.corenth.proasteion.exedra.toolwindow;
 import com.aresstack.corenth.proasteion.exedra.event.UiEventBus;
 import com.aresstack.corenth.proasteion.exedra.event.shell.ToolWindowChangedEvent;
 
+import javax.swing.Icon;
 import javax.swing.JComponent;
 import javax.swing.JTabbedPane;
 import java.awt.Component;
@@ -199,6 +200,47 @@ public final class ToolWindowRegistry {
             setVisible(id, ts.isVisible());
         }
 
+        // Restore tab order within each pane based on persisted tabIndex
+        for (Map.Entry<ToolWindowDescriptor.Position, JTabbedPane> pe : panes.entrySet()) {
+            ToolWindowDescriptor.Position pos = pe.getKey();
+            JTabbedPane pane = pe.getValue();
+            if (pane.getTabCount() <= 1) continue;
+
+            // Collect visible entries at this position with their desired tab index
+            List<TabOrderEntry> orderEntries = new ArrayList<>();
+            for (Map.Entry<String, ToolWindowLayout.ToolState> e : layout.getToolStates().entrySet()) {
+                ToolWindowLayout.ToolState ts = e.getValue();
+                if (ts.getPosition() != pos || !ts.isVisible()) continue;
+                Entry entry = entries.get(e.getKey());
+                if (entry == null || !entry.descriptor.isComponentCreated()) continue;
+                int currentIdx = pane.indexOfComponent(entry.descriptor.getComponent());
+                if (currentIdx >= 0) {
+                    orderEntries.add(new TabOrderEntry(entry, ts.getTabIndex(), currentIdx));
+                }
+            }
+
+            // Sort by desired tabIndex
+            Collections.sort(orderEntries, (a, b) -> Integer.compare(a.desiredIndex, b.desiredIndex));
+
+            // Reorder tabs: remove all and re-add in desired order
+            if (orderEntries.size() > 1) {
+                // Save tab metadata before removal
+                for (TabOrderEntry toe : orderEntries) {
+                    toe.title = pane.getTitleAt(pane.indexOfComponent(toe.entry.descriptor.getComponent()));
+                    toe.icon = pane.getIconAt(pane.indexOfComponent(toe.entry.descriptor.getComponent()));
+                }
+                // Remove in reverse order to avoid index shifting
+                for (int i = orderEntries.size() - 1; i >= 0; i--) {
+                    int idx = pane.indexOfComponent(orderEntries.get(i).entry.descriptor.getComponent());
+                    if (idx >= 0) pane.removeTabAt(idx);
+                }
+                // Re-add in desired order
+                for (TabOrderEntry toe : orderEntries) {
+                    pane.addTab(toe.title, toe.icon, toe.entry.descriptor.getComponent());
+                }
+            }
+        }
+
         // Restore selected tabs
         for (Map.Entry<ToolWindowDescriptor.Position, Integer> se : layout.getSelectedTabs().entrySet()) {
             JTabbedPane pane = panes.get(se.getKey());
@@ -247,6 +289,21 @@ public final class ToolWindowRegistry {
             this.currentPosition = position;
             this.homePane = homePane;
             this.visible = visible;
+        }
+    }
+
+    /** Helper for tab reordering during layout restore. */
+    private static final class TabOrderEntry {
+        final Entry entry;
+        final int desiredIndex;
+        final int currentIndex;
+        String title;
+        Icon icon;
+
+        TabOrderEntry(Entry entry, int desiredIndex, int currentIndex) {
+            this.entry = entry;
+            this.desiredIndex = desiredIndex;
+            this.currentIndex = currentIndex;
         }
     }
 }

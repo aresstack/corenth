@@ -209,4 +209,39 @@ public class ToolWindowRegistryTest {
         assertEquals(ToolWindowDescriptor.Position.RIGHT_TOP, registry.getPositionForPane(rightTop));
         assertNull(registry.getPositionForPane(new JTabbedPane()));
     }
+
+    @Test
+    public void applyLayout_restoresTabOrder() {
+        // Register three tools at LEFT_TOP
+        JLabel compA = new JLabel("A");
+        JLabel compB = new JLabel("B");
+        JLabel compC = new JLabel("C");
+        registry.register(new ToolWindowDescriptor("a", "A",
+                ToolWindowDescriptor.Position.LEFT_TOP, compA, null, true));
+        registry.register(new ToolWindowDescriptor("b", "B",
+                ToolWindowDescriptor.Position.LEFT_TOP, compB, null, true));
+        registry.register(new ToolWindowDescriptor("c", "C",
+                ToolWindowDescriptor.Position.LEFT_TOP, compC, null, true));
+
+        // Current order: A=0, B=1, C=2
+        assertEquals(3, leftTop.getTabCount());
+        assertEquals("A", leftTop.getTitleAt(0));
+
+        // Build a layout that reverses the order: C=0, B=1, A=2
+        Map<String, ToolWindowLayout.ToolState> toolStates = new java.util.LinkedHashMap<>();
+        toolStates.put("c", new ToolWindowLayout.ToolState(
+                ToolWindowDescriptor.Position.LEFT_TOP, true, 0));
+        toolStates.put("b", new ToolWindowLayout.ToolState(
+                ToolWindowDescriptor.Position.LEFT_TOP, true, 1));
+        toolStates.put("a", new ToolWindowLayout.ToolState(
+                ToolWindowDescriptor.Position.LEFT_TOP, true, 2));
+        Map<ToolWindowDescriptor.Position, Integer> selectedTabs = new java.util.LinkedHashMap<>();
+        ToolWindowLayout layout = new ToolWindowLayout(toolStates, selectedTabs);
+
+        registry.applyLayout(layout);
+
+        assertEquals("C", leftTop.getTitleAt(0));
+        assertEquals("B", leftTop.getTitleAt(1));
+        assertEquals("A", leftTop.getTitleAt(2));
+    }
 }

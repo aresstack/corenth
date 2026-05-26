@@ -13,6 +13,7 @@ import com.aresstack.corenth.proasteion.exedra.shell.commands.AboutCommand;
 import com.aresstack.corenth.proasteion.exedra.shell.commands.OpenSettingsCommand;
 import com.aresstack.corenth.proasteion.exedra.shell.commands.ShortcutSettingsCommand;
 import com.aresstack.corenth.proasteion.exedra.shell.commands.ToggleSidebarCommand;
+import com.aresstack.corenth.proasteion.exedra.shell.commands.ToggleToolWindowCommand;
 import com.aresstack.corenth.proasteion.exedra.shell.commands.ToolbarSettingsCommand;
 import com.aresstack.corenth.proasteion.exedra.toolbar.ConfigurableToolbar;
 import com.aresstack.corenth.proasteion.exedra.toolbar.ToolbarCommandRegistry;
@@ -245,6 +246,19 @@ public class ShellFrame extends JFrame {
 
     /** Access the settings context. */
     public SettingsContext getSettingsContext() { return settingsContext; }
+
+    /**
+     * Register a tool window descriptor and automatically create/register a matching
+     * {@code ToggleToolWindowCommand} with id {@code "view.tool.<toolId>"}.
+     * This keeps tool-window registration and View-menu toggle commands in sync.
+     *
+     * @param descriptor the tool window descriptor to register
+     */
+    public void registerToolWindow(ToolWindowDescriptor descriptor) {
+        toolWindowRegistry.register(descriptor);
+        ToggleToolWindowCommand toggleCmd = new ToggleToolWindowCommand(descriptor, toolWindowRegistry);
+        commandRegistry.register(toggleCmd);
+    }
 
     /** Access the outer split pane (for sidebar toggle commands). */
     public JSplitPane getOuterSplit() { return outerSplit; }

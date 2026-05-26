@@ -6,11 +6,9 @@ import javax.swing.JComponent;
 import javax.swing.JRootPane;
 import javax.swing.KeyStroke;
 import java.awt.event.ActionEvent;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -18,8 +16,8 @@ import java.util.Set;
  * Registry of keyboard shortcuts mapped to command ids.
  * User-configured shortcuts override the default accelerators defined on {@link ShellCommand}.
  *
- * <p>Supports multiple shortcuts per command and idempotent root-pane binding
- * that reliably clears stale key bindings.
+ * <p>Each command supports exactly one shortcut binding. Idempotent root-pane binding
+ * reliably clears stale key bindings when shortcuts are changed or removed.
  *
  * <p>Use a {@link ShortcutRepository} to load/save the shortcut map.
  */
@@ -27,42 +25,23 @@ public final class ShortcutRegistry {
 
     private static final String ACTION_PREFIX = "exedra.shortcut.";
 
-    private final Map<String, List<KeyStroke>> shortcuts = new LinkedHashMap<>();
+    private final Map<String, KeyStroke> shortcuts = new LinkedHashMap<>();
     /** Tracks all KeyStroke→actionKey bindings currently installed on the root pane. */
     private final Set<KeyStroke> installedKeyStrokes = new LinkedHashSet<>();
 
-    /** Set a single shortcut for a command id (overrides default). Clears any previous multi-shortcuts. */
+    /** Set the shortcut for a command id (overrides default). Pass null to clear. */
     public void set(String commandId, KeyStroke keyStroke) {
         if (commandId == null) throw new IllegalArgumentException("commandId must not be null");
         if (keyStroke != null) {
-            List<KeyStroke> list = new ArrayList<>();
-            list.add(keyStroke);
-            shortcuts.put(commandId, list);
+            shortcuts.put(commandId, keyStroke);
         } else {
             shortcuts.remove(commandId);
         }
     }
 
-    /** Set multiple shortcuts for a command id. */
-    public void setAll(String commandId, List<KeyStroke> keyStrokes) {
-        if (commandId == null) throw new IllegalArgumentException("commandId must not be null");
-        if (keyStrokes == null || keyStrokes.isEmpty()) {
-            shortcuts.remove(commandId);
-        } else {
-            shortcuts.put(commandId, new ArrayList<>(keyStrokes));
-        }
-    }
-
-    /** Get the first configured shortcut for a command id. Returns null if none configured. */
+    /** Get the configured shortcut for a command id. Returns null if none configured. */
     public KeyStroke getShortcut(String commandId) {
-        List<KeyStroke> list = shortcuts.get(commandId);
-        return (list != null && !list.isEmpty()) ? list.get(0) : null;
-    }
-
-    /** Get all configured shortcuts for a command id. */
-    public List<KeyStroke> getShortcuts(String commandId) {
-        List<KeyStroke> list = shortcuts.get(commandId);
-        return list != null ? Collections.unmodifiableList(list) : Collections.<KeyStroke>emptyList();
+        return shortcuts.get(commandId);
     }
 
     /** Remove user-configured shortcut for a command, reverting to default. */
@@ -70,24 +49,9 @@ public final class ShortcutRegistry {
         shortcuts.remove(commandId);
     }
 
-    /** Get all configured shortcuts (unmodifiable, first shortcut per command). */
+    /** Get all configured shortcuts (unmodifiable). */
     public Map<String, KeyStroke> getAll() {
-        Map<String, KeyStroke> result = new LinkedHashMap<>();
-        for (Map.Entry<String, List<KeyStroke>> e : shortcuts.entrySet()) {
-            if (!e.getValue().isEmpty()) {
-                result.put(e.getKey(), e.getValue().get(0));
-            }
-        }
-        return Collections.unmodifiableMap(result);
-    }
-
-    /** Get all configured shortcuts including multiple per command. */
-    public Map<String, List<KeyStroke>> getAllMulti() {
-        Map<String, List<KeyStroke>> result = new LinkedHashMap<>();
-        for (Map.Entry<String, List<KeyStroke>> e : shortcuts.entrySet()) {
-            result.put(e.getKey(), Collections.unmodifiableList(e.getValue()));
-        }
-        return Collections.unmodifiableMap(result);
+        return Collections.unmodifiableMap(new LinkedHashMap<>(shortcuts));
     }
 
     /** Clear all user-configured shortcuts. */
@@ -111,8 +75,12 @@ public final class ShortcutRegistry {
         if (repository == null) return;
         shortcuts.clear();
         Map<String, KeyStroke> loaded = repository.load();
-        for (Map.Entry<String, KeyStroke> e : loaded.entrySet()) {
-            set(e.getKey(), e.getValue());
+        if (loaded != null) {
+            for (Map.Entry<String, KeyStroke> e : loaded.entrySet()) {
+                if (e.getValue() != null) {
+                    shortcuts.put(e.getKey(), e.getValue());
+                }
+            }
         }
     }
 
@@ -149,16 +117,11 @@ public final class ShortcutRegistry {
         for (ShellCommand cmd : commandRegistry.getAll()) {
             String actionKey = ACTION_PREFIX + cmd.getId();
 
-            // Gather all effective keystrokes for this command
-            List<KeyStroke> effective = new ArrayList<>();
-            List<KeyStroke> userKs = shortcuts.get(cmd.getId());
-            if (userKs != null && !userKs.isEmpty()) {
-                effective.addAll(userKs);
-            } else if (cmd.getDefaultAccelerator() != null) {
-                effective.add(cmd.getDefaultAccelerator());
-            }
+            // Resolve the effective keystroke for this command
+            KeyStroke userKs = shortcuts.get(cmd.getId());
+            KeyStroke effective = userKs != null ? userKs : cmd.getDefaultAccelerator();
 
-            if (!effective.isEmpty()) {
+            if (effective != null) {
                 javax.swing.AbstractAction action = new javax.swing.AbstractAction() {
                     @Override
                     public void actionPerformed(ActionEvent e) {
@@ -166,11 +129,8 @@ public final class ShortcutRegistry {
                     }
                 };
                 actionMap.put(actionKey, action);
-
-                for (KeyStroke ks : effective) {
-                    inputMap.put(ks, actionKey);
-                    installedKeyStrokes.add(ks);
-                }
+                inputMap.put(effective, actionKey);
+                installedKeyStrokes.add(effective);
             }
         }
     }

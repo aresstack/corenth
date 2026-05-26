@@ -134,13 +134,16 @@ public class CommandRegistryTest {
     }
 
     @Test
-    public void shortcutRegistry_multiplePerCommand() {
+    public void shortcutRegistry_singlePerCommand() {
         ShortcutRegistry shortcuts = new ShortcutRegistry();
         KeyStroke ks1 = KeyStroke.getKeyStroke("ctrl S");
-        KeyStroke ks2 = KeyStroke.getKeyStroke("meta S");
-        shortcuts.setAll("file.save", Arrays.asList(ks1, ks2));
-        assertEquals(2, shortcuts.getShortcuts("file.save").size());
+        shortcuts.set("file.save", ks1);
         assertEquals(ks1, shortcuts.getShortcut("file.save"));
+
+        // Override replaces previous
+        KeyStroke ks2 = KeyStroke.getKeyStroke("meta S");
+        shortcuts.set("file.save", ks2);
+        assertEquals(ks2, shortcuts.getShortcut("file.save"));
     }
 
     @Test
