@@ -79,7 +79,7 @@ Uses Apache Lucene 8.11.4, which is the last release line compatible with Java 8
 
 ## Lexical chunking (`chunking` subpackage)
 
-The `chunking` subpackage provides sentence-aware, token-budgeted text splitting for lexical indexing. It adapts concepts from MainframeMate PR aresstack/corenth#51.
+The `chunking` subpackage provides sentence-aware, token-budgeted text splitting for lexical indexing. It adapts concepts from [MainframeMate PR Miguel0888/MainframeMate#51](https://github.com/Miguel0888/MainframeMate/pull/51).
 
 ### Chunking API
 
@@ -112,7 +112,7 @@ Model absence is a normal operational condition — the segmenter falls back to 
 
 ### Shared analyzer guarantee
 
-`LuceneTokenCounter` uses the same `StandardAnalyzer` as `LuceneLexicalIndex`, ensuring the chunker's token budget estimation does not silently drift from actual indexed terms.
+Both `LuceneLexicalIndex` and `LuceneTokenCounter` obtain their analyzer from `LexicalAnalyzerFactory.create()`. This factory is the single point of change — any future analyzer configuration update (e.g. custom stop words, language-specific tokenization) applies to both indexing and token counting by construction.
 
 ## Dependencies
 
@@ -120,11 +120,11 @@ Model absence is a normal operational condition — the segmenter falls back to 
 - `org.apache.lucene:lucene-core:8.11.4`
 - `org.apache.lucene:lucene-analyzers-common:8.11.4`
 - `org.apache.lucene:lucene-queryparser:8.11.4`
-- `org.apache.opennlp:opennlp-tools:2.5.9` (compile-only / optional — runtime fallback to BreakIterator)
+- `org.apache.opennlp:opennlp-tools:1.9.4` (compile-only / optional — last Java 8 compatible version; runtime fallback to BreakIterator)
 
 ## Migration inventory
 
-Adapted from MainframeMate PR aresstack/corenth#51:
+Adapted from [MainframeMate PR Miguel0888/MainframeMate#51](https://github.com/Miguel0888/MainframeMate/pull/51):
 
 | MainframeMate concept | Corenth equivalent |
 |---|---|
@@ -133,7 +133,7 @@ Adapted from MainframeMate PR aresstack/corenth#51:
 | `OpenNlpSentenceSegmenter` | `chunking.OpenNlpSentenceSegmenter` |
 | `BreakIteratorSentenceSegmenter` | `chunking.BreakIteratorSentenceSegmenter` |
 | `LuceneTokenCounter` | `chunking.LuceneTokenCounter` |
-| Shared Lucene analyzer factory | `LuceneTokenCounter.analyzer()` returns shared `StandardAnalyzer` |
+| Shared Lucene analyzer factory | `LexicalAnalyzerFactory.create()` used by both index and token counter |
 | NLP-aware chunker | `chunking.NlpTextChunker` |
 | `chunkSizeTokens = 350` | `LexicalChunkingConfig.DEFAULT_CHUNK_SIZE_TOKENS` |
 | `overlapSentences = 1` | `LexicalChunkingConfig.DEFAULT_OVERLAP_SENTENCES` |

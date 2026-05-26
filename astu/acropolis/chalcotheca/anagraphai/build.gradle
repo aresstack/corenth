@@ -7,12 +7,17 @@ dependencies {
     implementation 'org.apache.lucene:lucene-analyzers-common:8.11.4'
     implementation 'org.apache.lucene:lucene-queryparser:8.11.4'
 
-    // OpenNLP is optional — the chunker falls back to BreakIterator when absent
-    compileOnly 'org.apache.opennlp:opennlp-tools:2.5.9'
+    // OpenNLP 1.9.4 is the last release compatible with Java 8.
+    // Newer versions (2.x+) require Java 11/17.
+    // Known CVEs in 1.9.4 (OOM via model parsing, XXE, class instantiation) are mitigated:
+    //   - dependency is compileOnly (not bundled at runtime)
+    //   - accessed via reflection; model loaded only from controlled/trusted streams
+    //   - BreakIterator fallback is the default when no model is present
+    compileOnly 'org.apache.opennlp:opennlp-tools:1.9.4'
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-    testImplementation 'org.apache.opennlp:opennlp-tools:2.5.9'
+    testImplementation 'org.apache.opennlp:opennlp-tools:1.9.4'
 }
 
 tasks.named('test') {

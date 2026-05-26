@@ -1,5 +1,8 @@
 package com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking;
 
+import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalAnalyzerFactory;
+
+import org.apache.lucene.analysis.Analyzer;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -10,12 +13,8 @@ class LuceneTokenCounterTest {
 
     @Test
     void countsTokensConsistentWithStandardAnalyzer() {
-        // StandardAnalyzer splits on whitespace and punctuation, lowercases
         int count = counter.countTokens("Hello world, this is a test.");
         assertTrue(count > 0);
-        // "Hello", "world", "this", "is", "a", "test" = 6 tokens
-        // StandardAnalyzer removes stop words by default, so "this", "is", "a" may be kept or removed
-        // depending on version. Just verify it returns a positive value.
         assertTrue(count >= 3 && count <= 7,
                 "Expected between 3 and 7 tokens, got " + count);
     }
@@ -31,11 +30,27 @@ class LuceneTokenCounterTest {
     }
 
     @Test
-    void sameAnalyzerUsedByIndex() {
-        // Verify the analyzer is a StandardAnalyzer — same type used by LuceneLexicalIndex
-        assertNotNull(counter.analyzer());
-        assertEquals("org.apache.lucene.analysis.standard.StandardAnalyzer",
-                counter.analyzer().getClass().getName());
+    void usesSharedAnalyzerFactory() {
+        // The default constructor must produce an analyzer of the same type
+        // as LexicalAnalyzerFactory.create() — verifying the factory contract.
+        Analyzer fromFactory = LexicalAnalyzerFactory.create();
+        Analyzer fromCounter = counter.analyzer();
+        assertNotNull(fromCounter);
+        assertEquals(fromFactory.getClass(), fromCounter.getClass(),
+                "LuceneTokenCounter must use the same analyzer type as LexicalAnalyzerFactory");
+        fromFactory.close();
+    }
+
+    @Test
+    void factoryProducesConsistentTokenCounts() {
+        // Token counting via the default counter must agree with a counter
+        // constructed from the factory — proving the contract holds end-to-end.
+        Analyzer factoryAnalyzer = LexicalAnalyzerFactory.create();
+        LuceneTokenCounter factoryCounter = new LuceneTokenCounter(factoryAnalyzer);
+        String sample = "The Corenth architecture uses modular resource indexing.";
+        assertEquals(factoryCounter.countTokens(sample), counter.countTokens(sample),
+                "Default counter and factory-based counter must agree on token count");
+        factoryAnalyzer.close();
     }
 
     @Test

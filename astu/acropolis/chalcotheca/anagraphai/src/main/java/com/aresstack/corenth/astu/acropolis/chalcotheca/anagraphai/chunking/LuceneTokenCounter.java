@@ -1,25 +1,27 @@
 package com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking;
 
+import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalAnalyzerFactory;
+
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
-import org.apache.lucene.analysis.standard.StandardAnalyzer;
 
 import java.io.IOException;
 
 /**
- * Token counter using Lucene's {@link StandardAnalyzer}, matching the tokenization
- * assumptions of {@code LuceneLexicalIndex}.
+ * Token counter using the shared {@link LexicalAnalyzerFactory} analyzer,
+ * matching the tokenization assumptions of {@code LuceneLexicalIndex}.
  *
- * <p>This ensures the chunker and the index agree on what constitutes a "token",
- * preventing silent drift between chunk size estimation and actual indexed terms.
+ * <p>Both this counter and the index obtain their analyzer from
+ * {@link LexicalAnalyzerFactory#create()}, ensuring that any future analyzer
+ * change applies to both by construction.
  */
 public final class LuceneTokenCounter implements TokenCounter {
 
     private final Analyzer analyzer;
 
-    /** Creates a counter using a new StandardAnalyzer (same as LuceneLexicalIndex). */
+    /** Creates a counter using the shared {@link LexicalAnalyzerFactory} analyzer. */
     public LuceneTokenCounter() {
-        this(new StandardAnalyzer());
+        this(LexicalAnalyzerFactory.create());
     }
 
     /** Creates a counter using the provided analyzer for shared usage. */
