@@ -34,6 +34,9 @@ import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -213,6 +216,11 @@ public class WalkingSkeletonIntegrationTest {
                 fetchCalls[0]++;
                 return new FetchedResource(new byte[]{1}, "x.txt", 1);
             }
+
+            @Override
+            public Long probeSizeBytes(VirtualResourceRef ignored) {
+                return Long.valueOf(1024);
+            }
         };
 
         PatternResourcePolicy tinyPolicy = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
@@ -234,6 +242,31 @@ public class WalkingSkeletonIntegrationTest {
         assertEquals(ProcessingResult.Status.DENIED, result.status());
         assertTrue(result.message().contains("maxBytes"));
         assertEquals(0, fetchCalls[0]);
+    }
+
+    @Test
+    public void deniedAfterPreviouslyIndexed_removesStaleSearchEntry() throws IOException {
+        File txtFile = tempFolder.newFile("stale-deny.txt");
+        writeFile(txtFile, "stale term before deny");
+        VirtualResourceRef ref = fileRef(txtFile);
+
+        ProcessingResult indexed = coordinator.process(ref);
+        assertEquals(ProcessingResult.Status.INDEXED, indexed.status());
+        assertFalse(searchCoordinator.search("stale", 10).isEmpty());
+
+        PatternResourcePolicy denyPolicy = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                "md-only", Arrays.asList("file"), Arrays.asList("**/*.md"),
+                Collections.<String>emptyList(), Long.MAX_VALUE)));
+        ResourceLifecycleCoordinator denyCoordinator = new ResourceLifecycleCoordinator(
+                createFileResourceProvider(),
+                createDeigmaInspector(),
+                denyPolicy,
+                new InMemoryResourceArchive(),
+                lexicalIndex);
+
+        ProcessingResult denied = denyCoordinator.process(ref);
+        assertEquals(ProcessingResult.Status.DENIED, denied.status());
+        assertTrue(searchCoordinator.search("stale", 10).isEmpty());
     }
 
     @Test
@@ -280,6 +313,37 @@ public class WalkingSkeletonIntegrationTest {
         ProcessingResult result = coord.process(ref);
         assertEquals(ProcessingResult.Status.FAILED, result.status());
         assertTrue(result.message().contains("No indexable text"));
+    }
+
+    @Test
+    public void noIndexableTextAfterPreviouslyIndexed_removesStaleSearchEntry() throws IOException {
+        File txtFile = tempFolder.newFile("stale-no-text.txt");
+        writeFile(txtFile, "stale term before no text");
+        VirtualResourceRef ref = fileRef(txtFile);
+
+        ProcessingResult indexed = coordinator.process(ref);
+        assertEquals(ProcessingResult.Status.INDEXED, indexed.status());
+        assertFalse(searchCoordinator.search("stale", 10).isEmpty());
+
+        ContentInspector emptyInspector = new ContentInspector() {
+            @Override
+            public InspectionResult inspect(VirtualResourceRef r, byte[] content, String filenameHint) {
+                return InspectionResult.success("text/plain", Arrays.asList(null, "", " "));
+            }
+        };
+
+        ResourceLifecycleCoordinator emptyCoordinator = new ResourceLifecycleCoordinator(
+                createFileResourceProvider(),
+                emptyInspector,
+                new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                        "allow-all", Arrays.asList("file"), Arrays.asList("**/*"),
+                        Collections.<String>emptyList(), Long.MAX_VALUE))),
+                new InMemoryResourceArchive(),
+                lexicalIndex);
+
+        ProcessingResult failed = emptyCoordinator.process(ref);
+        assertEquals(ProcessingResult.Status.FAILED, failed.status());
+        assertTrue(searchCoordinator.search("stale", 10).isEmpty());
     }
 
     @Test
@@ -353,6 +417,15 @@ public class WalkingSkeletonIntegrationTest {
                 RawResource raw = connector.fetch(ref);
                 return new FetchedResource(
                         raw.content().bytes(), raw.filename(), raw.content().sizeBytes());
+            }
+
+            @Override
+            public Long probeSizeBytes(VirtualResourceRef ref) throws IOException {
+                if (ref == null || ref.uri() == null || ref.uri().toURI() == null) {
+                    return null;
+                }
+                Path path = Paths.get(ref.uri().toURI());
+                return Long.valueOf(Files.size(path));
             }
         };
     }

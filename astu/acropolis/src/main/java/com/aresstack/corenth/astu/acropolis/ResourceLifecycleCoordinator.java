@@ -13,9 +13,6 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PolicyReason;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.List;
@@ -72,11 +69,18 @@ public final class ResourceLifecycleCoordinator {
             return ProcessingResult.failed(null, "Resource reference must not be null");
         }
 
-        Long sizeHint = tryResolveSizeHint(ref);
+        Long sizeHint = null;
+        try {
+            sizeHint = resourceProvider.probeSizeBytes(ref);
+        } catch (IOException ignored) {
+            // Best-effort preflight only; continue with normal fetch path.
+        } catch (IllegalArgumentException e) {
+            return ProcessingResult.failed(ref, "Invalid resource reference: " + e.getMessage());
+        }
         if (sizeHint != null) {
             PolicyReason preFetchPolicyResult = policy.evaluate(ref, sizeHint.longValue());
             if (preFetchPolicyResult.decision() == AcceptanceDecision.DENY) {
-                return ProcessingResult.denied(ref, preFetchPolicyResult.reason());
+                return cleanupAndReturn(ProcessingResult.denied(ref, preFetchPolicyResult.reason()));
             }
         }
 
@@ -99,7 +103,7 @@ public final class ResourceLifecycleCoordinator {
         // 2. Policy check via tamias
         PolicyReason policyResult = policy.evaluate(ref, sizeBytes);
         if (policyResult.decision() == AcceptanceDecision.DENY) {
-            return ProcessingResult.denied(ref, policyResult.reason());
+            return cleanupAndReturn(ProcessingResult.denied(ref, policyResult.reason()));
         }
 
         // 3. Compute digest and check archive (chalcotheca)
@@ -131,7 +135,8 @@ public final class ResourceLifecycleCoordinator {
 
         if (chunkIndex == 0) {
             // Extraction succeeded but no text-bearing blocks remain
-            return ProcessingResult.failed(ref, "No indexable text content after extraction");
+            return cleanupAndReturn(
+                    ProcessingResult.failed(ref, "No indexable text content after extraction"));
         }
 
         try {
@@ -161,18 +166,14 @@ public final class ResourceLifecycleCoordinator {
         }
     }
 
-    private static Long tryResolveSizeHint(VirtualResourceRef ref) {
-        if (ref.uri() == null || ref.uri().toURI() == null) {
-            return null;
-        }
-        if (!"file".equals(ref.uri().scheme().name())) {
-            return null;
-        }
+    private ProcessingResult cleanupAndReturn(ProcessingResult result) {
         try {
-            Path path = Paths.get(ref.uri().toURI());
-            return Long.valueOf(Files.size(path));
-        } catch (Exception ignored) {
-            return null;
+            lexicalIndex.remove(result.ref());
+            lexicalIndex.commit();
+            return result;
+        } catch (IOException e) {
+            return ProcessingResult.failed(result.ref(),
+                    "Index cleanup failed: " + e.getMessage());
         }
     }
 }

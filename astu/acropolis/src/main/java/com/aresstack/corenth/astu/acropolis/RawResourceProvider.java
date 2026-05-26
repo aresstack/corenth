@@ -20,4 +20,18 @@ public interface RawResourceProvider {
      * @throws IOException if the resource cannot be read
      */
     FetchedResource fetch(VirtualResourceRef ref) throws IOException;
+
+    /**
+     * Optionally probes content size before fetching bytes.
+     *
+     * <p>Implementations may return {@code null} when a prefetch size probe is
+     * not available for the underlying resource scheme.
+     *
+     * @param ref the resource reference
+     * @return size in bytes, or {@code null} if unknown
+     * @throws IOException if probing fails
+     */
+    default Long probeSizeBytes(VirtualResourceRef ref) throws IOException {
+        return null;
+    }
 }
