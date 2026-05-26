@@ -40,4 +40,9 @@ public final class InMemoryResourceArchive implements ResourceArchive {
         }
         return !existing.digest().equals(digest);
     }
+
+    @Override
+    public boolean remove(VirtualResourceRef ref) {
+        return snapshots.remove(ref) != null;
+    }
 }
