@@ -8,6 +8,7 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceSnapshot;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalChunk;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalDocument;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndex;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.LexicalChunker;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.AcceptanceDecision;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PolicyReason;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
@@ -40,12 +41,32 @@ public final class ResourceLifecycleCoordinator {
     private final ResourcePolicy policy;
     private final ResourceArchive archive;
     private final LexicalIndex lexicalIndex;
+    private final LexicalChunker lexicalChunker;
 
     public ResourceLifecycleCoordinator(RawResourceProvider resourceProvider,
                                          ContentInspector contentInspector,
                                          ResourcePolicy policy,
                                          ResourceArchive archive,
                                          LexicalIndex lexicalIndex) {
+        this(resourceProvider, contentInspector, policy, archive, lexicalIndex, null);
+    }
+
+    /**
+     * Creates a coordinator with optional lexical chunking support.
+     *
+     * @param resourceProvider resource provider port
+     * @param contentInspector content inspector port
+     * @param policy resource policy
+     * @param archive resource archive
+     * @param lexicalIndex lexical index
+     * @param lexicalChunker optional chunker; if non-null, text blocks are chunked before indexing
+     */
+    public ResourceLifecycleCoordinator(RawResourceProvider resourceProvider,
+                                         ContentInspector contentInspector,
+                                         ResourcePolicy policy,
+                                         ResourceArchive archive,
+                                         LexicalIndex lexicalIndex,
+                                         LexicalChunker lexicalChunker) {
         if (resourceProvider == null) throw new IllegalArgumentException("resourceProvider must not be null");
         if (contentInspector == null) throw new IllegalArgumentException("contentInspector must not be null");
         if (policy == null) throw new IllegalArgumentException("policy must not be null");
@@ -56,6 +77,7 @@ public final class ResourceLifecycleCoordinator {
         this.policy = policy;
         this.archive = archive;
         this.lexicalIndex = lexicalIndex;
+        this.lexicalChunker = lexicalChunker;
     }
 
     /**
@@ -128,8 +150,17 @@ public final class ResourceLifecycleCoordinator {
         int chunkIndex = 0;
         for (String text : textBlocks) {
             if (text != null && !text.isEmpty()) {
-                docBuilder.addChunk(new LexicalChunk(chunkIndex, text));
-                chunkIndex++;
+                if (lexicalChunker != null) {
+                    // Use sentence-aware, token-budgeted chunking
+                    List<LexicalChunk> textChunks = lexicalChunker.chunk(text);
+                    for (LexicalChunk tc : textChunks) {
+                        docBuilder.addChunk(new LexicalChunk(chunkIndex, tc.text()));
+                        chunkIndex++;
+                    }
+                } else {
+                    docBuilder.addChunk(new LexicalChunk(chunkIndex, text));
+                    chunkIndex++;
+                }
             }
         }
 

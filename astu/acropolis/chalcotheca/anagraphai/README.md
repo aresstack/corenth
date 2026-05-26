@@ -77,9 +77,66 @@ This follows the nested module boundary convention for Corenth.
 
 Uses Apache Lucene 8.11.4, which is the last release line compatible with Java 8. BM25 is the default similarity in Lucene 8+.
 
+## Lexical chunking (`chunking` subpackage)
+
+The `chunking` subpackage provides sentence-aware, token-budgeted text splitting for lexical indexing. It adapts concepts from [MainframeMate PR Miguel0888/MainframeMate#51](https://github.com/Miguel0888/MainframeMate/pull/51).
+
+### Chunking API
+
+| Class | Purpose |
+|-------|---------|
+| `LexicalChunker` | Port interface for splitting text into token-budgeted chunks |
+| `LexicalChunkingConfig` | Configuration: chunk size (tokens), overlap (sentences) |
+| `SentenceSegmenter` | Port interface for sentence boundary detection |
+| `TextRange` | Character offset range model (start inclusive, end exclusive) |
+| `TokenCounter` | Port interface for Lucene-aligned token counting |
+
+### Implementations
+
+| Class | Purpose |
+|-------|---------|
+| `NlpTextChunker` | Main chunker: sentence-aware splitting with markdown heading preservation |
+| `BreakIteratorSentenceSegmenter` | Zero-model fallback using `java.text.BreakIterator` (default: `Locale.GERMAN`) |
+| `OpenNlpSentenceSegmenter` | Apache OpenNLP sentence detection with graceful fallback |
+| `LuceneTokenCounter` | Token counter using `StandardAnalyzer` (same as `LuceneLexicalIndex`) |
+
+### OpenNLP model placement
+
+The `OpenNlpSentenceSegmenter` accepts an `InputStream` for the model. A German sentence model (`de-sent.bin`) would typically be placed at:
+
+```
+src/main/resources/opennlp/de-sent.bin
+```
+
+Model absence is a normal operational condition — the segmenter falls back to `BreakIteratorSentenceSegmenter` automatically.
+
+### Shared analyzer guarantee
+
+Both `LuceneLexicalIndex` and `LuceneTokenCounter` obtain their analyzer from `LexicalAnalyzerFactory.create()`. This factory is the single point of change — any future analyzer configuration update (e.g. custom stop words, language-specific tokenization) applies to both indexing and token counting by construction.
+
 ## Dependencies
 
 - `astu` — for `VirtualResourceRef`, `BookmarkUri`, `VirtualResourceKind`
 - `org.apache.lucene:lucene-core:8.11.4`
 - `org.apache.lucene:lucene-analyzers-common:8.11.4`
 - `org.apache.lucene:lucene-queryparser:8.11.4`
+- `org.apache.opennlp:opennlp-tools:1.9.4` (compile-only / optional — last Java 8 compatible version; runtime fallback to BreakIterator)
+
+## Migration inventory
+
+Adapted from [MainframeMate PR Miguel0888/MainframeMate#51](https://github.com/Miguel0888/MainframeMate/pull/51):
+
+| MainframeMate concept | Corenth equivalent |
+|---|---|
+| `SentenceSegmenter` port | `chunking.SentenceSegmenter` |
+| `TextRange` model | `chunking.TextRange` |
+| `OpenNlpSentenceSegmenter` | `chunking.OpenNlpSentenceSegmenter` |
+| `BreakIteratorSentenceSegmenter` | `chunking.BreakIteratorSentenceSegmenter` |
+| `LuceneTokenCounter` | `chunking.LuceneTokenCounter` |
+| Shared Lucene analyzer factory | `LexicalAnalyzerFactory.create()` used by both index and token counter |
+| NLP-aware chunker | `chunking.NlpTextChunker` |
+| `chunkSizeTokens = 350` | `LexicalChunkingConfig.DEFAULT_CHUNK_SIZE_TOKENS` |
+| `overlapSentences = 1` | `LexicalChunkingConfig.DEFAULT_OVERLAP_SENTENCES` |
+| `nlpChunkingEnabled` | Chunker wired or omitted at composition layer |
+| OpenNLP model path | Configurable `InputStream`; fallback when absent |
+| BreakIterator fallback, Locale.GERMAN | `BreakIteratorSentenceSegmenter()` default |

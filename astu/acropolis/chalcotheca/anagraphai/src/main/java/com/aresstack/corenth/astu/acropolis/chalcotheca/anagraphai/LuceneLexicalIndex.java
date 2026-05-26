@@ -4,7 +4,7 @@ import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceKind;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 
-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.IntPoint;
@@ -61,7 +61,7 @@ public final class LuceneLexicalIndex implements LexicalIndex {
     private final LexicalIndexConfig config;
     private final Directory directory;
     private final IndexWriter writer;
-    private final StandardAnalyzer analyzer;
+    private final Analyzer analyzer;
 
     /**
      * Opens or creates a Lucene index at the configured directory.
@@ -73,7 +73,7 @@ public final class LuceneLexicalIndex implements LexicalIndex {
         this.config = Objects.requireNonNull(config, "config must not be null");
         Files.createDirectories(config.indexDirectory());
         this.directory = FSDirectory.open(config.indexDirectory());
-        this.analyzer = new StandardAnalyzer();
+        this.analyzer = LexicalAnalyzerFactory.create();
         IndexWriterConfig writerConfig = new IndexWriterConfig(analyzer);
         writerConfig.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND);
         writerConfig.setCommitOnClose(false);
