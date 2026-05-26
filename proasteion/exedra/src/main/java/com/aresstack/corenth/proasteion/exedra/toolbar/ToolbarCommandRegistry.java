@@ -46,4 +46,12 @@ public final class ToolbarCommandRegistry {
     public Collection<ShellCommand> getAll() {
         return commandRegistry.getAll();
     }
+
+    /**
+     * Execute a command through the unified {@link CommandRegistry},
+     * ensuring execution listeners are notified and events are emitted.
+     */
+    public void execute(ShellCommand command) {
+        commandRegistry.execute(command);
+    }
 }
