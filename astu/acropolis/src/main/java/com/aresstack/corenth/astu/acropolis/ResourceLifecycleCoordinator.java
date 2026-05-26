@@ -2,7 +2,6 @@ package com.aresstack.corenth.astu.acropolis;
 
 import com.aresstack.corenth.astu.ResourceFingerprint;
 import com.aresstack.corenth.astu.VirtualResourceRef;
-import com.aresstack.corenth.astu.acropolis.chalcotheca.InMemoryResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceDigest;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceSnapshot;
@@ -12,16 +11,6 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndex;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.AcceptanceDecision;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PolicyReason;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
-import com.aresstack.corenth.proasteion.emporion.deigma.ContentDetector;
-import com.aresstack.corenth.proasteion.emporion.deigma.DetectedContentType;
-import com.aresstack.corenth.proasteion.emporion.deigma.ExtractedBlock;
-import com.aresstack.corenth.proasteion.emporion.deigma.ExtractedDocument;
-import com.aresstack.corenth.proasteion.emporion.deigma.ExtractionRegistry;
-import com.aresstack.corenth.proasteion.emporion.deigma.ExtractionRequest;
-import com.aresstack.corenth.proasteion.emporion.deigma.ExtractionResult;
-import com.aresstack.corenth.proasteion.emporion.deigma.ResourceExtractor;
-import com.aresstack.corenth.proasteion.emporion.holkas.RawResource;
-import com.aresstack.corenth.proasteion.emporion.holkas.ResourceConnector;
 
 import java.io.IOException;
 import java.security.MessageDigest;
@@ -31,10 +20,14 @@ import java.util.List;
 /**
  * Orchestrates the walking skeleton pipeline for resource lifecycle processing.
  *
+ * <p>Depends only on inward-facing ports ({@link RawResourceProvider},
+ * {@link ContentInspector}) and core inner modules. Outer adapter implementations
+ * (holkas, deigma) are wired at the composition layer, not compiled against here.
+ *
  * <p>Connects:
  * <ol>
- *   <li>{@code holkas} — fetch raw content</li>
- *   <li>{@code deigma} — detect and extract</li>
+ *   <li>{@link RawResourceProvider} — fetch raw content</li>
+ *   <li>{@link ContentInspector} — detect and extract</li>
  *   <li>{@code tamias} — policy decision</li>
  *   <li>{@code chalcotheca} — snapshot/cache</li>
  *   <li>{@code anagraphai} — lexical indexing</li>
@@ -42,28 +35,24 @@ import java.util.List;
  */
 public final class ResourceLifecycleCoordinator {
 
-    private final ResourceConnector connector;
-    private final ContentDetector contentDetector;
-    private final ExtractionRegistry extractionRegistry;
+    private final RawResourceProvider resourceProvider;
+    private final ContentInspector contentInspector;
     private final ResourcePolicy policy;
     private final ResourceArchive archive;
     private final LexicalIndex lexicalIndex;
 
-    public ResourceLifecycleCoordinator(ResourceConnector connector,
-                                         ContentDetector contentDetector,
-                                         ExtractionRegistry extractionRegistry,
+    public ResourceLifecycleCoordinator(RawResourceProvider resourceProvider,
+                                         ContentInspector contentInspector,
                                          ResourcePolicy policy,
                                          ResourceArchive archive,
                                          LexicalIndex lexicalIndex) {
-        if (connector == null) throw new IllegalArgumentException("connector must not be null");
-        if (contentDetector == null) throw new IllegalArgumentException("contentDetector must not be null");
-        if (extractionRegistry == null) throw new IllegalArgumentException("extractionRegistry must not be null");
+        if (resourceProvider == null) throw new IllegalArgumentException("resourceProvider must not be null");
+        if (contentInspector == null) throw new IllegalArgumentException("contentInspector must not be null");
         if (policy == null) throw new IllegalArgumentException("policy must not be null");
         if (archive == null) throw new IllegalArgumentException("archive must not be null");
         if (lexicalIndex == null) throw new IllegalArgumentException("lexicalIndex must not be null");
-        this.connector = connector;
-        this.contentDetector = contentDetector;
-        this.extractionRegistry = extractionRegistry;
+        this.resourceProvider = resourceProvider;
+        this.contentInspector = contentInspector;
         this.policy = policy;
         this.archive = archive;
         this.lexicalIndex = lexicalIndex;
@@ -76,15 +65,15 @@ public final class ResourceLifecycleCoordinator {
      * @return the processing result
      */
     public ProcessingResult process(VirtualResourceRef ref) {
-        // 1. Fetch raw content via holkas
-        RawResource raw;
+        // 1. Fetch raw content
+        FetchedResource raw;
         try {
-            raw = connector.fetch(ref);
+            raw = resourceProvider.fetch(ref);
         } catch (IOException e) {
             return ProcessingResult.failed(ref, "Failed to fetch resource: " + e.getMessage());
         }
 
-        long sizeBytes = raw.content().sizeBytes();
+        long sizeBytes = raw.sizeBytes();
 
         // 2. Policy check via tamias
         PolicyReason policyResult = policy.evaluate(ref, sizeBytes);
@@ -93,36 +82,35 @@ public final class ResourceLifecycleCoordinator {
         }
 
         // 3. Compute digest and check archive (chalcotheca)
-        byte[] bytes = raw.content().bytes();
+        byte[] bytes = raw.bytes();
         ResourceDigest digest = computeDigest(bytes);
         if (!archive.hasChanged(ref, digest)) {
             return ProcessingResult.unchanged(ref);
         }
 
-        // 4. Detect and extract content via deigma
-        DetectedContentType detectedType = contentDetector.detect(
-                raw.filename(), null, bytes.length > 64 ? copyPrefix(bytes, 64) : bytes);
-
-        ResourceExtractor extractor = extractionRegistry.findExtractor(detectedType);
-        if (extractor == null) {
-            return ProcessingResult.failed(ref, "No extractor for content type: " + detectedType.mimeType());
+        // 4. Detect and extract content
+        InspectionResult inspection = contentInspector.inspect(ref, bytes, raw.filename());
+        if (!inspection.isSuccess()) {
+            return ProcessingResult.failed(ref, inspection.errorMessage());
         }
 
-        ExtractionRequest request = new ExtractionRequest(ref, bytes, raw.filename(), null, detectedType);
-        ExtractionResult extraction = extractor.extract(request);
-        if (!extraction.isSuccess()) {
-            return ProcessingResult.failed(ref, "Extraction failed: " + extraction.errorMessage());
-        }
-
-        // 5. Index via anagraphai
-        ExtractedDocument doc = extraction.document();
+        // 5. Index via anagraphai — skip blocks with null/empty text
+        List<String> textBlocks = inspection.textBlocks();
         LexicalDocument.Builder docBuilder = LexicalDocument.builder(ref)
                 .title(raw.filename())
-                .contentType(detectedType.mimeType());
+                .contentType(inspection.mimeType());
 
-        List<ExtractedBlock> blocks = doc.blocks();
-        for (int i = 0; i < blocks.size(); i++) {
-            docBuilder.addChunk(new LexicalChunk(i, blocks.get(i).text()));
+        int chunkIndex = 0;
+        for (String text : textBlocks) {
+            if (text != null && !text.isEmpty()) {
+                docBuilder.addChunk(new LexicalChunk(chunkIndex, text));
+                chunkIndex++;
+            }
+        }
+
+        if (chunkIndex == 0) {
+            // Extraction succeeded but no text-bearing blocks remain
+            return ProcessingResult.failed(ref, "No indexable text content after extraction");
         }
 
         try {
@@ -150,11 +138,5 @@ public final class ResourceLifecycleCoordinator {
         } catch (NoSuchAlgorithmException e) {
             throw new RuntimeException("SHA-256 not available", e);
         }
-    }
-
-    private static byte[] copyPrefix(byte[] src, int length) {
-        byte[] prefix = new byte[length];
-        System.arraycopy(src, 0, prefix, 0, length);
-        return prefix;
     }
 }

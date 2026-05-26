@@ -13,14 +13,15 @@ import java.util.Map;
  */
 public final class InMemoryResourceArchive implements ResourceArchive {
 
-    private final Map<String, ResourceSnapshot> snapshots = new HashMap<String, ResourceSnapshot>();
+    private final Map<VirtualResourceRef, ResourceSnapshot> snapshots =
+            new HashMap<VirtualResourceRef, ResourceSnapshot>();
 
     @Override
     public void store(ResourceSnapshot snapshot) {
         if (snapshot == null) {
             throw new IllegalArgumentException("snapshot must not be null");
         }
-        snapshots.put(key(snapshot.ref()), snapshot);
+        snapshots.put(snapshot.ref(), snapshot);
     }
 
     @Override
@@ -28,7 +29,7 @@ public final class InMemoryResourceArchive implements ResourceArchive {
         if (ref == null) {
             return null;
         }
-        return snapshots.get(key(ref));
+        return snapshots.get(ref);
     }
 
     @Override
@@ -38,9 +39,5 @@ public final class InMemoryResourceArchive implements ResourceArchive {
             return true; // never seen before
         }
         return !existing.digest().equals(digest);
-    }
-
-    private static String key(VirtualResourceRef ref) {
-        return ref.uri().toString() + "|" + ref.kind().name();
     }
 }

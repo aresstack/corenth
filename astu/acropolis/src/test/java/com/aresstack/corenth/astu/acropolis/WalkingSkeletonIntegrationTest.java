@@ -7,14 +7,20 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.InMemoryResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndexConfig;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalSearchResult;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LuceneLexicalIndex;
-import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.AcceptanceDecision;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.IndexingRule;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PatternResourcePolicy;
+import com.aresstack.corenth.proasteion.emporion.deigma.ContentDetector;
+import com.aresstack.corenth.proasteion.emporion.deigma.DetectedContentType;
+import com.aresstack.corenth.proasteion.emporion.deigma.ExtractedBlock;
 import com.aresstack.corenth.proasteion.emporion.deigma.ExtractionRegistry;
+import com.aresstack.corenth.proasteion.emporion.deigma.ExtractionRequest;
+import com.aresstack.corenth.proasteion.emporion.deigma.ExtractionResult;
+import com.aresstack.corenth.proasteion.emporion.deigma.ResourceExtractor;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.MarkdownTextExtractor;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.PlainTextExtractor;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.SimpleContentDetector;
 import com.aresstack.corenth.proasteion.emporion.holkas.FileSystemResourceConnector;
+import com.aresstack.corenth.proasteion.emporion.holkas.RawResource;
 
 import org.junit.After;
 import org.junit.Before;
@@ -28,6 +34,7 @@ import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -37,6 +44,10 @@ import static org.junit.Assert.*;
 /**
  * Integration test proving the full walking skeleton path:
  * file: URI → holkas → deigma → tamias → chalcotheca → anagraphai → search result.
+ *
+ * <p>This test wires outer adapter implementations (holkas, deigma) to the
+ * inward-facing ports used by acropolis. The main code never compiles against
+ * proasteion packages — only this test composition layer does.
  */
 public class WalkingSkeletonIntegrationTest {
 
@@ -56,14 +67,11 @@ public class WalkingSkeletonIntegrationTest {
         LexicalIndexConfig indexConfig = new LexicalIndexConfig(indexDir.toPath());
         lexicalIndex = new LuceneLexicalIndex(indexConfig);
 
-        // Holkas: file connector
-        FileSystemResourceConnector connector = new FileSystemResourceConnector();
+        // Adapter: holkas file connector → RawResourceProvider port
+        RawResourceProvider resourceProvider = createFileResourceProvider();
 
-        // Deigma: content detection and extraction
-        SimpleContentDetector detector = new SimpleContentDetector();
-        ExtractionRegistry registry = new ExtractionRegistry();
-        registry.register(new PlainTextExtractor());
-        registry.register(new MarkdownTextExtractor());
+        // Adapter: deigma detection + extraction → ContentInspector port
+        ContentInspector inspector = createDeigmaInspector();
 
         // Tamias: policy allowing .txt and .md files under 1MB
         IndexingRule textRule = new IndexingRule(
@@ -80,7 +88,7 @@ public class WalkingSkeletonIntegrationTest {
 
         // Acropolis: coordinator and search
         coordinator = new ResourceLifecycleCoordinator(
-                connector, detector, registry, policy, archive, lexicalIndex);
+                resourceProvider, inspector, policy, archive, lexicalIndex);
         searchCoordinator = new SearchCoordinator(lexicalIndex);
     }
 
@@ -166,9 +174,8 @@ public class WalkingSkeletonIntegrationTest {
 
         // Replace coordinator with tiny policy
         ResourceLifecycleCoordinator tinyCoordinator = new ResourceLifecycleCoordinator(
-                new FileSystemResourceConnector(),
-                new SimpleContentDetector(),
-                createRegistry(),
+                createFileResourceProvider(),
+                createDeigmaInspector(),
                 tinyPolicy,
                 new InMemoryResourceArchive(),
                 lexicalIndex);
@@ -198,16 +205,88 @@ public class WalkingSkeletonIntegrationTest {
         assertEquals(ProcessingResult.Status.UNCHANGED, second.status());
     }
 
+    @Test
+    public void extractionWithNoTextBlocks_producesFailedResult() throws IOException {
+        File txtFile = tempFolder.newFile("empty-blocks.txt");
+        writeFile(txtFile, "content");
+
+        VirtualResourceRef ref = fileRef(txtFile);
+
+        // Inspector that returns success but with only null/empty text blocks
+        ContentInspector emptyInspector = new ContentInspector() {
+            @Override
+            public InspectionResult inspect(VirtualResourceRef r, byte[] content, String filenameHint) {
+                List<String> blocks = Arrays.asList(null, "", null);
+                return InspectionResult.success("text/plain", blocks);
+            }
+        };
+
+        ResourceLifecycleCoordinator coord = new ResourceLifecycleCoordinator(
+                createFileResourceProvider(),
+                emptyInspector,
+                new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                        "allow-all", Arrays.asList("file"), Arrays.asList("**/*"),
+                        Collections.<String>emptyList(), Long.MAX_VALUE))),
+                new InMemoryResourceArchive(),
+                lexicalIndex);
+
+        ProcessingResult result = coord.process(ref);
+        assertEquals(ProcessingResult.Status.FAILED, result.status());
+        assertTrue(result.message().contains("No indexable text"));
+    }
+
+    // --- Adapter wiring: bridges proasteion implementations to acropolis ports ---
+
+    private static RawResourceProvider createFileResourceProvider() {
+        final FileSystemResourceConnector connector = new FileSystemResourceConnector();
+        return new RawResourceProvider() {
+            @Override
+            public FetchedResource fetch(VirtualResourceRef ref) throws IOException {
+                RawResource raw = connector.fetch(ref);
+                return new FetchedResource(
+                        raw.content().bytes(), raw.filename(), raw.content().sizeBytes());
+            }
+        };
+    }
+
+    private static ContentInspector createDeigmaInspector() {
+        final SimpleContentDetector detector = new SimpleContentDetector();
+        final ExtractionRegistry registry = new ExtractionRegistry();
+        registry.register(new PlainTextExtractor());
+        registry.register(new MarkdownTextExtractor());
+
+        return new ContentInspector() {
+            @Override
+            public InspectionResult inspect(VirtualResourceRef ref, byte[] content, String filenameHint) {
+                byte[] prefix = content.length > 64
+                        ? Arrays.copyOf(content, 64) : content;
+                DetectedContentType detectedType = detector.detect(filenameHint, null, prefix);
+
+                ResourceExtractor extractor = registry.findExtractor(detectedType);
+                if (extractor == null) {
+                    return InspectionResult.failure(
+                            "No extractor for content type: " + detectedType.mimeType());
+                }
+
+                ExtractionRequest request = new ExtractionRequest(
+                        ref, content, filenameHint, null, detectedType);
+                ExtractionResult extraction = extractor.extract(request);
+                if (!extraction.isSuccess()) {
+                    return InspectionResult.failure("Extraction failed: " + extraction.errorMessage());
+                }
+
+                List<String> textBlocks = new ArrayList<String>();
+                for (ExtractedBlock block : extraction.document().blocks()) {
+                    textBlocks.add(block.text());
+                }
+                return InspectionResult.success(detectedType.mimeType(), textBlocks);
+            }
+        };
+    }
+
     private VirtualResourceRef fileRef(File file) {
         BookmarkUri uri = BookmarkUri.parse(file.toURI().toString());
         return new VirtualResourceRef(uri, VirtualResourceKind.FILE);
-    }
-
-    private ExtractionRegistry createRegistry() {
-        ExtractionRegistry registry = new ExtractionRegistry();
-        registry.register(new PlainTextExtractor());
-        registry.register(new MarkdownTextExtractor());
-        return registry;
     }
 
     private void writeFile(File file, String content) throws IOException {
