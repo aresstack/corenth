@@ -69,7 +69,7 @@ public class ConfigurableToolbar extends JToolBar {
             }
             btn.setToolTipText(cmd.getLabel());
             btn.setFocusable(false);
-            btn.addActionListener((ActionEvent e) -> cmd.perform());
+            btn.addActionListener((ActionEvent e) -> registry.execute(cmd));
             add(btn);
         }
 

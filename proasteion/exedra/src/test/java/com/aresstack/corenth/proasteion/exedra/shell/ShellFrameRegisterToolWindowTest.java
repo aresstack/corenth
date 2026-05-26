@@ -5,6 +5,8 @@ import com.aresstack.corenth.proasteion.exedra.command.ShortcutRegistry;
 import com.aresstack.corenth.proasteion.exedra.event.UiEventBus;
 import com.aresstack.corenth.proasteion.exedra.settings.SettingsCategoryRegistry;
 import com.aresstack.corenth.proasteion.exedra.toolbar.ToolbarCommandRegistry;
+import com.aresstack.corenth.proasteion.exedra.toolbar.ToolbarConfig;
+import com.aresstack.corenth.proasteion.exedra.toolbar.ToolbarConfigRepository;
 import com.aresstack.corenth.proasteion.exedra.toolwindow.ToolWindowDescriptor;
 import org.junit.Assume;
 import org.junit.Test;
@@ -22,6 +24,21 @@ import static org.junit.Assert.*;
  */
 public class ShellFrameRegisterToolWindowTest {
 
+    /** Minimal in-memory ToolbarConfigRepository for testing. */
+    private static class InMemoryToolbarConfigRepository implements ToolbarConfigRepository {
+        private ToolbarConfig stored;
+
+        @Override
+        public ToolbarConfig load(ToolbarConfig defaultConfig) {
+            return stored != null ? stored : defaultConfig;
+        }
+
+        @Override
+        public void save(ToolbarConfig config) {
+            this.stored = config;
+        }
+    }
+
     @Test
     public void registerToolWindow_addsToggleCommandAndUpdatesMenu() {
         // ShellFrame extends JFrame and requires a display
@@ -33,7 +50,8 @@ public class ShellFrameRegisterToolWindowTest {
         UiEventBus eventBus = new UiEventBus();
         ShortcutRegistry shortcuts = new ShortcutRegistry();
 
-        ShellFrame frame = new ShellFrame("Test", commands, toolbar, null,
+        ShellFrame frame = new ShellFrame("Test", commands, toolbar,
+                new InMemoryToolbarConfigRepository(),
                 settings, eventBus, null, null, shortcuts);
 
         // Register a tool window after construction
