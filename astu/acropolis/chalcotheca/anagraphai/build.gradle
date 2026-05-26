@@ -7,8 +7,12 @@ dependencies {
     implementation 'org.apache.lucene:lucene-analyzers-common:8.11.4'
     implementation 'org.apache.lucene:lucene-queryparser:8.11.4'
 
+    // OpenNLP is optional — the chunker falls back to BreakIterator when absent
+    compileOnly 'org.apache.opennlp:opennlp-tools:1.9.4'
+
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation 'org.apache.opennlp:opennlp-tools:1.9.4'
 }
 
 tasks.named('test') {

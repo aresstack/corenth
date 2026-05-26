@@ -7,6 +7,11 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.InMemoryResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndexConfig;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalSearchResult;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LuceneLexicalIndex;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.BreakIteratorSentenceSegmenter;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.LexicalChunker;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.LexicalChunkingConfig;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.LuceneTokenCounter;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.NlpTextChunker;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.IndexingRule;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PatternResourcePolicy;
 import com.aresstack.corenth.proasteion.emporion.deigma.ContentDetector;
@@ -89,9 +94,15 @@ public class WalkingSkeletonIntegrationTest {
         // Chalcotheca: in-memory archive
         InMemoryResourceArchive archive = new InMemoryResourceArchive();
 
+        // Anagraphai: lexical chunker with sentence-aware splitting
+        LexicalChunker chunker = new NlpTextChunker(
+                new BreakIteratorSentenceSegmenter(),
+                new LuceneTokenCounter(),
+                new LexicalChunkingConfig());
+
         // Acropolis: coordinator and search
         coordinator = new ResourceLifecycleCoordinator(
-                resourceProvider, inspector, policy, archive, lexicalIndex);
+                resourceProvider, inspector, policy, archive, lexicalIndex, chunker);
         searchCoordinator = new SearchCoordinator(lexicalIndex);
     }
 
