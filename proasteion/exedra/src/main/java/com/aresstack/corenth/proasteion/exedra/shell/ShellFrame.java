@@ -252,12 +252,16 @@ public class ShellFrame extends JFrame {
      * {@code ToggleToolWindowCommand} with id {@code "view.tool.<toolId>"}.
      * This keeps tool-window registration and View-menu toggle commands in sync.
      *
+     * <p>The menu bar is rebuilt and shortcuts are reapplied so the new toggle command
+     * appears in the View menu immediately, without requiring a manual {@link #rebuildMenuBar()} call.
+     *
      * @param descriptor the tool window descriptor to register
      */
     public void registerToolWindow(ToolWindowDescriptor descriptor) {
         toolWindowRegistry.register(descriptor);
         ToggleToolWindowCommand toggleCmd = new ToggleToolWindowCommand(descriptor, toolWindowRegistry);
         commandRegistry.register(toggleCmd);
+        rebuildMenuBar();
     }
 
     /** Access the outer split pane (for sidebar toggle commands). */
