@@ -421,9 +421,7 @@ public class WalkingSkeletonIntegrationTest {
         assertEquals(ProcessingResult.Status.INDEXED, first.status());
         assertFalse(searchCoordinator.search("notext", 10).isEmpty());
 
-        // Step 2: Change the file content so digest changes, then use empty inspector
-        // which produces no indexable text — triggers cleanup path
-        writeFile(txtFile, "changed content that empty inspector ignores");
+        // Step 2: Keep same file content but use empty inspector, which triggers cleanup
         ContentInspector emptyInspector = new ContentInspector() {
             @Override
             public InspectionResult inspect(VirtualResourceRef r, byte[] content, String filenameHint) {
@@ -437,11 +435,13 @@ public class WalkingSkeletonIntegrationTest {
         ProcessingResult noText = emptyCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.FAILED, noText.status());
         assertTrue(searchCoordinator.search("notext", 10).isEmpty());
+        assertNull(sharedArchive.find(ref));
 
-        // Step 3: Re-process same file with normal inspector — archive snapshot was
+        // Step 3: Re-process same unchanged file with normal inspector — archive snapshot was
         // removed during cleanup, so hasChanged returns true and file is re-indexed
         ProcessingResult reindexed = normalCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.INDEXED, reindexed.status());
+        assertFalse(searchCoordinator.search("notext", 10).isEmpty());
     }
 
     @Test

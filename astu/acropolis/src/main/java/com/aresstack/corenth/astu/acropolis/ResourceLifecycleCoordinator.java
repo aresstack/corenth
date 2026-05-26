@@ -126,13 +126,10 @@ public final class ResourceLifecycleCoordinator {
             return cleanupAndReturn(ProcessingResult.denied(ref, policyResult.reason()));
         }
 
-        // 3. Compute digest and check archive (chalcotheca)
+        // 3. Compute digest (chalcotheca)
         byte[] bytes = raw.bytes();
         ResourceDigest digest = ContentHasher.digest(bytes);
-        if (!archive.hasChanged(ref, digest)) {
-            return ProcessingResult.unchanged(ref);
-        }
-
+        
         // 4. Detect and extract content
         InspectionResult inspection = contentInspector.inspect(ref, bytes, raw.filename());
         if (!inspection.isSuccess()) {
@@ -167,6 +164,11 @@ public final class ResourceLifecycleCoordinator {
             return cleanupAndReturn(
                     ProcessingResult.failed(ref, "No indexable text content after extraction"));
         }
+        
+        // 6. Check archive for unchanged content
+        if (!archive.hasChanged(ref, digest)) {
+            return ProcessingResult.unchanged(ref);
+        }
 
         try {
             lexicalIndex.index(docBuilder.build());
@@ -175,7 +177,7 @@ public final class ResourceLifecycleCoordinator {
             return ProcessingResult.failed(ref, "Indexing failed: " + e.getMessage());
         }
 
-        // 6. Record snapshot in archive
+        // 7. Record snapshot in archive
         archive.store(new ResourceSnapshot(ref, digest, System.currentTimeMillis()));
 
         return ProcessingResult.indexed(ref);

@@ -2,7 +2,7 @@ package com.aresstack.corenth.astu.acropolis.chalcotheca;
 
 import com.aresstack.corenth.astu.ResourceFingerprint;
 
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
@@ -50,7 +50,7 @@ public final class ContentHasher {
         if (text == null) {
             throw new IllegalArgumentException("text must not be null");
         }
-        return fingerprint(text.getBytes(utf8()));
+        return fingerprint(text.getBytes(StandardCharsets.UTF_8));
     }
 
     /**
@@ -86,7 +86,7 @@ public final class ContentHasher {
         if (text == null) {
             throw new IllegalArgumentException("text must not be null");
         }
-        return hash(text.getBytes(utf8()));
+        return hash(text.getBytes(StandardCharsets.UTF_8));
     }
 
     private static byte[] sha256(byte[] data) {
@@ -108,7 +108,4 @@ public final class ContentHasher {
         return new String(hex);
     }
 
-    private static Charset utf8() {
-        return Charset.forName("UTF-8");
-    }
 }

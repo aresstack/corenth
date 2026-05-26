@@ -44,6 +44,6 @@ public final class ResourceVersion {
 
     @Override
     public int hashCode() {
-        return 31 * digest.hashCode() + Long.valueOf(observedAtMillis).hashCode();
+        return 31 * digest.hashCode() + Long.hashCode(observedAtMillis);
     }
 }

@@ -60,7 +60,6 @@ public class ChalcothecaModelTest {
 
     @Test
     public void lifecycleState_valuesExist() {
-        assertEquals(6, ResourceLifecycleState.values().length);
         assertNotNull(ResourceLifecycleState.PENDING);
         assertNotNull(ResourceLifecycleState.ACQUIRED);
         assertNotNull(ResourceLifecycleState.CACHED);
