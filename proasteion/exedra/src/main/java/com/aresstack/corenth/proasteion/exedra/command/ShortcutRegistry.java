@@ -28,6 +28,8 @@ public final class ShortcutRegistry {
     private final Map<String, KeyStroke> shortcuts = new LinkedHashMap<>();
     /** Tracks all KeyStroke→actionKey bindings currently installed on the root pane. */
     private final Set<KeyStroke> installedKeyStrokes = new LinkedHashSet<>();
+    /** Tracks action keys installed on the root pane so stale entries can be removed. */
+    private final Set<String> installedActionKeys = new LinkedHashSet<>();
 
     /** Set the shortcut for a command id (overrides default). Pass null to clear. */
     public void set(String commandId, KeyStroke keyStroke) {
@@ -107,11 +109,11 @@ public final class ShortcutRegistry {
         for (KeyStroke ks : installedKeyStrokes) {
             inputMap.remove(ks);
         }
-        for (ShellCommand cmd : commandRegistry.getAll()) {
-            String actionKey = ACTION_PREFIX + cmd.getId();
+        for (String actionKey : installedActionKeys) {
             actionMap.remove(actionKey);
         }
         installedKeyStrokes.clear();
+        installedActionKeys.clear();
 
         // Install current bindings
         for (ShellCommand cmd : commandRegistry.getAll()) {
@@ -131,6 +133,7 @@ public final class ShortcutRegistry {
                 actionMap.put(actionKey, action);
                 inputMap.put(effective, actionKey);
                 installedKeyStrokes.add(effective);
+                installedActionKeys.add(actionKey);
             }
         }
     }

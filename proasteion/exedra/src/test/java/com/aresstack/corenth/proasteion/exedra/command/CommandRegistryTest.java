@@ -213,6 +213,24 @@ public class CommandRegistryTest {
                 .get(KeyStroke.getKeyStroke("ctrl A")));
     }
 
+    @Test
+    public void shortcutRegistry_unregisteredCommand_reapplyClearsStaleActionKey() {
+        ShortcutRegistry shortcuts = new ShortcutRegistry();
+        ShellCommand cmd = stubCommandWithAccelerator("gone.cmd", "Gone", KeyStroke.getKeyStroke("ctrl G"));
+        registry.register(cmd);
+
+        JRootPane rootPane = new JRootPane();
+        shortcuts.applyToRootPane(rootPane, registry);
+        assertNotNull(rootPane.getActionMap().get("exedra.shortcut.gone.cmd"));
+
+        registry.unregister("gone.cmd");
+        shortcuts.applyToRootPane(rootPane, registry);
+
+        assertNull(rootPane.getActionMap().get("exedra.shortcut.gone.cmd"));
+        assertNull(rootPane.getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .get(KeyStroke.getKeyStroke("ctrl G")));
+    }
+
     private static ShellCommand stubCommand(String id, String label) {
         return new ShellCommand() {
             @Override public String getId() { return id; }

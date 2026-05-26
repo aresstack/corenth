@@ -8,6 +8,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Central registry of {@link ShellCommand}s.
@@ -20,6 +22,8 @@ import java.util.function.Consumer;
  * via {@link #execute(ShellCommand)}.
  */
 public final class CommandRegistry {
+
+    private static final Logger LOG = Logger.getLogger(CommandRegistry.class.getName());
 
     private final Map<String, ShellCommand> commands = new LinkedHashMap<>();
     private final List<Consumer<ShellCommand>> executionListeners = new CopyOnWriteArrayList<>();
@@ -62,7 +66,7 @@ public final class CommandRegistry {
             try {
                 listener.accept(command);
             } catch (Throwable t) {
-                // Logged in event bus — here we just don't let a listener failure break execution
+                LOG.log(Level.WARNING, "Command execution listener failed for command: " + command.getId(), t);
             }
         }
     }

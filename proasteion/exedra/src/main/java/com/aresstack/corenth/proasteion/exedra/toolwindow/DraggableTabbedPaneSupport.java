@@ -28,16 +28,24 @@ import java.util.List;
  */
 public final class DraggableTabbedPaneSupport {
 
-    private static final List<JTabbedPane> participants = new ArrayList<>();
     private static final DataFlavor TAB_FLAVOR = DataFlavor.stringFlavor;
-    private static MoveCallback moveCallback;
+    private final List<JTabbedPane> participants = new ArrayList<>();
+    private final MoveCallback moveCallback;
 
-    private DraggableTabbedPaneSupport() { }
+    private DraggableTabbedPaneSupport(MoveCallback callback, JTabbedPane... panes) {
+        this.moveCallback = callback;
+        for (JTabbedPane pane : panes) {
+            if (participants.contains(pane)) continue;
+            participants.add(pane);
+            installDragSource(pane);
+            installDropTarget(pane);
+        }
+    }
 
     /**
      * Callback invoked after a tab is moved via drag-and-drop.
      * Implementations should update the registry model (e.g. call
-     * {@link ToolWindowRegistry#moveTo(String, ToolWindowDescriptor.Position)}).
+     * {@link ToolWindowRegistry#updatePositionAfterDrag(String, ToolWindowDescriptor.Position)}).
      */
     public interface MoveCallback {
         /**
@@ -51,22 +59,16 @@ public final class DraggableTabbedPaneSupport {
     }
 
     /** Install drag-and-drop on the given panes with a model update callback. */
-    public static void install(MoveCallback callback, JTabbedPane... panes) {
-        moveCallback = callback;
-        for (JTabbedPane pane : panes) {
-            if (participants.contains(pane)) continue;
-            participants.add(pane);
-            installDragSource(pane);
-            installDropTarget(pane);
-        }
+    public static DraggableTabbedPaneSupport install(MoveCallback callback, JTabbedPane... panes) {
+        return new DraggableTabbedPaneSupport(callback, panes);
     }
 
     /** Install drag-and-drop on the given panes (no callback). */
-    public static void install(JTabbedPane... panes) {
-        install(null, panes);
+    public static DraggableTabbedPaneSupport install(JTabbedPane... panes) {
+        return install(null, panes);
     }
 
-    private static void installDragSource(final JTabbedPane pane) {
+    private void installDragSource(final JTabbedPane pane) {
         DragSource ds = new DragSource();
         ds.createDefaultDragGestureRecognizer(pane, DnDConstants.ACTION_MOVE, new DragGestureListener() {
             @Override
@@ -79,7 +81,7 @@ public final class DraggableTabbedPaneSupport {
         });
     }
 
-    private static void installDropTarget(final JTabbedPane targetPane) {
+    private void installDropTarget(final JTabbedPane targetPane) {
         new DropTarget(targetPane, new DropTargetAdapter() {
             @Override
             public void drop(DropTargetDropEvent dtde) {
@@ -118,7 +120,7 @@ public final class DraggableTabbedPaneSupport {
         });
     }
 
-    private static JTabbedPane findByHash(int hash) {
+    private JTabbedPane findByHash(int hash) {
         for (JTabbedPane p : participants) {
             if (System.identityHashCode(p) == hash) return p;
         }

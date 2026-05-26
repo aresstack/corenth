@@ -64,7 +64,7 @@ public final class ShortcutEditorDialog extends JDialog {
                     captureField.setText("");
                     return;
                 }
-                int modifiers = e.getModifiers();
+                int modifiers = e.getModifiersEx();
                 if (e.getKeyCode() == KeyEvent.VK_SHIFT || e.getKeyCode() == KeyEvent.VK_CONTROL
                         || e.getKeyCode() == KeyEvent.VK_ALT || e.getKeyCode() == KeyEvent.VK_META) {
                     return; // Wait for non-modifier key

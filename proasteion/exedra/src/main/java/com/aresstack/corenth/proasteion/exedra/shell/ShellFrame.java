@@ -33,6 +33,7 @@ import java.awt.Toolkit;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Generic four-pane Swing shell frame.
@@ -71,6 +72,7 @@ public class ShellFrame extends JFrame {
     private final ShellStatePersistence persistence;
     private final ShortcutRegistry shortcutRegistry;
     private final SettingsContext settingsContext;
+    private final DraggableTabbedPaneSupport dragSupport;
 
     private final JTabbedPane leftTopPane = new JTabbedPane(JTabbedPane.TOP);
     private final JTabbedPane leftBottomPane = new JTabbedPane(JTabbedPane.TOP);
@@ -108,10 +110,11 @@ public class ShellFrame extends JFrame {
                       MenuConfig menuConfig,
                       ShortcutRegistry shortcutRegistry) {
         super(title);
-        this.commandRegistry = commandRegistry;
-        this.toolbarRegistry = toolbarRegistry;
-        this.settingsRegistry = settingsRegistry;
-        this.eventBus = eventBus;
+        this.commandRegistry = Objects.requireNonNull(commandRegistry, "commandRegistry must not be null");
+        this.toolbarRegistry = Objects.requireNonNull(toolbarRegistry, "toolbarRegistry must not be null");
+        Objects.requireNonNull(toolbarConfigRepo, "toolbarConfigRepo must not be null");
+        this.settingsRegistry = Objects.requireNonNull(settingsRegistry, "settingsRegistry must not be null");
+        this.eventBus = Objects.requireNonNull(eventBus, "eventBus must not be null");
         this.persistence = persistence;
         this.menuConfig = menuConfig;
         this.shortcutRegistry = shortcutRegistry != null ? shortcutRegistry : new ShortcutRegistry();
@@ -149,7 +152,7 @@ public class ShellFrame extends JFrame {
         add(outerSplit, BorderLayout.CENTER);
 
         // Draggable tabs between all four panes — with model callback
-        DraggableTabbedPaneSupport.install(
+        dragSupport = DraggableTabbedPaneSupport.install(
                 (component, sourcePane, targetPane) -> {
                     // Find the tool id for the moved component
                     String toolId = toolWindowRegistry.findIdByComponent(component);
@@ -198,7 +201,7 @@ public class ShellFrame extends JFrame {
             setBounds(defaultBounds);
         }
 
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 
         // Persist state on close
         addWindowListener(new WindowAdapter() {

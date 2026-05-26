@@ -64,11 +64,17 @@ public final class ToolWindowRegistry {
     /** Register a tool window descriptor. Adds the tab to its pane if visible. */
     public void register(ToolWindowDescriptor descriptor) {
         if (descriptor == null) throw new IllegalArgumentException("descriptor must not be null");
+        if (entries.containsKey(descriptor.getId())) {
+            throw new IllegalArgumentException("Duplicate tool id: " + descriptor.getId());
+        }
         JTabbedPane pane = panes.get(descriptor.getDefaultPosition());
+        if (pane == null) {
+            throw new IllegalStateException("No pane bound for position: " + descriptor.getDefaultPosition());
+        }
         boolean visible = descriptor.isVisibleByDefault();
         entries.put(descriptor.getId(), new Entry(descriptor, descriptor.getDefaultPosition(), pane, visible));
 
-        if (visible && pane != null) {
+        if (visible) {
             pane.addTab(descriptor.getTitle(), descriptor.getIcon(), descriptor.getComponent());
         }
     }

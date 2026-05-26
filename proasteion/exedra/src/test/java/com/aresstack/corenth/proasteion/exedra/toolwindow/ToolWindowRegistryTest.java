@@ -50,6 +50,23 @@ public class ToolWindowRegistryTest {
         assertEquals(0, leftTop.getTabCount());
     }
 
+    @Test(expected = IllegalArgumentException.class)
+    public void register_duplicateId_throws() {
+        registry.register(new ToolWindowDescriptor(
+                "dup", "First", ToolWindowDescriptor.Position.LEFT_TOP,
+                new JLabel("a"), null, false));
+        registry.register(new ToolWindowDescriptor(
+                "dup", "Second", ToolWindowDescriptor.Position.LEFT_TOP,
+                new JLabel("b"), null, false));
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void register_unboundPane_throws() {
+        registry.register(new ToolWindowDescriptor(
+                "lb", "Left Bottom", ToolWindowDescriptor.Position.LEFT_BOTTOM,
+                new JLabel("x"), null, false));
+    }
+
     @Test
     public void setVisible_showsHiddenTab() {
         ToolWindowDescriptor desc = new ToolWindowDescriptor(
