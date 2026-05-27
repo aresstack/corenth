@@ -131,6 +131,23 @@ public class MediatedResourceServiceTest {
         assertTrue(result.isDenied());
     }
 
+    @Test
+    public void publicMethods_returnControlledError_onNullRequest() {
+        ResourceAccessPolicy allowAll = allowAllPolicy();
+        MediatedResourceService service = new MediatedResourceService(allowAll, acquisitionPort, archive);
+
+        MediatedResult<BronzeListing> listResult = service.listChildren(null);
+        MediatedResult<BronzeContent> readResult = service.readContent(null);
+        MediatedResult<Void> deleteResult = service.deleteEntry(null);
+
+        assertFalse(listResult.isSuccess());
+        assertEquals("request must not be null", listResult.errorMessage());
+        assertFalse(readResult.isSuccess());
+        assertEquals("request must not be null", readResult.errorMessage());
+        assertFalse(deleteResult.isSuccess());
+        assertEquals("request must not be null", deleteResult.errorMessage());
+    }
+
     // ── Fix 2: Separate FETCH_EXTERNAL authorization ──
 
     @Test
@@ -214,7 +231,7 @@ public class MediatedResourceServiceTest {
         MediatedResult<BronzeContent> result = service.readContent(request);
 
         assertFalse(result.isSuccess());
-        assertTrue(result.isDenied());
+        assertEquals(AccessDecisionType.ALLOW_CACHED_ONLY, result.decision().type());
         assertEquals(AccessReasonCode.CACHE_ONLY_ALLOWED, result.decision().reasonCode());
         assertFalse(trackingPort.wasFetchContentCalled());
     }
@@ -243,8 +260,67 @@ public class MediatedResourceServiceTest {
         MediatedResult<BronzeListing> result = service.listChildren(request);
 
         assertFalse(result.isSuccess());
-        assertTrue(result.isDenied());
+        assertEquals(AccessDecisionType.ALLOW_CACHED_ONLY, result.decision().type());
         assertEquals(AccessReasonCode.CACHE_ONLY_ALLOWED, result.decision().reasonCode());
+        assertFalse(trackingPort.wasListChildrenCalled());
+    }
+
+    @Test
+    public void readContent_fetchExternalRequireAuth_preservesDecisionType() {
+        ResourceAccessPolicy policy = new ResourceAccessPolicy() {
+            @Override
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                if (request.operation() == ResourceOperation.FETCH_EXTERNAL) {
+                    return new ResourceAccessDecision(
+                            AccessDecisionType.REQUIRE_AUTH,
+                            AccessReasonCode.SOURCE_AUTH_REQUIRED,
+                            "Source auth required");
+                }
+                return ResourceAccessDecision.allow();
+            }
+        };
+
+        CallTrackingAcquisitionPort trackingPort = new CallTrackingAcquisitionPort();
+        trackingPort.setContent(FILE_URI, "Should not be fetched".getBytes());
+        MediatedResourceService service = new MediatedResourceService(policy, trackingPort, archive);
+
+        ResourceAccessRequest request = new ResourceAccessRequest(
+                HUMAN_ACTOR, FILE_URI, ResourceOperation.READ_CONTENT);
+        MediatedResult<BronzeContent> result = service.readContent(request);
+
+        assertFalse(result.isSuccess());
+        assertEquals(AccessDecisionType.REQUIRE_AUTH, result.decision().type());
+        assertEquals(AccessReasonCode.SOURCE_AUTH_REQUIRED, result.decision().reasonCode());
+        assertFalse(trackingPort.wasFetchContentCalled());
+    }
+
+    @Test
+    public void listChildren_fetchExternalRequireSourceCheck_preservesDecisionType() {
+        ResourceAccessPolicy policy = new ResourceAccessPolicy() {
+            @Override
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                if (request.operation() == ResourceOperation.FETCH_EXTERNAL) {
+                    return new ResourceAccessDecision(
+                            AccessDecisionType.REQUIRE_SOURCE_CHECK,
+                            AccessReasonCode.SOURCE_DENIED,
+                            "Source check required");
+                }
+                return ResourceAccessDecision.allow();
+            }
+        };
+
+        CallTrackingAcquisitionPort trackingPort = new CallTrackingAcquisitionPort();
+        trackingPort.setListing(DIR_URI, Arrays.asList(
+                new BronzeListing.Entry(FILE_URI, "hello.txt", VirtualResourceKind.FILE)));
+        MediatedResourceService service = new MediatedResourceService(policy, trackingPort, archive);
+
+        ResourceAccessRequest request = new ResourceAccessRequest(
+                HUMAN_ACTOR, DIR_URI, ResourceOperation.LIST_CHILDREN);
+        MediatedResult<BronzeListing> result = service.listChildren(request);
+
+        assertFalse(result.isSuccess());
+        assertEquals(AccessDecisionType.REQUIRE_SOURCE_CHECK, result.decision().type());
+        assertEquals(AccessReasonCode.SOURCE_DENIED, result.decision().reasonCode());
         assertFalse(trackingPort.wasListChildrenCalled());
     }
 
@@ -493,6 +569,54 @@ public class MediatedResourceServiceTest {
 
         // Archive state removed by URI regardless of kind
         assertNull(archive.findByUri(DIR_URI));
+    }
+
+    @Test
+    public void deleteEntry_cachedOnlyDecision_doesNotDeleteArchiveState() {
+        ResourceAccessPolicy cachedOnlyPolicy = new ResourceAccessPolicy() {
+            @Override
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                return ResourceAccessDecision.cachedOnly("Delete not allowed");
+            }
+        };
+
+        MediatedResourceService service = new MediatedResourceService(cachedOnlyPolicy, acquisitionPort, archive);
+        BronzeContent preloaded = new BronzeContent(FILE_URI, "cached".getBytes(),
+                ContentHasher.digest("cached".getBytes()), System.currentTimeMillis());
+        service.storeBronzeContent(preloaded);
+
+        VirtualResourceRef fileRef = new VirtualResourceRef(FILE_URI, VirtualResourceKind.FILE);
+        ResourceDigest digest = ContentHasher.digest("cached".getBytes());
+        archive.store(new ResourceSnapshot(fileRef, digest, System.currentTimeMillis()));
+
+        ResourceAccessRequest deleteReq = new ResourceAccessRequest(
+                HUMAN_ACTOR, FILE_URI, ResourceOperation.DELETE_ARCHIVE_ENTRY);
+        MediatedResult<Void> result = service.deleteEntry(deleteReq);
+
+        assertFalse(result.isSuccess());
+        assertEquals(AccessDecisionType.ALLOW_CACHED_ONLY, result.decision().type());
+        assertTrue(service.hasCachedContent(FILE_URI));
+        assertNotNull(archive.findByUri(FILE_URI));
+    }
+
+    @Test
+    public void bronzeContent_rejectsNullDigest() {
+        try {
+            new BronzeContent(FILE_URI, "x".getBytes(), null, System.currentTimeMillis());
+            fail("Expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            assertEquals("digest must not be null", e.getMessage());
+        }
+    }
+
+    @Test
+    public void bronzeListingEntry_rejectsNullKind() {
+        try {
+            new BronzeListing.Entry(FILE_URI, "hello.txt", null);
+            fail("Expected IllegalArgumentException");
+        } catch (IllegalArgumentException e) {
+            assertEquals("kind must not be null", e.getMessage());
+        }
     }
 
     // ── Helper: allow-all policy ──

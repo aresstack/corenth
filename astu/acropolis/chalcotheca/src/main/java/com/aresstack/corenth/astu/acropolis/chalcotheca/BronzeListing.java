@@ -47,6 +47,7 @@ public final class BronzeListing {
         public Entry(BookmarkUri uri, String name, VirtualResourceKind kind) {
             if (uri == null) throw new IllegalArgumentException("uri must not be null");
             if (name == null) throw new IllegalArgumentException("name must not be null");
+            if (kind == null) throw new IllegalArgumentException("kind must not be null");
             this.uri = uri;
             this.name = name;
             this.kind = kind;

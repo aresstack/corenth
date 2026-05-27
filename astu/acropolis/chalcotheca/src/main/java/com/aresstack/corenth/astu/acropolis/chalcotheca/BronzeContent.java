@@ -20,6 +20,7 @@ public final class BronzeContent {
     public BronzeContent(BookmarkUri uri, byte[] content, ResourceDigest digest, long fetchedAtMillis) {
         if (uri == null) throw new IllegalArgumentException("uri must not be null");
         if (content == null) throw new IllegalArgumentException("content must not be null");
+        if (digest == null) throw new IllegalArgumentException("digest must not be null");
         this.uri = uri;
         this.content = Arrays.copyOf(content, content.length);
         this.digest = digest;

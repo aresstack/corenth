@@ -62,6 +62,10 @@ public final class MediatedResourceService {
      * @return the result of the mediated listing operation
      */
     public MediatedResult<BronzeListing> listChildren(ResourceAccessRequest request) {
+        if (request == null) {
+            return MediatedResult.error("request must not be null");
+        }
+
         // Fix 1: Validate operation matches this method
         if (request.operation() != ResourceOperation.LIST_CHILDREN) {
             return MediatedResult.denied(ResourceAccessDecision.deny(
@@ -99,9 +103,7 @@ public final class MediatedResourceService {
                 request.actor(), uri, ResourceOperation.FETCH_EXTERNAL, request.purpose());
         ResourceAccessDecision fetchDecision = accessPolicy.evaluate(fetchRequest);
         if (fetchDecision.type() != AccessDecisionType.ALLOW) {
-            return MediatedResult.denied(ResourceAccessDecision.deny(
-                    fetchDecision.reasonCode(),
-                    "External acquisition denied: " + fetchDecision.explanation()));
+            return MediatedResult.denied(fetchDecision);
         }
 
         // Acquire internally
@@ -125,6 +127,10 @@ public final class MediatedResourceService {
      * @return the result of the mediated content read
      */
     public MediatedResult<BronzeContent> readContent(ResourceAccessRequest request) {
+        if (request == null) {
+            return MediatedResult.error("request must not be null");
+        }
+
         // Fix 1: Validate operation matches this method
         if (request.operation() != ResourceOperation.READ_CONTENT) {
             return MediatedResult.denied(ResourceAccessDecision.deny(
@@ -162,9 +168,7 @@ public final class MediatedResourceService {
                 request.actor(), uri, ResourceOperation.FETCH_EXTERNAL, request.purpose());
         ResourceAccessDecision fetchDecision = accessPolicy.evaluate(fetchRequest);
         if (fetchDecision.type() != AccessDecisionType.ALLOW) {
-            return MediatedResult.denied(ResourceAccessDecision.deny(
-                    fetchDecision.reasonCode(),
-                    "External acquisition denied: " + fetchDecision.explanation()));
+            return MediatedResult.denied(fetchDecision);
         }
 
         // Acquire internally
@@ -189,6 +193,10 @@ public final class MediatedResourceService {
      * @return the result
      */
     public MediatedResult<Void> deleteEntry(ResourceAccessRequest request) {
+        if (request == null) {
+            return MediatedResult.error("request must not be null");
+        }
+
         // Fix 1: Validate operation matches this method
         if (request.operation() != ResourceOperation.DELETE_ARCHIVE_ENTRY) {
             return MediatedResult.denied(ResourceAccessDecision.deny(
@@ -197,7 +205,7 @@ public final class MediatedResourceService {
         }
 
         ResourceAccessDecision decision = accessPolicy.evaluate(request);
-        if (!decision.isAllowed()) {
+        if (decision.type() != AccessDecisionType.ALLOW) {
             return MediatedResult.denied(decision);
         }
 
