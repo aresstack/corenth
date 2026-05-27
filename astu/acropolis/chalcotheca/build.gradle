@@ -2,5 +2,6 @@ description = 'Resource archive, cache and lifecycle manager.'
 
 dependencies {
     api project(':astu')
+    api project(':astu:acropolis:chalcotheca:tamias')
     testImplementation 'junit:junit:4.13.2'
 }
