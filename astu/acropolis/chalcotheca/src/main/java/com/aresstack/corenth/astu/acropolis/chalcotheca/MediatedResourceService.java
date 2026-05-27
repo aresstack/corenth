@@ -65,7 +65,7 @@ public final class MediatedResourceService {
         // Fix 1: Validate operation matches this method
         if (request.operation() != ResourceOperation.LIST_CHILDREN) {
             return MediatedResult.denied(ResourceAccessDecision.deny(
-                    AccessReasonCode.UNKNOWN_RESOURCE,
+                    AccessReasonCode.INVALID_OPERATION,
                     "Operation mismatch: listChildren requires LIST_CHILDREN, got " + request.operation()));
         }
 
@@ -126,7 +126,7 @@ public final class MediatedResourceService {
         // Fix 1: Validate operation matches this method
         if (request.operation() != ResourceOperation.READ_CONTENT) {
             return MediatedResult.denied(ResourceAccessDecision.deny(
-                    AccessReasonCode.UNKNOWN_RESOURCE,
+                    AccessReasonCode.INVALID_OPERATION,
                     "Operation mismatch: readContent requires READ_CONTENT, got " + request.operation()));
         }
 
@@ -188,7 +188,7 @@ public final class MediatedResourceService {
         // Fix 1: Validate operation matches this method
         if (request.operation() != ResourceOperation.DELETE_ARCHIVE_ENTRY) {
             return MediatedResult.denied(ResourceAccessDecision.deny(
-                    AccessReasonCode.UNKNOWN_RESOURCE,
+                    AccessReasonCode.INVALID_OPERATION,
                     "Operation mismatch: deleteEntry requires DELETE_ARCHIVE_ENTRY, got " + request.operation()));
         }
 

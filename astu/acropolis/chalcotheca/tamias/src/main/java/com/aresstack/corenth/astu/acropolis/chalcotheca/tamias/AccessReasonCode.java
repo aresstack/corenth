@@ -14,5 +14,7 @@ public enum AccessReasonCode {
     TOO_LARGE,
     UNSUPPORTED_CONTENT_TYPE,
     NOT_VISIBLE_TO_ACTOR,
-    UNKNOWN_RESOURCE
+    UNKNOWN_RESOURCE,
+    /** The requested operation does not match the service method invoked. */
+    INVALID_OPERATION
 }
