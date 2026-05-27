@@ -21,7 +21,9 @@ public final class BronzeListing {
     public BronzeListing(BookmarkUri containerUri, List<Entry> entries, long observedAtMillis) {
         if (containerUri == null) throw new IllegalArgumentException("containerUri must not be null");
         this.containerUri = containerUri;
-        this.entries = entries != null ? Collections.unmodifiableList(entries) : Collections.<Entry>emptyList();
+        this.entries = entries != null
+                ? Collections.unmodifiableList(new java.util.ArrayList<Entry>(entries))
+                : Collections.<Entry>emptyList();
         this.observedAtMillis = observedAtMillis;
     }
 

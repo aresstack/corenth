@@ -1,5 +1,6 @@
 package com.aresstack.corenth.astu.acropolis.chalcotheca;
 
+import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 
 /**
@@ -45,4 +46,22 @@ public interface ResourceArchive {
      * @return {@code true} if a snapshot was removed, {@code false} if not found
      */
     boolean remove(VirtualResourceRef ref);
+
+    /**
+     * Removes all snapshots matching the given bookmark URI, regardless of resource kind.
+     *
+     * <p>Used by the mediated resource service when the resource kind is not known.
+     *
+     * @param uri the bookmark URI to remove
+     * @return {@code true} if at least one snapshot was removed
+     */
+    boolean removeByUri(BookmarkUri uri);
+
+    /**
+     * Finds a snapshot by bookmark URI, regardless of resource kind.
+     *
+     * @param uri the bookmark URI
+     * @return the stored snapshot, or {@code null}
+     */
+    ResourceSnapshot findByUri(BookmarkUri uri);
 }

@@ -2,8 +2,13 @@ package com.aresstack.corenth.astu.acropolis.chalcotheca;
 
 import com.aresstack.corenth.astu.BookmarkUri;
 
+import java.util.Arrays;
+
 /**
  * Bronze-level content snapshot: the actual acquired content for a resource.
+ *
+ * <p>This class is immutable; byte arrays are defensively copied on construction
+ * and on access.
  */
 public final class BronzeContent {
 
@@ -16,13 +21,13 @@ public final class BronzeContent {
         if (uri == null) throw new IllegalArgumentException("uri must not be null");
         if (content == null) throw new IllegalArgumentException("content must not be null");
         this.uri = uri;
-        this.content = content;
+        this.content = Arrays.copyOf(content, content.length);
         this.digest = digest;
         this.fetchedAtMillis = fetchedAtMillis;
     }
 
     public BookmarkUri uri() { return uri; }
-    public byte[] content() { return content; }
+    public byte[] content() { return Arrays.copyOf(content, content.length); }
     public ResourceDigest digest() { return digest; }
     public long fetchedAtMillis() { return fetchedAtMillis; }
 
@@ -31,3 +36,4 @@ public final class BronzeContent {
         return "BronzeContent{" + uri + ", " + content.length + " bytes}";
     }
 }
+

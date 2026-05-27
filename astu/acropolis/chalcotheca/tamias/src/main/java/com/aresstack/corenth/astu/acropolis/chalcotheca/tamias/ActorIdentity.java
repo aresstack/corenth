@@ -30,7 +30,9 @@ public final class ActorIdentity {
         this.subjectId = subjectId;
         this.actorType = actorType;
         this.displayName = displayName;
-        this.roles = roles != null ? Collections.unmodifiableList(roles) : Collections.<String>emptyList();
+        this.roles = roles != null
+                ? Collections.unmodifiableList(new java.util.ArrayList<String>(roles))
+                : Collections.<String>emptyList();
     }
 
     public String subjectId() { return subjectId; }

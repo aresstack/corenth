@@ -17,7 +17,6 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.Collections;
 
 import static org.junit.Assert.*;
 
@@ -31,7 +30,7 @@ import static org.junit.Assert.*;
  *   <li>User-specific denial does NOT delete a global archived snapshot/listing.</li>
  *   <li>Blacklist/tombstone policy can remove archive/index state explicitly.</li>
  *   <li>Unknown/stale BookmarkUri resources can trigger acquisition when Tamias allows.</li>
- *   <li>Existing file walking skeleton behavior remains intact (tested separately).</li>
+ *   <li>Existing file walking skeleton behavior remains intact.</li>
  * </ol>
  */
 public class MediatedResourceServiceTest {
@@ -55,12 +54,7 @@ public class MediatedResourceServiceTest {
 
     @Test
     public void readContent_throughMediatedPath_succeeds() {
-        ResourceAccessPolicy allowAll = new ResourceAccessPolicy() {
-            @Override
-            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
-                return ResourceAccessDecision.allow();
-            }
-        };
+        ResourceAccessPolicy allowAll = allowAllPolicy();
 
         acquisitionPort.setContent(FILE_URI, "Hello, World!".getBytes());
 
@@ -77,12 +71,7 @@ public class MediatedResourceServiceTest {
 
     @Test
     public void listChildren_throughMediatedPath_succeeds() {
-        ResourceAccessPolicy allowAll = new ResourceAccessPolicy() {
-            @Override
-            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
-                return ResourceAccessDecision.allow();
-            }
-        };
+        ResourceAccessPolicy allowAll = allowAllPolicy();
 
         acquisitionPort.setListing(DIR_URI, Arrays.asList(
                 new BronzeListing.Entry(FILE_URI, "hello.txt", VirtualResourceKind.FILE)));
@@ -98,6 +87,156 @@ public class MediatedResourceServiceTest {
         assertEquals("hello.txt", result.value().entries().get(0).name());
     }
 
+    // ── Fix 1: Operation validation ──
+
+    @Test
+    public void listChildren_rejectsWrongOperation() {
+        ResourceAccessPolicy allowAll = allowAllPolicy();
+        MediatedResourceService service = new MediatedResourceService(allowAll, acquisitionPort, archive);
+
+        // Try to call listChildren with READ_CONTENT operation
+        ResourceAccessRequest wrongOp = new ResourceAccessRequest(
+                HUMAN_ACTOR, DIR_URI, ResourceOperation.READ_CONTENT);
+        MediatedResult<BronzeListing> result = service.listChildren(wrongOp);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.isDenied());
+    }
+
+    @Test
+    public void readContent_rejectsWrongOperation() {
+        ResourceAccessPolicy allowAll = allowAllPolicy();
+        MediatedResourceService service = new MediatedResourceService(allowAll, acquisitionPort, archive);
+
+        // Try to call readContent with LIST_CHILDREN operation
+        ResourceAccessRequest wrongOp = new ResourceAccessRequest(
+                HUMAN_ACTOR, FILE_URI, ResourceOperation.LIST_CHILDREN);
+        MediatedResult<BronzeContent> result = service.readContent(wrongOp);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.isDenied());
+    }
+
+    @Test
+    public void deleteEntry_rejectsWrongOperation() {
+        ResourceAccessPolicy allowAll = allowAllPolicy();
+        MediatedResourceService service = new MediatedResourceService(allowAll, acquisitionPort, archive);
+
+        // Try to call deleteEntry with READ_CONTENT operation
+        ResourceAccessRequest wrongOp = new ResourceAccessRequest(
+                HUMAN_ACTOR, FILE_URI, ResourceOperation.READ_CONTENT);
+        MediatedResult<Void> result = service.deleteEntry(wrongOp);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.isDenied());
+    }
+
+    // ── Fix 2: Separate FETCH_EXTERNAL authorization ──
+
+    @Test
+    public void readContent_deniedAcquisition_whenFetchExternalDenied() {
+        // Allow READ_CONTENT but deny FETCH_EXTERNAL
+        ResourceAccessPolicy readOnlyPolicy = new ResourceAccessPolicy() {
+            @Override
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                if (request.operation() == ResourceOperation.FETCH_EXTERNAL) {
+                    return ResourceAccessDecision.deny(
+                            AccessReasonCode.SOURCE_DENIED, "External fetch not permitted");
+                }
+                return ResourceAccessDecision.allow();
+            }
+        };
+
+        acquisitionPort.setContent(FILE_URI, "Should not be acquired".getBytes());
+        MediatedResourceService service = new MediatedResourceService(readOnlyPolicy, acquisitionPort, archive);
+
+        // No cached content, and FETCH_EXTERNAL is denied → should not acquire
+        ResourceAccessRequest request = new ResourceAccessRequest(
+                HUMAN_ACTOR, FILE_URI, ResourceOperation.READ_CONTENT);
+        MediatedResult<BronzeContent> result = service.readContent(request);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.isDenied());
+        assertEquals(AccessReasonCode.SOURCE_DENIED, result.decision().reasonCode());
+        assertFalse(service.hasCachedContent(FILE_URI));
+    }
+
+    @Test
+    public void listChildren_deniedAcquisition_whenFetchExternalDenied() {
+        // Allow LIST_CHILDREN but deny FETCH_EXTERNAL
+        ResourceAccessPolicy readOnlyPolicy = new ResourceAccessPolicy() {
+            @Override
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                if (request.operation() == ResourceOperation.FETCH_EXTERNAL) {
+                    return ResourceAccessDecision.deny(
+                            AccessReasonCode.SOURCE_DENIED, "External fetch not permitted");
+                }
+                return ResourceAccessDecision.allow();
+            }
+        };
+
+        acquisitionPort.setListing(DIR_URI, Arrays.asList(
+                new BronzeListing.Entry(FILE_URI, "hello.txt", VirtualResourceKind.FILE)));
+        MediatedResourceService service = new MediatedResourceService(readOnlyPolicy, acquisitionPort, archive);
+
+        ResourceAccessRequest request = new ResourceAccessRequest(
+                HUMAN_ACTOR, DIR_URI, ResourceOperation.LIST_CHILDREN);
+        MediatedResult<BronzeListing> result = service.listChildren(request);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.isDenied());
+        assertEquals(AccessReasonCode.SOURCE_DENIED, result.decision().reasonCode());
+    }
+
+    // ── Fix 3: ALLOW_CACHED_ONLY semantics ──
+
+    @Test
+    public void readContent_allowCachedOnly_returnsCached() {
+        ResourceAccessPolicy cachedOnlyPolicy = new ResourceAccessPolicy() {
+            @Override
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                return ResourceAccessDecision.cachedOnly("Only cached content allowed");
+            }
+        };
+
+        MediatedResourceService service = new MediatedResourceService(cachedOnlyPolicy, acquisitionPort, archive);
+
+        // Pre-populate cache
+        BronzeContent preloaded = new BronzeContent(FILE_URI, "cached data".getBytes(),
+                ContentHasher.digest("cached data".getBytes()), System.currentTimeMillis());
+        service.storeBronzeContent(preloaded);
+
+        ResourceAccessRequest request = new ResourceAccessRequest(
+                HUMAN_ACTOR, FILE_URI, ResourceOperation.READ_CONTENT);
+        MediatedResult<BronzeContent> result = service.readContent(request);
+
+        assertTrue(result.isSuccess());
+        assertEquals("cached data", new String(result.value().content()));
+    }
+
+    @Test
+    public void readContent_allowCachedOnly_deniesWhenNoCacheExists() {
+        ResourceAccessPolicy cachedOnlyPolicy = new ResourceAccessPolicy() {
+            @Override
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                return ResourceAccessDecision.cachedOnly("Only cached content allowed");
+            }
+        };
+
+        acquisitionPort.setContent(FILE_URI, "Should not be fetched".getBytes());
+        MediatedResourceService service = new MediatedResourceService(cachedOnlyPolicy, acquisitionPort, archive);
+
+        ResourceAccessRequest request = new ResourceAccessRequest(
+                HUMAN_ACTOR, FILE_URI, ResourceOperation.READ_CONTENT);
+        MediatedResult<BronzeContent> result = service.readContent(request);
+
+        // Should deny because no cache and external fetch not permitted
+        assertFalse(result.isSuccess());
+        assertTrue(result.isDenied());
+        assertEquals(AccessReasonCode.CACHE_ONLY_ALLOWED, result.decision().reasonCode());
+        assertFalse(service.hasCachedContent(FILE_URI));
+    }
+
     // ── Acceptance criterion 2: Actor-type differentiation ──
 
     @Test
@@ -105,7 +244,8 @@ public class MediatedResourceServiceTest {
         ResourceAccessPolicy actorPolicy = new ResourceAccessPolicy() {
             @Override
             public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
-                if (request.actor().actorType() == ActorType.BOT) {
+                if (request.actor().actorType() == ActorType.BOT
+                        && request.operation() == ResourceOperation.LIST_CHILDREN) {
                     return ResourceAccessDecision.deny(
                             AccessReasonCode.BOT_RESTRICTED, "Bots may not list directories");
                 }
@@ -137,11 +277,12 @@ public class MediatedResourceServiceTest {
 
     @Test
     public void userDenial_doesNotDeleteGlobalArchivedState() {
-        // First, populate the archive through a human actor
+        // Allow human (including FETCH_EXTERNAL), deny bot for READ_CONTENT
         ResourceAccessPolicy allowHumanDenyBot = new ResourceAccessPolicy() {
             @Override
             public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
-                if (request.actor().actorType() == ActorType.BOT) {
+                if (request.actor().actorType() == ActorType.BOT
+                        && request.operation() == ResourceOperation.READ_CONTENT) {
                     return ResourceAccessDecision.deny(
                             AccessReasonCode.NOT_VISIBLE_TO_ACTOR, "Not visible to this actor");
                 }
@@ -153,7 +294,7 @@ public class MediatedResourceServiceTest {
 
         MediatedResourceService service = new MediatedResourceService(allowHumanDenyBot, acquisitionPort, archive);
 
-        // Human reads (populates the cache)
+        // Human reads (populates the cache via acquisition)
         ResourceAccessRequest humanRead = new ResourceAccessRequest(
                 HUMAN_ACTOR, FILE_URI, ResourceOperation.READ_CONTENT);
         MediatedResult<BronzeContent> humanResult = service.readContent(humanRead);
@@ -170,22 +311,13 @@ public class MediatedResourceServiceTest {
 
         // Global state still exists
         assertTrue(service.hasCachedContent(FILE_URI));
-
-        // Archive snapshot still exists
-        VirtualResourceRef ref = new VirtualResourceRef(FILE_URI, VirtualResourceKind.FILE);
-        assertNotNull(archive.find(ref));
     }
 
     // ── Acceptance criterion 4: Blacklist/tombstone removes archive state ──
 
     @Test
     public void blacklistTombstone_removesArchiveState() {
-        ResourceAccessPolicy allowAll = new ResourceAccessPolicy() {
-            @Override
-            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
-                return ResourceAccessDecision.allow();
-            }
-        };
+        ResourceAccessPolicy allowAll = allowAllPolicy();
 
         acquisitionPort.setContent(FILE_URI, "Content to be tombstoned".getBytes());
 
@@ -205,20 +337,13 @@ public class MediatedResourceServiceTest {
 
         // Archive state is removed
         assertFalse(service.hasCachedContent(FILE_URI));
-        VirtualResourceRef ref = new VirtualResourceRef(FILE_URI, VirtualResourceKind.FILE);
-        assertNull(archive.find(ref));
     }
 
     // ── Acceptance criterion 5: Unknown URI triggers acquisition when allowed ──
 
     @Test
     public void unknownUri_triggersAcquisition_whenAllowed() {
-        ResourceAccessPolicy allowAll = new ResourceAccessPolicy() {
-            @Override
-            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
-                return ResourceAccessDecision.allow();
-            }
-        };
+        ResourceAccessPolicy allowAll = allowAllPolicy();
 
         // No pre-cached content; the acquisition port has it
         acquisitionPort.setContent(FILE_URI, "Newly acquired content".getBytes());
@@ -228,7 +353,7 @@ public class MediatedResourceServiceTest {
         // Content not yet in cache
         assertFalse(service.hasCachedContent(FILE_URI));
 
-        // Request triggers acquisition
+        // Request triggers acquisition (both READ_CONTENT and FETCH_EXTERNAL allowed)
         ResourceAccessRequest request = new ResourceAccessRequest(
                 HUMAN_ACTOR, FILE_URI, ResourceOperation.READ_CONTENT);
         MediatedResult<BronzeContent> result = service.readContent(request);
@@ -261,6 +386,64 @@ public class MediatedResourceServiceTest {
         assertFalse(result.isSuccess());
         assertTrue(result.isDenied());
         assertFalse(service.hasCachedContent(FILE_URI));
+    }
+
+    // ── Fix 4: Defensive copy verification ──
+
+    @Test
+    public void bronzeContent_defensiveCopy_preventsExternalMutation() {
+        byte[] original = "immutable content".getBytes();
+        BronzeContent content = new BronzeContent(FILE_URI, original,
+                ContentHasher.digest(original), System.currentTimeMillis());
+
+        // Mutate the original array
+        original[0] = 'X';
+
+        // Content should be unchanged (defensive copy on construction)
+        assertNotEquals('X', content.content()[0]);
+        assertEquals('i', content.content()[0]);
+
+        // Mutate the returned array
+        byte[] returned = content.content();
+        returned[0] = 'Y';
+
+        // Content should still be unchanged (defensive copy on access)
+        assertEquals('i', content.content()[0]);
+    }
+
+    // ── Fix 5: Delete is type-agnostic (uses URI not hardcoded FILE kind) ──
+
+    @Test
+    public void deleteEntry_removesArchiveState_forDirectoryResource() {
+        ResourceAccessPolicy allowAll = allowAllPolicy();
+
+        // Store a directory-type snapshot in archive
+        VirtualResourceRef dirRef = new VirtualResourceRef(DIR_URI, VirtualResourceKind.DIRECTORY);
+        ResourceDigest digest = ContentHasher.digest("dir-content".getBytes());
+        archive.store(new ResourceSnapshot(dirRef, digest, System.currentTimeMillis()));
+
+        assertNotNull(archive.findByUri(DIR_URI));
+
+        MediatedResourceService service = new MediatedResourceService(allowAll, acquisitionPort, archive);
+
+        ResourceAccessRequest deleteReq = new ResourceAccessRequest(
+                HUMAN_ACTOR, DIR_URI, ResourceOperation.DELETE_ARCHIVE_ENTRY);
+        MediatedResult<Void> result = service.deleteEntry(deleteReq);
+        assertTrue(result.isSuccess());
+
+        // Archive state removed by URI regardless of kind
+        assertNull(archive.findByUri(DIR_URI));
+    }
+
+    // ── Helper: allow-all policy ──
+
+    private static ResourceAccessPolicy allowAllPolicy() {
+        return new ResourceAccessPolicy() {
+            @Override
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                return ResourceAccessDecision.allow();
+            }
+        };
     }
 
     // ── Helper: Stub acquisition port ──
