@@ -188,6 +188,66 @@ public class MediatedResourceServiceTest {
         assertEquals(AccessReasonCode.SOURCE_DENIED, result.decision().reasonCode());
     }
 
+    // ── FETCH_EXTERNAL gate: ALLOW_CACHED_ONLY must block acquisition ──
+
+    @Test
+    public void readContent_fetchExternalCachedOnly_doesNotAcquire() {
+        // Allow READ_CONTENT normally, but FETCH_EXTERNAL returns ALLOW_CACHED_ONLY
+        ResourceAccessPolicy policy = new ResourceAccessPolicy() {
+            @Override
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                if (request.operation() == ResourceOperation.FETCH_EXTERNAL) {
+                    return ResourceAccessDecision.cachedOnly("Only cached allowed for fetch");
+                }
+                return ResourceAccessDecision.allow();
+            }
+        };
+
+        CallTrackingAcquisitionPort trackingPort = new CallTrackingAcquisitionPort();
+        trackingPort.setContent(FILE_URI, "Should not be fetched".getBytes());
+
+        MediatedResourceService service = new MediatedResourceService(policy, trackingPort, archive);
+
+        // No cached content, FETCH_EXTERNAL responds ALLOW_CACHED_ONLY → must not acquire
+        ResourceAccessRequest request = new ResourceAccessRequest(
+                HUMAN_ACTOR, FILE_URI, ResourceOperation.READ_CONTENT);
+        MediatedResult<BronzeContent> result = service.readContent(request);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.isDenied());
+        assertEquals(AccessReasonCode.CACHE_ONLY_ALLOWED, result.decision().reasonCode());
+        assertFalse(trackingPort.wasFetchContentCalled());
+    }
+
+    @Test
+    public void listChildren_fetchExternalCachedOnly_doesNotAcquire() {
+        // Allow LIST_CHILDREN normally, but FETCH_EXTERNAL returns ALLOW_CACHED_ONLY
+        ResourceAccessPolicy policy = new ResourceAccessPolicy() {
+            @Override
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                if (request.operation() == ResourceOperation.FETCH_EXTERNAL) {
+                    return ResourceAccessDecision.cachedOnly("Only cached allowed for fetch");
+                }
+                return ResourceAccessDecision.allow();
+            }
+        };
+
+        CallTrackingAcquisitionPort trackingPort = new CallTrackingAcquisitionPort();
+        trackingPort.setListing(DIR_URI, Arrays.asList(
+                new BronzeListing.Entry(FILE_URI, "hello.txt", VirtualResourceKind.FILE)));
+
+        MediatedResourceService service = new MediatedResourceService(policy, trackingPort, archive);
+
+        ResourceAccessRequest request = new ResourceAccessRequest(
+                HUMAN_ACTOR, DIR_URI, ResourceOperation.LIST_CHILDREN);
+        MediatedResult<BronzeListing> result = service.listChildren(request);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.isDenied());
+        assertEquals(AccessReasonCode.CACHE_ONLY_ALLOWED, result.decision().reasonCode());
+        assertFalse(trackingPort.wasListChildrenCalled());
+    }
+
     // ── Fix 3: ALLOW_CACHED_ONLY semantics ──
 
     @Test
@@ -474,6 +534,49 @@ public class MediatedResourceServiceTest {
 
         @Override
         public BronzeListing listChildren(BookmarkUri uri) throws IOException {
+            java.util.List<BronzeListing.Entry> entries = listingMap.get(uri);
+            if (entries == null) {
+                throw new IOException("No listing available for: " + uri);
+            }
+            return new BronzeListing(uri, entries, System.currentTimeMillis());
+        }
+    }
+
+    // ── Helper: Call-tracking acquisition port ──
+
+    private static class CallTrackingAcquisitionPort implements AcquisitionPort {
+        private final java.util.Map<BookmarkUri, byte[]> contentMap =
+                new java.util.HashMap<BookmarkUri, byte[]>();
+        private final java.util.Map<BookmarkUri, java.util.List<BronzeListing.Entry>> listingMap =
+                new java.util.HashMap<BookmarkUri, java.util.List<BronzeListing.Entry>>();
+        private boolean fetchContentCalled = false;
+        private boolean listChildrenCalled = false;
+
+        void setContent(BookmarkUri uri, byte[] content) {
+            contentMap.put(uri, content);
+        }
+
+        void setListing(BookmarkUri uri, java.util.List<BronzeListing.Entry> entries) {
+            listingMap.put(uri, entries);
+        }
+
+        boolean wasFetchContentCalled() { return fetchContentCalled; }
+        boolean wasListChildrenCalled() { return listChildrenCalled; }
+
+        @Override
+        public BronzeContent fetchContent(BookmarkUri uri) throws IOException {
+            fetchContentCalled = true;
+            byte[] data = contentMap.get(uri);
+            if (data == null) {
+                throw new IOException("No content available for: " + uri);
+            }
+            ResourceDigest digest = ContentHasher.digest(data);
+            return new BronzeContent(uri, data, digest, System.currentTimeMillis());
+        }
+
+        @Override
+        public BronzeListing listChildren(BookmarkUri uri) throws IOException {
+            listChildrenCalled = true;
             java.util.List<BronzeListing.Entry> entries = listingMap.get(uri);
             if (entries == null) {
                 throw new IOException("No listing available for: " + uri);

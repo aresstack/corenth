@@ -93,10 +93,12 @@ public final class MediatedResourceService {
         }
 
         // Cache miss: check if external acquisition is allowed (Fix 2)
+        // Only strict ALLOW permits external fetch; ALLOW_CACHED_ONLY, REQUIRE_AUTH,
+        // REQUIRE_SOURCE_CHECK, and DENY must all block acquisition.
         ResourceAccessRequest fetchRequest = new ResourceAccessRequest(
                 request.actor(), uri, ResourceOperation.FETCH_EXTERNAL, request.purpose());
         ResourceAccessDecision fetchDecision = accessPolicy.evaluate(fetchRequest);
-        if (!fetchDecision.isAllowed()) {
+        if (fetchDecision.type() != AccessDecisionType.ALLOW) {
             return MediatedResult.denied(ResourceAccessDecision.deny(
                     fetchDecision.reasonCode(),
                     "External acquisition denied: " + fetchDecision.explanation()));
@@ -154,10 +156,12 @@ public final class MediatedResourceService {
         }
 
         // Cache miss: check if external acquisition is allowed (Fix 2)
+        // Only strict ALLOW permits external fetch; ALLOW_CACHED_ONLY, REQUIRE_AUTH,
+        // REQUIRE_SOURCE_CHECK, and DENY must all block acquisition.
         ResourceAccessRequest fetchRequest = new ResourceAccessRequest(
                 request.actor(), uri, ResourceOperation.FETCH_EXTERNAL, request.purpose());
         ResourceAccessDecision fetchDecision = accessPolicy.evaluate(fetchRequest);
-        if (!fetchDecision.isAllowed()) {
+        if (fetchDecision.type() != AccessDecisionType.ALLOW) {
             return MediatedResult.denied(ResourceAccessDecision.deny(
                     fetchDecision.reasonCode(),
                     "External acquisition denied: " + fetchDecision.explanation()));
