@@ -1,10 +1,36 @@
 # Chalcotheca
 
-Resource archive, cache and lifecycle manager.
+The mediated bronze archive and archive counter.
 
 ## The bronze-archive metaphor
 
 In ancient Corinth the *chalcotheca* (χαλκοθήκη) was the bronze storehouse — a controlled repository where valuable artifacts were catalogued, preserved and tracked over time. In Corenth's architecture the `chalcotheca` module plays the same role for virtual resources: it is the authoritative record of what has been acquired, what state each resource is in, and whether it has changed since the last processing pass.
+
+**Chalcotheca is both the bronze archive and the archive counter.** External callers do not interact with connectors (Holkas) directly. They request resources from the bronze archive by `BookmarkUri`. The archive decides, via Tamias, whether the caller may see, list, fetch, refresh, index, or delete that resource. If acquisition is needed, Chalcotheca uses Holkas internally through the `AcquisitionPort`.
+
+## Mediated access
+
+```
+Exedra / Bot / Agent / Plugin / Application Service
+  -> MediatedResourceService (the archive counter)
+  -> Tamias access decision (ResourceAccessPolicy)
+  -> Adyton, if credentials or external delegated access are needed
+  -> AcquisitionPort (Holkas connector internally)
+  -> Chalcotheca stores/updates bronze (BronzeContent, BronzeListing, BronzeMetadata)
+  -> Anagraphai / Pinakes derive indexes
+```
+
+**Forbidden direction:** no UI, bot, plugin, or application service should call Holkas directly.
+
+## Bronze resource shapes
+
+| Shape | Purpose |
+|-------|---------|
+| `BronzeMetadata` | Existence/name/type/size/modifiedTime/source metadata |
+| `BronzeListing` | Directory/container listing with child entries |
+| `BronzeContent` | Content snapshot with digest/fingerprint |
+
+All are addressable via `BookmarkUri`.
 
 ## Resource lifecycle
 
@@ -40,6 +66,12 @@ Chalcotheca sits between resource acquisition (`holkas`/`deigma`) and indexing (
 
 | Type | Purpose |
 |------|---------|
+| `MediatedResourceService` | The archive counter: all external access flows through here. |
+| `MediatedResult` | Result of a mediated operation (success/denied/error). |
+| `AcquisitionPort` | Internal acquisition port (Holkas implements this). |
+| `BronzeMetadata` | Existence/name/type/size metadata for a resource. |
+| `BronzeListing` | Directory listing with child entries. |
+| `BronzeContent` | Content snapshot with digest. |
 | `ContentHasher` | Reusable SHA-256 hashing (shared with tamias, anagraphai, pinakes). |
 | `ResourceDigest` | Fingerprint + size for a specific content blob. |
 | `ResourceVersion` | Current digest observation at a point in time. |

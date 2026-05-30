@@ -1,8 +1,10 @@
 package com.aresstack.corenth.astu.acropolis.chalcotheca;
 
+import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 
 /**
@@ -44,5 +46,30 @@ public final class InMemoryResourceArchive implements ResourceArchive {
     @Override
     public boolean remove(VirtualResourceRef ref) {
         return snapshots.remove(ref) != null;
+    }
+
+    @Override
+    public boolean removeByUri(BookmarkUri uri) {
+        if (uri == null) return false;
+        boolean removed = false;
+        Iterator<Map.Entry<VirtualResourceRef, ResourceSnapshot>> it = snapshots.entrySet().iterator();
+        while (it.hasNext()) {
+            if (uri.equals(it.next().getKey().uri())) {
+                it.remove();
+                removed = true;
+            }
+        }
+        return removed;
+    }
+
+    @Override
+    public ResourceSnapshot findByUri(BookmarkUri uri) {
+        if (uri == null) return null;
+        for (Map.Entry<VirtualResourceRef, ResourceSnapshot> entry : snapshots.entrySet()) {
+            if (uri.equals(entry.getKey().uri())) {
+                return entry.getValue();
+            }
+        }
+        return null;
     }
 }

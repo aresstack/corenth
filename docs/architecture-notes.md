@@ -65,16 +65,43 @@ outlook://mailbox/folder/message
 
 ## Data flow
 
-A simplified flow:
+### Mediated bronze access (primary path)
+
+All external access to resources flows through the mediated bronze archive counter:
+
+```text
+Exedra / Bot / Agent / Plugin / Application Service
+  -> Acropolis / Chalcotheca MediatedResourceService
+  -> Tamias ResourceAccessPolicy decision
+  -> Adyton, if credentials or external delegated access are needed
+  -> AcquisitionPort (Holkas connector internally)
+  -> Chalcotheca stores/updates bronze state
+  -> Anagraphai / Pinakes derive indexes
+```
+
+**Forbidden direction:** `Exedra / Bot / Plugin / Application Service -> Holkas directly`
+
+This is analogous to the `adyton` rule: Adyton does not hand out passwords; it mediates bounded operations. Likewise, Chalcotheca does not hand out connectors; it mediates bounded resource operations.
+
+### Indexing pipeline (walking skeleton)
+
+A simplified flow for the existing indexing pipeline:
 
 1. `exedra` or another client asks for a resource or search action.
-2. `emporion.holkas` opens the required connection and obtains raw data.
+2. `emporion.holkas` opens the required connection and obtains raw data (internal to Chalcotheca).
 3. `emporion.deigma` parses transport/file-specific structure and creates a usable virtual resource.
 4. `tamias` checks access rules, cache state, whitelists, blacklists and lifecycle policy.
 5. `chalcotheca` stores or updates the archive/cache entry.
 6. `anagraphai` updates the lexical index.
 7. `pinakes` optionally updates semantic vectors and reranking material.
 8. `propylaea` is used when source code requires deeper language-aware parsing.
+
+### Key architectural rules
+
+- **BookmarkUri** is the canonical address for every external or archived resource.
+- **Indexes (Anagraphai/Pinakes) are derived views**, not the authority source for access control.
+- **Holkas is internal acquisition machinery**, not a client-facing API.
+- **Tamias guards every operation** at the archive counter.
 
 ## Open questions
 
