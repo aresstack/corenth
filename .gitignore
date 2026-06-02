@@ -1,5 +1,8 @@
 .gradle/
 build/
+
+# ChatGPT offline Gradle cache
+.chatgpt/gradle-home/
 !gradle/wrapper/gradle-wrapper.jar
 
 # IDEs

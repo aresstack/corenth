@@ -67,3 +67,7 @@ Run from the repository root:
 ```bash
 gradle projects
 ```
+
+## ChatGPT build support
+
+For constrained execution environments without a warm Gradle cache, use the root `chatgpt-build.sh` entry point. See [CHATGPT_BUILD.md](CHATGPT_BUILD.md) for the smoke compile and offline Gradle workflow.
