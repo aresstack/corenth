@@ -30,15 +30,24 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Install virtual display dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
       - name: Fill Gradle cache
         shell: bash
         run: |
           set -euo pipefail
           chmod +x ./gradlew
           export GRADLE_USER_HOME="$PWD/.chatgpt/gradle-home"
-          ./gradlew --no-daemon --refresh-dependencies clean build
+          xvfb-run -a bash ./gradlew --no-daemon --refresh-dependencies clean build
           find "$GRADLE_USER_HOME" -name "*.lock" -delete
+          find "$GRADLE_USER_HOME" -name "*.lck" -delete
           find "$GRADLE_USER_HOME" -name "gc.properties" -delete
+          rm -rf "$GRADLE_USER_HOME/daemon" "$GRADLE_USER_HOME/workers" "$GRADLE_USER_HOME/native"
 
       - name: Verify ChatGPT entry points
         shell: bash
@@ -66,6 +75,19 @@ jobs:
 
           cd "build/chatgpt-release"
           zip -rq "../corenth-chatgpt-compatible.zip" corenth
+
+      - name: Verify packaged ZIP from fresh extraction
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_dir="build/chatgpt-release-verify"
+          rm -rf "$verify_dir"
+          mkdir -p "$verify_dir"
+          unzip -q "build/corenth-chatgpt-compatible.zip" -d "$verify_dir"
+          cd "$verify_dir/corenth"
+          chmod -x gradlew || true
+          bash chatgpt-build.sh
+          CHATGPT_FULL_GRADLE_BUILD=true bash chatgpt-build.sh
 
       - name: Publish fixed release asset
         shell: bash
