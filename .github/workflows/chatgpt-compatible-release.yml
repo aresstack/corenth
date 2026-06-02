@@ -1,0 +1,93 @@
+name: Build ChatGPT-compatible ZIP
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: chatgpt-compatible-release
+  cancel-in-progress: true
+
+jobs:
+  build-release-zip:
+    name: Build and publish ChatGPT-compatible ZIP
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Fill Gradle cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          export GRADLE_USER_HOME="$PWD/.chatgpt/gradle-home"
+          ./gradlew --no-daemon --refresh-dependencies clean build
+          find "$GRADLE_USER_HOME" -name "*.lock" -delete
+          find "$GRADLE_USER_HOME" -name "gc.properties" -delete
+
+      - name: Verify ChatGPT entry points
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash chatgpt-build.sh
+          CHATGPT_FULL_GRADLE_BUILD=true bash chatgpt-build.sh
+
+      - name: Package repository with prepared cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root="build/chatgpt-release/corenth"
+          archive_path="build/corenth-chatgpt-compatible.zip"
+
+          rm -rf "build/chatgpt-release" "$archive_path"
+          mkdir -p "$package_root"
+
+          rsync -a --delete \
+            --exclude='.git/' \
+            --exclude='.gradle/' \
+            --exclude='.idea/' \
+            --exclude='build/' \
+            ./ "$package_root/"
+
+          cd "build/chatgpt-release"
+          zip -rq "../corenth-chatgpt-compatible.zip" corenth
+
+      - name: Publish fixed release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: chatgpt-compatible
+          RELEASE_TITLE: ChatGPT-compatible ZIP
+          ASSET_NAME: corenth-chatgpt-compatible.zip
+        run: |
+          set -euo pipefail
+          archive_path="build/$ASSET_NAME"
+          release_notes="Automatically updated from main commit $GITHUB_SHA. This ZIP contains a prepared .chatgpt/gradle-home cache for offline Gradle execution in ChatGPT-like environments."
+
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes "$release_notes"
+          else
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes "$release_notes"
+          fi
+
+          gh release delete-asset "$RELEASE_TAG" "$ASSET_NAME" --yes >/dev/null 2>&1 || true
+          gh release upload "$RELEASE_TAG" "$archive_path" --clobber
