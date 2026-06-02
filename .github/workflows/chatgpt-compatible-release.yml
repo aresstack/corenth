@@ -60,10 +60,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          package_root="build/chatgpt-release/corenth"
-          archive_path="build/corenth-chatgpt-compatible.zip"
+          package_parent="$(mktemp -d)"
+          package_root="$package_parent/corenth"
+          archive_path="$PWD/build/corenth-chatgpt-compatible.zip"
 
-          rm -rf "build/chatgpt-release" "$archive_path"
+          rm -rf "$archive_path"
           mkdir -p "$package_root"
 
           rsync -a --delete \
@@ -73,16 +74,14 @@ jobs:
             --exclude='build/' \
             ./ "$package_root/"
 
-          cd "build/chatgpt-release"
-          zip -rq "../corenth-chatgpt-compatible.zip" corenth
+          cd "$package_parent"
+          zip -rq "$archive_path" corenth
 
       - name: Verify packaged ZIP from fresh extraction
         shell: bash
         run: |
           set -euo pipefail
-          verify_dir="build/chatgpt-release-verify"
-          rm -rf "$verify_dir"
-          mkdir -p "$verify_dir"
+          verify_dir="$(mktemp -d)"
           unzip -q "build/corenth-chatgpt-compatible.zip" -d "$verify_dir"
           cd "$verify_dir/corenth"
           chmod -x gradlew || true
