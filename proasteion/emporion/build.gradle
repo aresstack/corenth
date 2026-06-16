@@ -1,1 +1,8 @@
 description = 'Data adapter harbor.'
+
+dependencies {
+    api project(':astu')
+    api project(':proasteion:emporion:holkas')
+    api project(':proasteion:emporion:deigma')
+    testImplementation 'junit:junit:4.13.2'
+}
