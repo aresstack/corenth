@@ -1,30 +1,49 @@
 description = 'Executable architecture boundary rules.'
 
+ext.architectureProjects = [
+        ':adyton',
+        ':astu',
+        ':astu:propylaea',
+        ':astu:acropolis',
+        ':astu:acropolis:chalcotheca',
+        ':astu:acropolis:chalcotheca:tamias',
+        ':astu:acropolis:chalcotheca:anagraphai',
+        ':astu:acropolis:chalcotheca:pinakes',
+        ':proasteion',
+        ':proasteion:exedra',
+        ':proasteion:katagogion',
+        ':proasteion:emporion',
+        ':proasteion:emporion:holkas',
+        ':proasteion:emporion:deigma',
+        ':proasteion:platform',
+        ':proasteion:platform:network',
+        ':proasteion:platform:network-winproxy',
+        ':proasteion:platform:security-keepassrpc'
+]
+
 dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     testImplementation 'com.tngtech.archunit:archunit-junit5:1.4.1'
 
-    testImplementation project(':adyton')
-    testImplementation project(':astu')
-    testImplementation project(':astu:propylaea')
-    testImplementation project(':astu:acropolis')
-    testImplementation project(':astu:acropolis:chalcotheca')
-    testImplementation project(':astu:acropolis:chalcotheca:tamias')
-    testImplementation project(':astu:acropolis:chalcotheca:anagraphai')
-    testImplementation project(':astu:acropolis:chalcotheca:pinakes')
-    testImplementation project(':proasteion')
-    testImplementation project(':proasteion:exedra')
-    testImplementation project(':proasteion:katagogion')
-    testImplementation project(':proasteion:emporion')
-    testImplementation project(':proasteion:emporion:holkas')
-    testImplementation project(':proasteion:emporion:deigma')
-    testImplementation project(':proasteion:platform')
-    testImplementation project(':proasteion:platform:network')
-    testImplementation project(':proasteion:platform:network-winproxy')
-    testImplementation project(':proasteion:platform:security-keepassrpc')
 }
 
 tasks.named('test') {
     useJUnitPlatform()
+    dependsOn architectureProjects.collect { architectureProject ->
+        project(architectureProject).tasks.named('classes')
+    }
+
+    def productionClassDirectories = architectureProjects.collectMany { architectureProject ->
+        project(architectureProject).sourceSets.main.output.classesDirs.files
+    }
+
+    inputs.files(productionClassDirectories)
+
+    doFirst {
+        def existingClassDirectories = productionClassDirectories.findAll { classDirectory ->
+            classDirectory.exists()
+        }
+        systemProperty 'corenth.architecture.classpath', existingClassDirectories.join(File.pathSeparator)
+    }
 }
