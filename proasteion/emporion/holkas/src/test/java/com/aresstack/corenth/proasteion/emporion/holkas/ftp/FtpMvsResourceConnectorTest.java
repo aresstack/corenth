@@ -8,9 +8,15 @@ import com.aresstack.corenth.proasteion.emporion.holkas.RawResource;
 import com.aresstack.corenth.proasteion.emporion.holkas.ResourceListing;
 import com.aresstack.corenth.proasteion.emporion.holkas.ResourceReadMode;
 import com.aresstack.corenth.proasteion.emporion.holkas.mvs.MvsLocation;
+import com.aresstack.corenth.proasteion.platform.network.NetworkAccessPolicy;
+import com.aresstack.corenth.proasteion.platform.network.NetworkAccessRequest;
+import com.aresstack.corenth.proasteion.platform.network.NetworkRoutePlan;
+import com.aresstack.corenth.proasteion.platform.network.NetworkRoutePlanner;
+import com.aresstack.corenth.proasteion.platform.network.NetworkRouteStage;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.Arrays;
 import java.util.List;
 
@@ -30,6 +36,22 @@ public class FtpMvsResourceConnectorTest {
         assertArrayEquals("member content".getBytes("UTF-8"), resource.content().bytes());
         assertEquals("MEMBER", session.lastReadLocation.displayName());
         assertEquals(ResourceReadMode.DEFAULT, session.lastReadMode);
+        assertNotNull(session.lastRoutePlan);
+    }
+
+    @Test
+    public void routePlannerIsCalledBeforeSessionOperation() throws Exception {
+        RecordingSession session = new RecordingSession();
+        RecordingRoutePlanner planner = new RecordingRoutePlanner();
+        FtpMvsResourceConnector connector = new FtpMvsResourceConnector(
+                new FixedAccessBroker(handle(session)), accessRequest(), new NoopFtpStrategy(),
+                planner, NetworkAccessPolicy.direct());
+
+        connector.fetch(ref("USERID.PDS(MEMBER)", VirtualResourceKind.FILE));
+
+        assertEquals(1, planner.calls);
+        assertEquals("mvs-fetch", planner.lastRequest.operation());
+        assertSame(planner.plan, session.lastRoutePlan);
     }
 
     @Test
@@ -68,18 +90,36 @@ public class FtpMvsResourceConnectorTest {
     private static final class RecordingSession implements FtpClientSession {
         private MvsLocation lastReadLocation;
         private ResourceReadMode lastReadMode;
+        private NetworkRoutePlan lastRoutePlan;
 
-        public byte[] readBytes(MvsLocation location, ResourceReadMode readMode) throws IOException {
+        public byte[] readBytes(MvsLocation location, ResourceReadMode readMode,
+                                NetworkRoutePlan routePlan) throws IOException {
             this.lastReadLocation = location;
             this.lastReadMode = readMode;
+            this.lastRoutePlan = routePlan;
             return "member content".getBytes("UTF-8");
         }
 
-        public List<String> listNames(MvsLocation location) {
+        public List<String> listNames(MvsLocation location, NetworkRoutePlan routePlan) {
+            this.lastRoutePlan = routePlan;
             return Arrays.asList("MEMBER1", "MEMBER2");
         }
 
         public void close() {
+        }
+    }
+
+    private static final class RecordingRoutePlanner implements NetworkRoutePlanner {
+        private final NetworkRoutePlan plan = new NetworkRoutePlan(
+                java.net.URI.create("ftp" + "://host/USERID.PDS(MEMBER)"),
+                Collections.singletonList(NetworkRouteStage.direct("test-direct")));
+        private int calls;
+        private NetworkAccessRequest lastRequest;
+
+        public NetworkRoutePlan plan(NetworkAccessRequest request) {
+            calls++;
+            lastRequest = request;
+            return plan;
         }
     }
 

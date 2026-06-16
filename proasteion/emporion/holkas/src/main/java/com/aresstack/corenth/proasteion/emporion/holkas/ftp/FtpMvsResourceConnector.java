@@ -21,25 +21,43 @@ import com.aresstack.corenth.proasteion.emporion.holkas.ResourceReadMode;
 import com.aresstack.corenth.proasteion.emporion.holkas.mvs.MvsListingEntry;
 import com.aresstack.corenth.proasteion.emporion.holkas.mvs.MvsListingMapper;
 import com.aresstack.corenth.proasteion.emporion.holkas.mvs.MvsLocation;
+import com.aresstack.corenth.proasteion.platform.network.NetworkAccessPolicy;
+import com.aresstack.corenth.proasteion.platform.network.NetworkAccessRequest;
+import com.aresstack.corenth.proasteion.platform.network.NetworkRoutePlan;
+import com.aresstack.corenth.proasteion.platform.network.NetworkRoutePlanner;
+import com.aresstack.corenth.proasteion.platform.network.NetworkRouteStage;
+import com.aresstack.corenth.proasteion.platform.network.NetworkRoutingException;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
- * FTP/MVS raw-resource connector skeleton backed by Adyton access handles.
+ * MVS resource connector backed by broker-managed access handles.
  */
 public final class FtpMvsResourceConnector implements ResourceConnector {
 
     private final AccessBroker accessBroker;
     private final AccessRequest accessRequest;
     private final AuthenticationStrategy<FtpAccessHandle> authenticationStrategy;
+    private final NetworkRoutePlanner routePlanner;
+    private final NetworkAccessPolicy networkPolicy;
     private final FtpMvsBookmarkMapper bookmarkMapper;
     private final MvsListingMapper listingMapper;
 
     public FtpMvsResourceConnector(AccessBroker accessBroker,
                                    AccessRequest accessRequest,
                                    AuthenticationStrategy<FtpAccessHandle> authenticationStrategy) {
+        this(accessBroker, accessRequest, authenticationStrategy,
+                new DirectNetworkRoutePlanner(), NetworkAccessPolicy.direct());
+    }
+
+    public FtpMvsResourceConnector(AccessBroker accessBroker,
+                                   AccessRequest accessRequest,
+                                   AuthenticationStrategy<FtpAccessHandle> authenticationStrategy,
+                                   NetworkRoutePlanner routePlanner,
+                                   NetworkAccessPolicy networkPolicy) {
         if (accessBroker == null) {
             throw new IllegalArgumentException("accessBroker must not be null");
         }
@@ -49,9 +67,17 @@ public final class FtpMvsResourceConnector implements ResourceConnector {
         if (authenticationStrategy == null) {
             throw new IllegalArgumentException("authenticationStrategy must not be null");
         }
+        if (routePlanner == null) {
+            throw new IllegalArgumentException("routePlanner must not be null");
+        }
+        if (networkPolicy == null) {
+            throw new IllegalArgumentException("networkPolicy must not be null");
+        }
         this.accessBroker = accessBroker;
         this.accessRequest = accessRequest;
         this.authenticationStrategy = authenticationStrategy;
+        this.routePlanner = routePlanner;
+        this.networkPolicy = networkPolicy;
         this.bookmarkMapper = new FtpMvsBookmarkMapper();
         this.listingMapper = new MvsListingMapper();
     }
@@ -64,6 +90,7 @@ public final class FtpMvsResourceConnector implements ResourceConnector {
     @Override
     public RawResource fetch(final VirtualResourceRef ref) throws IOException {
         validateRef(ref);
+        final NetworkRoutePlan routePlan = planRoute(ref, "fetch");
         try {
             return accessBroker.withAccess(accessRequest, authenticationStrategy,
                     new AccessOperation<FtpAccessHandle, RawResource>() {
@@ -71,19 +98,19 @@ public final class FtpMvsResourceConnector implements ResourceConnector {
                         public RawResource execute(FtpAccessHandle handle) throws AccessException {
                             try {
                                 MvsLocation location = bookmarkMapper.locationOf(ref.uri());
-                                byte[] bytes = handle.session().readBytes(location, ResourceReadMode.DEFAULT);
+                                byte[] bytes = handle.session().readBytes(location, ResourceReadMode.DEFAULT, routePlan);
                                 RawResourceContent content = new RawResourceContent(bytes);
                                 RawResourceMetadata metadata = new RawResourceMetadata(
                                         location.displayName(), null, content.sizeBytes(), 0L,
                                         System.currentTimeMillis(), VirtualResourceKind.FILE);
                                 return new RawResource(ref, content, metadata);
                             } catch (IOException e) {
-                                throw new AccessException("FTP/MVS fetch failed", e);
+                                throw new AccessException("MVS fetch failed", e);
                             }
                         }
                     });
         } catch (AuthCancelledException e) {
-            throw new ResourceConnectorException("FTP/MVS authentication cancelled", e);
+            throw new ResourceConnectorException("MVS access cancelled", e);
         } catch (AccessException e) {
             throw new ResourceConnectorException(e.getMessage(), e);
         }
@@ -92,6 +119,7 @@ public final class FtpMvsResourceConnector implements ResourceConnector {
     @Override
     public ResourceListing list(final VirtualResourceRef ref) throws IOException {
         validateRef(ref);
+        final NetworkRoutePlan routePlan = planRoute(ref, "list");
         try {
             return accessBroker.withAccess(accessRequest, authenticationStrategy,
                     new AccessOperation<FtpAccessHandle, ResourceListing>() {
@@ -99,7 +127,7 @@ public final class FtpMvsResourceConnector implements ResourceConnector {
                         public ResourceListing execute(FtpAccessHandle handle) throws AccessException {
                             try {
                                 MvsLocation parent = bookmarkMapper.locationOf(ref.uri());
-                                List<String> names = handle.session().listNames(parent);
+                                List<String> names = handle.session().listNames(parent, routePlan);
                                 List<MvsListingEntry> mapped = listingMapper.mapNames(parent, names);
                                 List<ResourceListingEntry> entries = new ArrayList<ResourceListingEntry>();
                                 for (MvsListingEntry entry : mapped) {
@@ -109,14 +137,25 @@ public final class FtpMvsResourceConnector implements ResourceConnector {
                                 }
                                 return new ResourceListing(ref, entries, System.currentTimeMillis());
                             } catch (IOException e) {
-                                throw new AccessException("FTP/MVS list failed", e);
+                                throw new AccessException("MVS list failed", e);
                             }
                         }
                     });
         } catch (AuthCancelledException e) {
-            throw new ResourceConnectorException("FTP/MVS authentication cancelled", e);
+            throw new ResourceConnectorException("MVS access cancelled", e);
         } catch (AccessException e) {
             throw new ResourceConnectorException(e.getMessage(), e);
+        }
+    }
+
+    private NetworkRoutePlan planRoute(VirtualResourceRef ref, String operation) throws ResourceConnectorException {
+        if (ref.uri().toURI() == null) {
+            throw new ResourceConnectorException("MVS route planning requires a standard URI");
+        }
+        try {
+            return routePlanner.plan(new NetworkAccessRequest(ref.uri().toURI(), "mvs-" + operation, networkPolicy));
+        } catch (NetworkRoutingException e) {
+            throw new ResourceConnectorException("MVS route planning failed", e);
         }
     }
 
@@ -126,6 +165,14 @@ public final class FtpMvsResourceConnector implements ResourceConnector {
         }
         if (!supports(ref.uri().scheme())) {
             throw new IllegalArgumentException("FtpMvsResourceConnector only supports ftp: scheme");
+        }
+    }
+
+    private static final class DirectNetworkRoutePlanner implements NetworkRoutePlanner {
+        @Override
+        public NetworkRoutePlan plan(NetworkAccessRequest request) {
+            return new NetworkRoutePlan(request.targetUri(),
+                    Collections.singletonList(NetworkRouteStage.direct("mvs-default-direct")));
         }
     }
 }
