@@ -1,0 +1,30 @@
+description = 'Executable architecture boundary rules.'
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation 'com.tngtech.archunit:archunit-junit5:1.4.1'
+
+    testImplementation project(':adyton')
+    testImplementation project(':astu')
+    testImplementation project(':astu:propylaea')
+    testImplementation project(':astu:acropolis')
+    testImplementation project(':astu:acropolis:chalcotheca')
+    testImplementation project(':astu:acropolis:chalcotheca:tamias')
+    testImplementation project(':astu:acropolis:chalcotheca:anagraphai')
+    testImplementation project(':astu:acropolis:chalcotheca:pinakes')
+    testImplementation project(':proasteion')
+    testImplementation project(':proasteion:exedra')
+    testImplementation project(':proasteion:katagogion')
+    testImplementation project(':proasteion:emporion')
+    testImplementation project(':proasteion:emporion:holkas')
+    testImplementation project(':proasteion:emporion:deigma')
+    testImplementation project(':proasteion:platform')
+    testImplementation project(':proasteion:platform:network')
+    testImplementation project(':proasteion:platform:network-winproxy')
+    testImplementation project(':proasteion:platform:security-keepassrpc')
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
