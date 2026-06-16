@@ -2,7 +2,6 @@ package com.aresstack.corenth.proasteion.emporion.holkas.ftp;
 
 import com.aresstack.corenth.proasteion.emporion.holkas.ResourceReadMode;
 import com.aresstack.corenth.proasteion.emporion.holkas.mvs.MvsLocation;
-import com.aresstack.corenth.proasteion.platform.network.NetworkRoutePlan;
 
 import java.io.IOException;
 import java.util.List;
@@ -12,10 +11,9 @@ import java.util.List;
  */
 public interface FtpClientSession extends AutoCloseable {
 
-    byte[] readBytes(MvsLocation location, ResourceReadMode readMode,
-                     NetworkRoutePlan routePlan) throws IOException;
+    byte[] readBytes(MvsLocation location, ResourceReadMode readMode) throws IOException;
 
-    List<String> listNames(MvsLocation location, NetworkRoutePlan routePlan) throws IOException;
+    List<String> listNames(MvsLocation location) throws IOException;
 
     @Override
     void close();

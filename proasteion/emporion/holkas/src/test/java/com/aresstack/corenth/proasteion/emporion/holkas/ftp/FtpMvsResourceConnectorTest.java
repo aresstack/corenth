@@ -36,22 +36,22 @@ public class FtpMvsResourceConnectorTest {
         assertArrayEquals("member content".getBytes("UTF-8"), resource.content().bytes());
         assertEquals("MEMBER", session.lastReadLocation.displayName());
         assertEquals(ResourceReadMode.DEFAULT, session.lastReadMode);
-        assertNotNull(session.lastRoutePlan);
     }
 
     @Test
     public void routePlannerIsCalledBeforeSessionOperation() throws Exception {
         RecordingSession session = new RecordingSession();
+        RecordingSessionFactory factory = new RecordingSessionFactory(session);
         RecordingRoutePlanner planner = new RecordingRoutePlanner();
         FtpMvsResourceConnector connector = new FtpMvsResourceConnector(
-                new FixedAccessBroker(handle(session)), accessRequest(), new NoopFtpStrategy(),
+                new FixedAccessBroker(handle(factory)), accessRequest(), new NoopFtpStrategy(),
                 planner, NetworkAccessPolicy.direct());
 
         connector.fetch(ref("USERID.PDS(MEMBER)", VirtualResourceKind.FILE));
 
         assertEquals(1, planner.calls);
         assertEquals("mvs-fetch", planner.lastRequest.operation());
-        assertSame(planner.plan, session.lastRoutePlan);
+        assertSame(planner.plan, factory.lastRequest.routePlan());
     }
 
     @Test
@@ -79,6 +79,11 @@ public class FtpMvsResourceConnectorTest {
         return new FtpAccessHandle(grant, session);
     }
 
+    private FtpAccessHandle handle(FtpClientSessionFactory factory) {
+        AccessGrant grant = new AccessGrant("grant-1", "target", "user", "test", "read", Long.MAX_VALUE);
+        return new FtpAccessHandle(grant, factory);
+    }
+
     private AccessRequest accessRequest() {
         return new AccessRequest("target", "user", "test", "read", AuthenticationMethod.FTP_PASSWORD, 0L);
     }
@@ -90,22 +95,32 @@ public class FtpMvsResourceConnectorTest {
     private static final class RecordingSession implements FtpClientSession {
         private MvsLocation lastReadLocation;
         private ResourceReadMode lastReadMode;
-        private NetworkRoutePlan lastRoutePlan;
 
-        public byte[] readBytes(MvsLocation location, ResourceReadMode readMode,
-                                NetworkRoutePlan routePlan) throws IOException {
+        public byte[] readBytes(MvsLocation location, ResourceReadMode readMode) throws IOException {
             this.lastReadLocation = location;
             this.lastReadMode = readMode;
-            this.lastRoutePlan = routePlan;
             return "member content".getBytes("UTF-8");
         }
 
-        public List<String> listNames(MvsLocation location, NetworkRoutePlan routePlan) {
-            this.lastRoutePlan = routePlan;
+        public List<String> listNames(MvsLocation location) {
             return Arrays.asList("MEMBER1", "MEMBER2");
         }
 
         public void close() {
+        }
+    }
+
+    private static final class RecordingSessionFactory implements FtpClientSessionFactory {
+        private final FtpClientSession session;
+        private FtpSessionOpenRequest lastRequest;
+
+        private RecordingSessionFactory(FtpClientSession session) {
+            this.session = session;
+        }
+
+        public FtpClientSession open(FtpSessionOpenRequest request) {
+            this.lastRequest = request;
+            return session;
         }
     }
 

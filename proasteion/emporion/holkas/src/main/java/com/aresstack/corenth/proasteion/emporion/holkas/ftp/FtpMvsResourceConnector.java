@@ -98,7 +98,8 @@ public final class FtpMvsResourceConnector implements ResourceConnector {
                         public RawResource execute(FtpAccessHandle handle) throws AccessException {
                             try {
                                 MvsLocation location = bookmarkMapper.locationOf(ref.uri());
-                                byte[] bytes = handle.session().readBytes(location, ResourceReadMode.DEFAULT, routePlan);
+                                FtpClientSession session = handle.openSession(routePlan);
+                                byte[] bytes = session.readBytes(location, ResourceReadMode.DEFAULT);
                                 RawResourceContent content = new RawResourceContent(bytes);
                                 RawResourceMetadata metadata = new RawResourceMetadata(
                                         location.displayName(), null, content.sizeBytes(), 0L,
@@ -127,7 +128,8 @@ public final class FtpMvsResourceConnector implements ResourceConnector {
                         public ResourceListing execute(FtpAccessHandle handle) throws AccessException {
                             try {
                                 MvsLocation parent = bookmarkMapper.locationOf(ref.uri());
-                                List<String> names = handle.session().listNames(parent, routePlan);
+                                FtpClientSession session = handle.openSession(routePlan);
+                                List<String> names = session.listNames(parent);
                                 List<MvsListingEntry> mapped = listingMapper.mapNames(parent, names);
                                 List<ResourceListingEntry> entries = new ArrayList<ResourceListingEntry>();
                                 for (MvsListingEntry entry : mapped) {
