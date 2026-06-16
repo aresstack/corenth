@@ -14,6 +14,11 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.Luce
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.NlpTextChunker;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.IndexingRule;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PatternResourcePolicy;
+import com.aresstack.corenth.proasteion.emporion.DefaultResourceHarbor;
+import com.aresstack.corenth.proasteion.emporion.HarborInspection;
+import com.aresstack.corenth.proasteion.emporion.HarborRequest;
+import com.aresstack.corenth.proasteion.emporion.HarborResult;
+import com.aresstack.corenth.proasteion.emporion.ResourceHarbor;
 import com.aresstack.corenth.proasteion.emporion.deigma.ContentDetector;
 import com.aresstack.corenth.proasteion.emporion.deigma.DetectedContentType;
 import com.aresstack.corenth.proasteion.emporion.deigma.ExtractedBlock;
@@ -24,6 +29,7 @@ import com.aresstack.corenth.proasteion.emporion.deigma.ResourceExtractor;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.MarkdownTextExtractor;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.PlainTextExtractor;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.SimpleContentDetector;
+import com.aresstack.corenth.proasteion.emporion.holkas.DefaultResourceConnectorRegistry;
 import com.aresstack.corenth.proasteion.emporion.holkas.FileSystemResourceConnector;
 import com.aresstack.corenth.proasteion.emporion.holkas.RawResource;
 
@@ -146,6 +152,28 @@ public class WalkingSkeletonIntegrationTest {
 
         List<LexicalSearchResult> results = searchCoordinator.search("modular", 10);
         assertFalse("Expected at least one search result", results.isEmpty());
+        assertEquals(ref, results.get(0).resourceRef());
+    }
+
+    @Test
+    public void fullPathProcessAndSearch_txtFile_throughEmporionHarbor() throws IOException {
+        File txtFile = tempFolder.newFile("harbor-notes.txt");
+        writeFile(txtFile, "Harbor coordinates raw acquisition and shallow extraction.");
+
+        VirtualResourceRef ref = fileRef(txtFile);
+        ResourceHarbor harbor = createFileHarbor();
+        HarborBridge bridge = new HarborBridge(harbor);
+        ResourceLifecycleCoordinator harborCoordinator = new ResourceLifecycleCoordinator(
+                bridge, bridge, new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                "allow-txt", Arrays.asList("file"), Arrays.asList("**/*.txt"),
+                Collections.<String>emptyList(), Long.MAX_VALUE))),
+                new InMemoryResourceArchive(), lexicalIndex);
+
+        ProcessingResult result = harborCoordinator.process(ref);
+        assertEquals(ProcessingResult.Status.INDEXED, result.status());
+
+        List<LexicalSearchResult> results = searchCoordinator.search("Harbor", 10);
+        assertFalse("Expected Harbor-backed search result", results.isEmpty());
         assertEquals(ref, results.get(0).resourceRef());
     }
 
@@ -528,6 +556,16 @@ public class WalkingSkeletonIntegrationTest {
         };
     }
 
+    private static ResourceHarbor createFileHarbor() {
+        ExtractionRegistry registry = new ExtractionRegistry();
+        registry.register(new PlainTextExtractor());
+        registry.register(new MarkdownTextExtractor());
+        return new DefaultResourceHarbor(
+                DefaultResourceConnectorRegistry.of(new FileSystemResourceConnector()),
+                new SimpleContentDetector(),
+                registry);
+    }
+
     private static ContentInspector createDeigmaInspector() {
         final SimpleContentDetector detector = new SimpleContentDetector();
         final ExtractionRegistry registry = new ExtractionRegistry();
@@ -561,6 +599,53 @@ public class WalkingSkeletonIntegrationTest {
                 return InspectionResult.success(detectedType.mimeType(), textBlocks);
             }
         };
+    }
+
+    private static final class HarborBridge implements RawResourceProvider, ContentInspector {
+        private final ResourceHarbor harbor;
+        private HarborInspection lastInspection;
+
+        private HarborBridge(ResourceHarbor harbor) {
+            this.harbor = harbor;
+        }
+
+        @Override
+        public FetchedResource fetch(VirtualResourceRef ref) throws IOException {
+            HarborResult<HarborInspection> result = harbor.inspect(new HarborRequest(ref));
+            if (!result.isSuccess()) {
+                throw new IOException(result.errorMessage());
+            }
+            lastInspection = result.value();
+            return new FetchedResource(
+                    lastInspection.rawResource().content().bytes(),
+                    lastInspection.rawResource().filename(),
+                    lastInspection.rawResource().content().sizeBytes());
+        }
+
+        @Override
+        public InspectionResult inspect(VirtualResourceRef ref, byte[] content, String filenameHint) {
+            if (lastInspection == null || !lastInspection.rawResource().ref().equals(ref)) {
+                return InspectionResult.failure("No Harbor inspection available for resource: " + ref);
+            }
+            if (!lastInspection.extractionResult().isSuccess()) {
+                return InspectionResult.failure(lastInspection.extractionResult().errorMessage());
+            }
+            List<String> textBlocks = new ArrayList<String>();
+            for (ExtractedBlock block : lastInspection.extractionResult().document().blocks()) {
+                textBlocks.add(block.text());
+            }
+            return InspectionResult.success(
+                    lastInspection.detectedContentType().mimeType(), textBlocks);
+        }
+
+        @Override
+        public Long probeSizeBytes(VirtualResourceRef ref) throws IOException {
+            if (ref == null || ref.uri() == null || ref.uri().toURI() == null) {
+                return null;
+            }
+            Path path = Paths.get(ref.uri().toURI());
+            return Long.valueOf(Files.size(path));
+        }
     }
 
     private VirtualResourceRef fileRef(File file) {

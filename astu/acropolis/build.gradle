@@ -5,6 +5,7 @@ dependencies {
     api project(':astu:acropolis:chalcotheca')
     api project(':astu:acropolis:chalcotheca:tamias')
     api project(':astu:acropolis:chalcotheca:anagraphai')
+    testImplementation project(':proasteion:emporion')
     testImplementation project(':proasteion:emporion:holkas')
     testImplementation project(':proasteion:emporion:deigma')
     testImplementation 'junit:junit:4.13.2'
