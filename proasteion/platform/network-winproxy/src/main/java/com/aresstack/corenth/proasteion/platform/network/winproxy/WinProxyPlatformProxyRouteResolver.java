@@ -6,18 +6,13 @@ import com.aresstack.corenth.proasteion.platform.network.NetworkRoutingException
 import com.aresstack.corenth.proasteion.platform.network.PlatformProxyRouteResolver;
 import com.aresstack.winproxy.*;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 
 /**
- * Platform proxy resolver backed by {@code com.aresstack:win-proxy-java}.
+ * Platform proxy resolver backed by the win-proxy Java library.
  * <p>
- * This adapter resolves one target URL at a time and never installs a global
- * {@link java.net.ProxySelector}. Callers receive a route stage and decide per
- * connection whether to use the resulting first-hop proxy.
+ * Resolve one target URL at a time and never install a global ProxySelector.
  */
 public final class WinProxyPlatformProxyRouteResolver implements PlatformProxyRouteResolver {
 
@@ -41,11 +36,12 @@ public final class WinProxyPlatformProxyRouteResolver implements PlatformProxyRo
         if (configuration.mode() == WinProxyMode.MANUAL) {
             return resolveManualProxy();
         }
-        Object result = resolveWithWinProxyJava(request.targetUrl());
-        if (isDirect(result)) {
-            return NetworkRouteStage.direct("winproxy-" + readReason(result));
+
+        ProxyResult result = resolveWithWinProxyJava(request.targetUrl());
+        if (result.isDirect()) {
+            return NetworkRouteStage.direct("winproxy-" + result.getReason());
         }
-        return NetworkRouteStage.platformProxy(readJavaProxy(result), "winproxy-" + readReason(result));
+        return NetworkRouteStage.platformProxy(result.toJavaProxy(), "winproxy-" + result.getReason());
     }
 
     private NetworkRouteStage resolveManualProxy() throws NetworkRoutingException {
@@ -61,7 +57,7 @@ public final class WinProxyPlatformProxyRouteResolver implements PlatformProxyRo
         return NetworkRouteStage.platformProxy(proxy, "winproxy-manual");
     }
 
-    private Object resolveWithWinProxyJava(String targetUrl) throws NetworkRoutingException {
+    private ProxyResult resolveWithWinProxyJava(String targetUrl) throws NetworkRoutingException {
         try {
             ProxyConfiguration proxyConfiguration = createWinProxyConfiguration();
             WindowsProxyResolver resolver = new WindowsProxyResolver(proxyConfiguration);
@@ -96,85 +92,6 @@ public final class WinProxyPlatformProxyRouteResolver implements PlatformProxyRo
             return ProxyMode.PAC_URL_POWERSHELL;
         }
         return ProxyMode.PAC_URL_WINDOWS_SETTINGS;
-    }
-
-    private Object createResolver(Class<?> resolverClass) throws Exception {
-        Constructor<?> constructor = resolverClass.getDeclaredConstructor();
-        constructor.setAccessible(true);
-        return constructor.newInstance();
-    }
-
-    private Object invokeResolver(Method method, Object receiver, String targetUrl) throws Exception {
-        method.setAccessible(true);
-        if (Modifier.isStatic(method.getModifiers())) {
-            return method.invoke(null, targetUrl);
-        }
-        return method.invoke(receiver, targetUrl);
-    }
-
-    private boolean isDirect(Object result) throws NetworkRoutingException {
-        Object value = invokeResultMethod(result, "isDirect");
-        if (value instanceof Boolean) {
-            return ((Boolean) value).booleanValue();
-        }
-        throw new NetworkRoutingException("Windows proxy result does not expose isDirect()");
-    }
-
-    private Proxy readJavaProxy(Object result) throws NetworkRoutingException {
-        Object proxy = invokeResultMethod(result, "toJavaProxy");
-        if (proxy instanceof Proxy) {
-            return (Proxy) proxy;
-        }
-        String host = readStringResult(result, "getHost", "host");
-        Integer port = readIntegerResult(result, "getPort", "port");
-        if (host == null || port == null) {
-            throw new NetworkRoutingException("Windows proxy result does not expose a Java proxy or host/port");
-        }
-        return new Proxy(Proxy.Type.HTTP, new InetSocketAddress(host, port.intValue()));
-    }
-
-    private String readReason(Object result) throws NetworkRoutingException {
-        String reason = readStringResult(result, "getReason", "reason");
-        return reason != null ? reason : "resolved";
-    }
-
-    private Object invokeResultMethod(Object result, String methodName) throws NetworkRoutingException {
-        if (result == null) {
-            throw new NetworkRoutingException("Windows proxy result must not be null");
-        }
-        try {
-            Method method = result.getClass().getMethod(methodName);
-            method.setAccessible(true);
-            return method.invoke(result);
-        } catch (NoSuchMethodException e) {
-            return null;
-        } catch (Exception e) {
-            throw new NetworkRoutingException("Windows proxy result could not be inspected", e);
-        }
-    }
-
-    private String readStringResult(Object result, String getterName, String beanName) throws NetworkRoutingException {
-        Object getterValue = invokeResultMethod(result, getterName);
-        if (getterValue instanceof String) {
-            return (String) getterValue;
-        }
-        Object beanValue = invokeResultMethod(result, beanName);
-        if (beanValue instanceof String) {
-            return (String) beanValue;
-        }
-        return null;
-    }
-
-    private Integer readIntegerResult(Object result, String getterName, String beanName) throws NetworkRoutingException {
-        Object getterValue = invokeResultMethod(result, getterName);
-        if (getterValue instanceof Number) {
-            return Integer.valueOf(((Number) getterValue).intValue());
-        }
-        Object beanValue = invokeResultMethod(result, beanName);
-        if (beanValue instanceof Number) {
-            return Integer.valueOf(((Number) beanValue).intValue());
-        }
-        return null;
     }
 
     private void requirePacConfiguration() throws NetworkRoutingException {
