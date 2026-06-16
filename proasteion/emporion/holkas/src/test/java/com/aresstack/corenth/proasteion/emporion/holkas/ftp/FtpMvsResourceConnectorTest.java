@@ -122,6 +122,9 @@ public class FtpMvsResourceConnectorTest {
             this.lastRequest = request;
             return session;
         }
+
+        public void close() {
+        }
     }
 
     private static final class RecordingRoutePlanner implements NetworkRoutePlanner {

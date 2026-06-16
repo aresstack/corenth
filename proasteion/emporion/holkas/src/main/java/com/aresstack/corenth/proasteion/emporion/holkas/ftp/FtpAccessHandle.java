@@ -68,8 +68,12 @@ public final class FtpAccessHandle implements AccessHandle {
         if (openedSession != null) {
             openedSession.close();
             openedSession = null;
-        } else if (fixedSession != null) {
+        }
+        if (fixedSession != null) {
             fixedSession.close();
+        }
+        if (sessionFactory != null) {
+            sessionFactory.close();
         }
     }
 }
