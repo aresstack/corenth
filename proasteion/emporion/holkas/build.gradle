@@ -2,6 +2,7 @@ description = 'Connection layer for raw virtual resources.'
 
 dependencies {
     api project(':astu')
+    implementation project(':adyton')
     implementation project(':astu:acropolis:chalcotheca')
     testImplementation 'junit:junit:4.13.2'
 }
