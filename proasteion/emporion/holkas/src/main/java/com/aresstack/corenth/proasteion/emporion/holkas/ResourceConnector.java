@@ -19,6 +19,13 @@ public interface ResourceConnector {
     ResourceScheme supportedScheme();
 
     /**
+     * Returns {@code true} if this connector handles the given scheme.
+     */
+    default boolean supports(ResourceScheme scheme) {
+        return supportedScheme().equals(scheme);
+    }
+
+    /**
      * Fetches the raw resource content addressed by the given reference.
      *
      * @param ref the resource reference (must use a scheme supported by this connector)
@@ -27,4 +34,13 @@ public interface ResourceConnector {
      * @throws IllegalArgumentException if the scheme is not supported
      */
     RawResource fetch(VirtualResourceRef ref) throws IOException;
+
+    /**
+     * Lists child resources addressed by the given container reference.
+     *
+     * @param ref the container resource reference
+     * @return the raw resource listing
+     * @throws IOException if the resource cannot be listed
+     */
+    ResourceListing list(VirtualResourceRef ref) throws IOException;
 }

@@ -1,32 +1,40 @@
 package com.aresstack.corenth.proasteion.emporion.holkas;
 
+import com.aresstack.corenth.astu.VirtualResourceKind;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 
 /**
  * A raw resource fetched by a connector.
  *
- * <p>Combines the resource reference with raw content and basic metadata
- * such as filename and last-modified time.
+ * <p>Combines the resource reference with raw content and transport-near metadata.
  */
 public final class RawResource {
 
     private final VirtualResourceRef ref;
     private final RawResourceContent content;
-    private final String filename;
-    private final long lastModifiedMillis;
+    private final RawResourceMetadata metadata;
 
     public RawResource(VirtualResourceRef ref, RawResourceContent content,
                        String filename, long lastModifiedMillis) {
+        this(ref, content, new RawResourceMetadata(filename, null,
+                content != null ? content.sizeBytes() : 0L,
+                lastModifiedMillis, System.currentTimeMillis(), VirtualResourceKind.FILE));
+    }
+
+    public RawResource(VirtualResourceRef ref, RawResourceContent content,
+                       RawResourceMetadata metadata) {
         if (ref == null) {
             throw new IllegalArgumentException("ref must not be null");
         }
         if (content == null) {
             throw new IllegalArgumentException("content must not be null");
         }
+        if (metadata == null) {
+            throw new IllegalArgumentException("metadata must not be null");
+        }
         this.ref = ref;
         this.content = content;
-        this.filename = filename;
-        this.lastModifiedMillis = lastModifiedMillis;
+        this.metadata = metadata;
     }
 
     /** Returns the virtual resource reference. */
@@ -39,13 +47,18 @@ public final class RawResource {
         return content;
     }
 
+    /** Returns transport-near metadata observed during acquisition. */
+    public RawResourceMetadata metadata() {
+        return metadata;
+    }
+
     /** Returns the filename extracted from the URI path, or {@code null}. */
     public String filename() {
-        return filename;
+        return metadata.name();
     }
 
     /** Returns last modified time in millis since epoch, or 0 if unknown. */
     public long lastModifiedMillis() {
-        return lastModifiedMillis;
+        return metadata.modifiedAtMillis();
     }
 }
