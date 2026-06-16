@@ -4,10 +4,9 @@ import com.aresstack.corenth.proasteion.platform.network.NetworkAccessRequest;
 import com.aresstack.corenth.proasteion.platform.network.NetworkRouteStage;
 import com.aresstack.corenth.proasteion.platform.network.NetworkRoutingException;
 import com.aresstack.corenth.proasteion.platform.network.PlatformProxyRouteResolver;
-import com.aresstack.winproxy.PacUrlSource;
-import com.aresstack.winproxy.ProxyResult;
-import com.aresstack.winproxy.WindowsProxyResolver;
-
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 
@@ -19,6 +18,8 @@ import java.net.Proxy;
  * connection whether to use the resulting first-hop proxy.
  */
 public final class WinProxyPlatformProxyRouteResolver implements PlatformProxyRouteResolver {
+
+    private static final String RESOLVER_CLASS_NAME = "com.aresstack.winproxy.WindowsProxyResolver";
 
     private final WinProxyConfiguration configuration;
 
@@ -40,11 +41,11 @@ public final class WinProxyPlatformProxyRouteResolver implements PlatformProxyRo
         if (configuration.mode() == WinProxyMode.MANUAL) {
             return resolveManualProxy();
         }
-        ProxyResult result = resolveWithWinProxyJava(request.targetUrl());
-        if (result.isDirect()) {
-            return NetworkRouteStage.direct("winproxy-" + result.getReason());
+        Object result = resolveWithWinProxyJava(request.targetUrl());
+        if (isDirect(result)) {
+            return NetworkRouteStage.direct("winproxy-" + readReason(result));
         }
-        return NetworkRouteStage.platformProxy(result.toJavaProxy(), "winproxy-" + result.getReason());
+        return NetworkRouteStage.platformProxy(readJavaProxy(result), "winproxy-" + readReason(result));
     }
 
     private NetworkRouteStage resolveManualProxy() throws NetworkRoutingException {
@@ -60,20 +61,97 @@ public final class WinProxyPlatformProxyRouteResolver implements PlatformProxyRo
         return NetworkRouteStage.platformProxy(proxy, "winproxy-manual");
     }
 
-    private ProxyResult resolveWithWinProxyJava(String targetUrl) throws NetworkRoutingException {
+    private Object resolveWithWinProxyJava(String targetUrl) throws NetworkRoutingException {
         try {
-            if (configuration.mode() == WinProxyMode.PAC_URL) {
+            if (configuration.mode() == WinProxyMode.PAC_URL || configuration.mode() == WinProxyMode.PAC_URL_SCRIPT) {
                 requirePacConfiguration();
-                return WindowsProxyResolver.resolve(targetUrl, PacUrlSource.DIRECT, configuration.pacUrlOrScript().trim());
             }
-            if (configuration.mode() == WinProxyMode.PAC_URL_SCRIPT) {
-                requirePacConfiguration();
-                return WindowsProxyResolver.resolve(targetUrl, PacUrlSource.POWERSHELL, configuration.pacUrlOrScript().trim());
-            }
-            return WindowsProxyResolver.resolve(targetUrl);
-        } catch (RuntimeException e) {
+            Class<?> resolverClass = Class.forName(RESOLVER_CLASS_NAME);
+            Object resolver = createResolver(resolverClass);
+            Method resolve = resolverClass.getMethod("resolve", String.class);
+            return invokeResolver(resolve, resolver, targetUrl);
+        } catch (Exception e) {
             throw new NetworkRoutingException("Windows proxy resolution failed", e);
         }
+    }
+
+    private Object createResolver(Class<?> resolverClass) throws Exception {
+        Constructor<?> constructor = resolverClass.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        return constructor.newInstance();
+    }
+
+    private Object invokeResolver(Method method, Object receiver, String targetUrl) throws Exception {
+        method.setAccessible(true);
+        if (Modifier.isStatic(method.getModifiers())) {
+            return method.invoke(null, targetUrl);
+        }
+        return method.invoke(receiver, targetUrl);
+    }
+
+    private boolean isDirect(Object result) throws NetworkRoutingException {
+        Object value = invokeResultMethod(result, "isDirect");
+        if (value instanceof Boolean) {
+            return ((Boolean) value).booleanValue();
+        }
+        throw new NetworkRoutingException("Windows proxy result does not expose isDirect()");
+    }
+
+    private Proxy readJavaProxy(Object result) throws NetworkRoutingException {
+        Object proxy = invokeResultMethod(result, "toJavaProxy");
+        if (proxy instanceof Proxy) {
+            return (Proxy) proxy;
+        }
+        String host = readStringResult(result, "getHost", "host");
+        Integer port = readIntegerResult(result, "getPort", "port");
+        if (host == null || port == null) {
+            throw new NetworkRoutingException("Windows proxy result does not expose a Java proxy or host/port");
+        }
+        return new Proxy(Proxy.Type.HTTP, new InetSocketAddress(host, port.intValue()));
+    }
+
+    private String readReason(Object result) throws NetworkRoutingException {
+        String reason = readStringResult(result, "getReason", "reason");
+        return reason != null ? reason : "resolved";
+    }
+
+    private Object invokeResultMethod(Object result, String methodName) throws NetworkRoutingException {
+        if (result == null) {
+            throw new NetworkRoutingException("Windows proxy result must not be null");
+        }
+        try {
+            Method method = result.getClass().getMethod(methodName);
+            method.setAccessible(true);
+            return method.invoke(result);
+        } catch (NoSuchMethodException e) {
+            return null;
+        } catch (Exception e) {
+            throw new NetworkRoutingException("Windows proxy result could not be inspected", e);
+        }
+    }
+
+    private String readStringResult(Object result, String getterName, String beanName) throws NetworkRoutingException {
+        Object getterValue = invokeResultMethod(result, getterName);
+        if (getterValue instanceof String) {
+            return (String) getterValue;
+        }
+        Object beanValue = invokeResultMethod(result, beanName);
+        if (beanValue instanceof String) {
+            return (String) beanValue;
+        }
+        return null;
+    }
+
+    private Integer readIntegerResult(Object result, String getterName, String beanName) throws NetworkRoutingException {
+        Object getterValue = invokeResultMethod(result, getterName);
+        if (getterValue instanceof Number) {
+            return Integer.valueOf(((Number) getterValue).intValue());
+        }
+        Object beanValue = invokeResultMethod(result, beanName);
+        if (beanValue instanceof Number) {
+            return Integer.valueOf(((Number) beanValue).intValue());
+        }
+        return null;
     }
 
     private void requirePacConfiguration() throws NetworkRoutingException {
