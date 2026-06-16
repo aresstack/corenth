@@ -1,0 +1,7 @@
+description = 'KeePassRPC secret material provider for adyton.'
+
+dependencies {
+    api project(':adyton')
+    implementation('com.aresstack:keepassrpc-java:0.1.0-beta.1')
+    testImplementation 'junit:junit:4.13.2'
+}

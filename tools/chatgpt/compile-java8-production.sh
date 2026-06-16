@@ -24,7 +24,7 @@ find "$ROOT_DIR" \
 : > "$SKIPPED_LIST"
 
 while IFS= read -r source_file; do
-    if grep -Eq '^import (org\.apache\.lucene|org\.junit|org\.junit\.jupiter|opennlp\.)' "$source_file"; then
+    if grep -Eq '^import (org\.apache\.lucene|org\.junit|org\.junit\.jupiter|opennlp\.|com\.aresstack\.winproxy|com\.aresstack\.keepassrpc)' "$source_file"; then
         printf '%s\n' "${source_file#$ROOT_DIR/}" >> "$SKIPPED_LIST"
     else
         printf '%s\n' "$source_file" >> "$SOURCE_LIST"

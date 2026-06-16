@@ -1,0 +1,7 @@
+description = 'Windows proxy route resolver backed by win-proxy-java.'
+
+dependencies {
+    api project(':proasteion:platform:network')
+    implementation('com.aresstack:win-proxy-java:0.1.0-beta.4')
+    testImplementation 'junit:junit:4.13.2'
+}

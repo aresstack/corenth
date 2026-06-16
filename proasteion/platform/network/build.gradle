@@ -1,0 +1,6 @@
+description = 'Platform network routing ports and route planning.'
+
+dependencies {
+    api project(':adyton')
+    testImplementation 'junit:junit:4.13.2'
+}
