@@ -4,6 +4,8 @@ import com.aresstack.corenth.proasteion.platform.network.NetworkAccessRequest;
 import com.aresstack.corenth.proasteion.platform.network.NetworkRouteStage;
 import com.aresstack.corenth.proasteion.platform.network.NetworkRoutingException;
 import com.aresstack.corenth.proasteion.platform.network.PlatformProxyRouteResolver;
+import com.aresstack.winproxy.*;
+
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -18,8 +20,6 @@ import java.net.Proxy;
  * connection whether to use the resulting first-hop proxy.
  */
 public final class WinProxyPlatformProxyRouteResolver implements PlatformProxyRouteResolver {
-
-    private static final String RESOLVER_CLASS_NAME = "com.aresstack.winproxy.WindowsProxyResolver";
 
     private final WinProxyConfiguration configuration;
 
@@ -63,16 +63,39 @@ public final class WinProxyPlatformProxyRouteResolver implements PlatformProxyRo
 
     private Object resolveWithWinProxyJava(String targetUrl) throws NetworkRoutingException {
         try {
-            if (configuration.mode() == WinProxyMode.PAC_URL || configuration.mode() == WinProxyMode.PAC_URL_SCRIPT) {
-                requirePacConfiguration();
-            }
-            Class<?> resolverClass = Class.forName(RESOLVER_CLASS_NAME);
-            Object resolver = createResolver(resolverClass);
-            Method resolve = resolverClass.getMethod("resolve", String.class);
-            return invokeResolver(resolve, resolver, targetUrl);
-        } catch (Exception e) {
+            ProxyConfiguration proxyConfiguration = createWinProxyConfiguration();
+            WindowsProxyResolver resolver = new WindowsProxyResolver(proxyConfiguration);
+            return resolver.resolve(targetUrl);
+        } catch (RuntimeException e) {
             throw new NetworkRoutingException("Windows proxy resolution failed", e);
         }
+    }
+
+    private ProxyConfiguration createWinProxyConfiguration() throws NetworkRoutingException {
+        ProxyConfiguration.Builder builder = ProxyConfiguration.builder()
+                .mode(toWinProxyJavaMode(configuration.mode()));
+        if (configuration.mode() == WinProxyMode.PAC_URL) {
+            requirePacConfiguration();
+            builder.pacUrl(configuration.pacUrlOrScript().trim());
+        }
+        if (configuration.mode() == WinProxyMode.PAC_URL_SCRIPT) {
+            requirePacConfiguration();
+            builder.pacUrlDiscoveryScript(configuration.pacUrlOrScript().trim());
+        }
+        return builder.build();
+    }
+
+    private ProxyMode toWinProxyJavaMode(WinProxyMode mode) {
+        if (mode == WinProxyMode.DISABLED) {
+            return ProxyMode.DISABLED;
+        }
+        if (mode == WinProxyMode.PAC_URL) {
+            return ProxyMode.PAC_URL_MANUAL;
+        }
+        if (mode == WinProxyMode.PAC_URL_SCRIPT) {
+            return ProxyMode.PAC_URL_POWERSHELL;
+        }
+        return ProxyMode.PAC_URL_WINDOWS_SETTINGS;
     }
 
     private Object createResolver(Class<?> resolverClass) throws Exception {
