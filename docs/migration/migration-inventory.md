@@ -1,6 +1,6 @@
 # MainframeMate → Corenth — Master-Migrationsinventar
 
-**Stand:** 2026-07-19, gegen `main` @ `122f999` ("Add trusted MVS session auth adapter", 2026-06-17)
+**Stand:** Codeprüfung 2026-07-19 gegen `main` @ `122f999` ("Add trusted MVS session auth adapter", 2026-06-17); Trackerbereinigung aktualisiert am 2026-07-19
 **Zweck:** Eine einzige, laufend pflegbare Landkarte: Welcher MainframeMate-Referenzbestand (`research/`, ~1.400 Java-Dateien) ist in welcher Form in der Corenth-Zielarchitektur angekommen, was ist bewusst ausgeschlossen, was steht aus. Ergänzt die modulspezifischen Inventare, ersetzt sie nicht.
 
 Leitprinzip aus [mainframemate-migration.md](mainframemate-migration.md):
@@ -37,7 +37,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | Raw `SecretMaterial` nur in `adyton` + vertrauenswürdigen Secret-Adaptern | ArchUnit Secret-Containment-Regeln | ✅ erzwungen |
 | **Mediated bronze access als Primärpfad** | — | ⚠️ **nur in Tests verdrahtet, kein produktiver Kompositionspunkt** |
 
-**Zentrale Lücke:** Es fehlt keine Klasse der Kette, sondern die produktive Komposition. `MediatedResourceService` (Chalcotheca-Schalter) und `ResourceLifecycleCoordinator` (Indexing-Skeleton) existieren beide, werden aber ausschließlich von Tests instanziiert (`MediatedHolkasFileSliceTest`, `WalkingSkeletonIntegrationTest`). Zudem fehlt im `MediatedResourceService` die im Datenfluss dokumentierte adyton-Station („Adyton, if credentials … are needed"). → Nächste Schritte in §5.
+**Zentrale Lücke:** Es fehlt keine Klasse der Kette, sondern die produktive Komposition. `MediatedResourceService` (Chalcotheca-Schalter) und `ResourceLifecycleCoordinator` (Indexing-Skeleton) existieren beide, werden aber ausschließlich von Tests instanziiert (`MediatedHolkasFileSliceTest`, `WalkingSkeletonIntegrationTest`). Zudem fehlt im vermittelten Datenfluss eine Adyton-gestützte Access-Preparation-Station für authentifizierungspflichtige externe Beschaffung. → Neu zugeschnittenes Issue #10 und nächste Schritte in §5.
 
 ---
 
@@ -59,22 +59,24 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | --- | --- | --- | --- | --- | --- |
 | `core/files/path` (VirtualResourceRef, PathDialect), `BookmarkEntry`, `ScannedItem` | ~8 | `astu` (BookmarkUri, ResourceScheme, Metadata, Fingerprint) | ✅ migriert | #2/#17 ✔ | [astu-inventory](mainframemate-astu-inventory.md) |
 | `app/ui/VirtualResource*` (UI+Backend-State vermischt) | ~4 | — | 🚫 do-not-copy | — | astu-inventory |
-| `archive` (CacheRepository, ArchiveRun, Hashing, Snapshots) | 6 | `chalcotheca` (Bronze-Modell, ResourceArchive, MediatedResourceService) | 🟡 teilweise — In-Memory ja; **Persistenz (H2), Versionierung, Lifecycle-State fehlen** | #4 ✔ / Rest offen | — *(Inventar fehlt)* |
-| `indexing/model/IndexSource` (scope, patterns, depth, size, changeDetection …) | ~7 | `tamias` | 🟡 teilweise — AccessPolicy + `IndexingRule`/Pattern ja; **ChangeDetectionStrategy, CacheInvalidationPolicy, ResourceScope/Depth/Size fehlen** | #5 offen | — *(Inventar fehlt)* |
-| `indexing/service/IndexingPipeline`, `IndexRunStatus` | ~7 | `acropolis` (Run/Plan/Step/Status-Modell) | ⬜ offen — Coordinator ist monolithischer Walking Skeleton; Run-Modell fehlt | #10 offen | [Plan PR 5](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
-| `indexing/connector/SourceScanner` (scan → fetch → process) | ~4 | `emporion` (ResourceHarbor, HarborRequest/Result/Inspection) | ✅ migriert (vereinfachte Harbor-Pipeline) | #15 offen → schließbar | — *(Inventar fehlt)* |
+| `archive` (CacheRepository, ArchiveRun, Hashing, Snapshots) | 6 | `chalcotheca` (Bronze-Modell, ResourceArchive, MediatedResourceService) | 🟡 teilweise — In-Memory ja; **Resource Records, Versionierung und Lifecycle-State offen** | #33 offen | — *(Inventar fehlt)* |
+| `indexing/model/IndexSource` (scope, patterns, depth, size, changeDetection …) | ~7 | `tamias` | 🟡 teilweise — AccessPolicy + `IndexingRule`/Pattern ja; **ChangeDetectionStrategy, CacheInvalidationPolicy, ResourceScope/Depth/Size fehlen** | #5 neu zugeschnitten | — *(Inventar fehlt)* |
+| `indexing/service/IndexingPipeline`, `IndexRunStatus` | ~7 | `acropolis` (produktive Mediated-Komposition + Run/Plan/Step/Status) | ⬜ offen — Coordinator ist Walking Skeleton; produktive Komposition und Run-Modell fehlen | #10 neu formuliert | [Plan PR 5](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
+| `indexing/connector/SourceScanner` (scan → fetch → process) | ~4 | `emporion` (ResourceHarbor, HarborRequest/Result/Inspection) | ✅ migriert (vereinfachte Harbor-Pipeline) | #15 geschlossen | — *(Inventar fehlt)* |
 
 ### 2.3 Connectors (holkas) & Extraktion (deigma)
 
 | research/-Quelle | Umfang | Corenth-Ziel | Status | Issue | Detailinventar |
 | --- | --- | --- | --- | --- | --- |
-| `core/files/api` (FileService, FileNode, FilePayload) | ~6 | `holkas` SPI (ResourceConnector[Registry], Listing, ReadMode, RawResource*) | ✅ migriert | #8 offen → teilschließbar | [Plan PR 2](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
-| `files/impl/local` | ~4 | `holkas` `FileSystemResourceConnector` | ✅ migriert | #8 | — |
-| `files/impl/ftp` + MVS (CommonsNet, MvsPathDialect, Listing, QuoteNormalizer) | ~14 | `holkas/ftp` + `holkas/mvs` + adyton-Strategie (`MvsFtpAuthenticationStrategy`) | 🔧 in Arbeit — Session/AccessHandle/Dialekt vorhanden, jüngster Commit bindet Trusted-Session-Auth an | #8 | — *(Inventar fehlt — anlegen, dient als Vorlage für NDV)* |
-| `files/impl/ftp/jes` (JES Submit/Spool) | ~3 | `holkas` (JES auf FTP-AccessHandle) | ⬜ offen | #8 | Auth-Analyse §2 |
-| `ndv/**`, `files/impl/ndv` | **172** | `holkas`-Adapter + adyton `NdvAuthenticationStrategy` | ⬜ offen — größter unmigrierter Connector | #8 | Auth-Analyse §2 (Session-Handle-Muster vorgezeichnet) |
-| `mail` (PST/OST) | 6 | `holkas` mail + `deigma` Attachments | ⬜ offen | #8 | deigma-inventory (Attachment-Teil) |
-| `wiki-integration`, `wiki`, `confluence`, `sharepoint` | ~28 | `holkas`-Adapter + adyton-Strategien (Cookie/Header/SSLContext als AccessHandle) | ⬜ offen | #8 | Auth-Analyse §2/§4 |
+| `core/files/api` (FileService, FileNode, FilePayload) | ~6 | `holkas` SPI (ResourceConnector[Registry], Listing, ReadMode, RawResource*) | ✅ migriert | #8 geschlossen | [Plan PR 2](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
+| `files/impl/local` | ~4 | `holkas` `FileSystemResourceConnector` | ✅ migriert | #8 geschlossen | — |
+| `files/impl/ftp` + MVS (CommonsNet, MvsPathDialect, Listing, QuoteNormalizer) | ~14 | `holkas/ftp` + `holkas/mvs` + adyton-Strategie (`MvsFtpAuthenticationStrategy`) | 🔧 in Arbeit — Session/AccessHandle/Dialekt vorhanden | #8 geschlossen; Folgeslices separat | — *(Inventar fehlt — anlegen, dient als Vorlage für NDV)* |
+| `files/impl/ftp/jes` (JES Submit/Spool) | ~3 | `holkas` (JES über vorhandenen `FtpAccessHandle`) | ⬜ offen | #35 | Auth-Analyse §2/§8 |
+| `ndv/**`, `files/impl/ndv` | **172** | `holkas`-Adapter + adyton `NdvAuthenticationStrategy`/`NdvAccessHandle` | ⬜ offen — größter unmigrierter Connector | #34 | Auth-Analyse §2/§8 |
+| `mail` (lokale PST/OST) | 6 | `holkas` mail + `deigma` Attachments | ⬜ offen — bewusst ohne spekulativen Auth-Pfad | #36 | deigma-inventory |
+| `wiki-integration`, `wiki` | Teil von ~28 | `holkas` MediaWiki + Token-/Cookie-Session-Handle | ⬜ offen | #37 | Auth-Analyse §2/§4/§8 |
+| `confluence` | Teil von ~28 | `holkas` Confluence + Basic-/mTLS-Strategien | ⬜ offen | #38 | Auth-Analyse §2/§4/§8 |
+| `sharepoint` | Teil von ~28 | `holkas` SharePoint + SSO-Kaskade/kontrollierter Fallback | ⬜ offen | #39 | Auth-Analyse §2/§4/§8 |
 | `ingestion` (Detector, Registry, Document/Block, PlainText/Markdown) | 11 | `deigma` | ✅ migriert (Kern) | #9/#22 ✔ | [deigma-inventory](mainframemate-deigma-inventory.md) |
 | `ingestion`-Schwer-Extraktoren (PDF/DOCX/XLSX/HTML/Tika), `RecordStructureCodec` | ~7 | `deigma:impl` (isoliert) | ⬜ offen (dokumentiert verschoben) | — | deigma-inventory |
 
@@ -92,7 +94,8 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | research/-Quelle | Umfang | Corenth-Ziel | Status | Issue | Detailinventar |
 | --- | --- | --- | --- | --- | --- |
 | `ui`-Shell (MainFrame, Drawer, ToolTabRegistry, Settings-Shell), `toolbar-kit`, `event` | ~254 | `exedra` (generisches Shell-Framework) | ✅ migriert — **eingefroren**, Business-Panels bewusst nicht | #28/#29 ✔, #30 geschlossen | exedra/README |
-| `ui`-Business-Panels, Commands, Editor-Integration | (in obigem) | — | 🚫 vorerst nicht — erst nach stabilen Use-Case-Ports | #11 (Thin-Adapter-Regel) | Plan „Korrektur zu #30/#11" |
+| Thin-Adapter-Grenze für Business-UI | — | `exedra` bleibt austauschbarer Adapter; `EXEDRA_MUST_STAY_THIN_UI_SHELL` | ✅ dokumentiert und erzwungen | #11 geschlossen | Plan „Korrektur zu #30/#11“ |
+| `ui`-Business-Panels, Commands, Editor-Integration | (in obigem) | — | 🚫 vorerst nicht — erst nach stabilen Use-Case-Ports | bei Bedarf neue kleine Issues | — |
 
 ### 2.6 Ohne definiertes Corenth-Ziel — Entscheidung ausstehend
 
@@ -100,13 +103,13 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | --- | --- | --- | --- |
 | `wd4j`, `wd4j-mcp-server`, `wd4j2cdp` (WebDriver BiDi + MCP) | **255** | `katagogion`-Tool/Adapter | ❓ Entscheiden: eigenes Adaptermodul nach #12, oder explizit außerhalb Corenth belassen |
 | `mermaid-renderer` | 55 | `exedra`-Renderer oder `katagogion`-Tool | ❓ vermutlich später; nicht Kern |
-| `betaview-original/-integration` | 94 | — | ❓ vermutlich reines Forschungsartefakt → als „nicht migrieren" markieren |
+| `betaview-original/-integration` | 94 | — | ❓ vermutlich reines Forschungsartefakt → als „nicht migrieren“ markieren |
 | `dosbox` | 31 | — | ❓ vermutlich nicht migrieren |
 | `winml-java`, `onnx` | 24 | `pinakes`-Runtime-Adapter (optional, nie Pflicht) | ❓ erst nach #7-Ports relevant |
 | `video` (app) | 6 | `holkas`/`deigma`? | ❓ klären |
 | `mermaid-mcp`, PowerShell-Utilities (PAC/WPAD/KeePass-Tests) | — | teils in `platform` erledigt | ❓ Rest inventarisieren |
 
-*Jede ❓-Zeile sollte per kurzem Beschluss auf „Ziel + Issue" oder „🚫 nicht migrieren" gehoben werden — sonst stolpert jede künftige Planung erneut über diese Bestände.*
+*Jede ❓-Zeile sollte per kurzem Beschluss auf „Ziel + Issue“ oder „🚫 nicht migrieren“ gehoben werden — sonst stolpert jede künftige Planung erneut über diese Bestände.*
 
 ---
 
@@ -114,48 +117,55 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 
 | Plan-PR | Inhalt | Stand |
 | --- | --- | --- |
-| PR 1 | `proasteion`-Root: OuterAdapter, AdapterKind, AdapterRegistry (#13) | ⬜ offen — Root weiterhin 0 Klassen (Dependency-Regeln immerhin via ArchUnit abgedeckt) |
-| PR 2 | `holkas` Connector-SPI (#8) | ✅ erledigt |
-| PR 3 | `emporion` Harbor-Pipeline (#15) | ✅ erledigt (vereinfacht) |
-| PR 4 | `tamias` IndexingPolicy/ChangeDetection/CacheInvalidation (#5) | 🟡 teilweise (AccessPolicy ✓, Rest offen) |
-| PR 5 | `acropolis` Run/Plan/Step/Status (#10) | ⬜ offen |
-| PR 6 | FTP/MVS/JES als erster echter Connector | 🔧 in Arbeit (FTP/MVS ✓ inkl. adyton-Strategie; JES offen) |
+| PR 1 | `proasteion`-Root: OuterAdapter, AdapterKind, AdapterRegistry (#13) | ❓ neu bewerten — Dependency-Regeln via ArchUnit abgedeckt; Bedarf für gemeinsames Vokabular noch entscheiden |
+| PR 2 | `holkas` Connector-SPI (#8) | ✅ erledigt; #8 geschlossen, Rest in #34–#39 |
+| PR 3 | `emporion` Harbor-Pipeline (#15) | ✅ erledigt; #15 geschlossen |
+| PR 4 | `tamias` IndexingPolicy/ChangeDetection/CacheInvalidation (#5) | 🟡 teilweise; #5 auf Restarbeit neu zugeschnitten, abhängig von #33 |
+| PR 5 | `acropolis` Run/Plan/Step/Status (#10) | ⬜ offen; #10 auf produktive Komposition vor Run-Modell neu formuliert |
+| PR 6 | FTP/MVS/JES als erster echter Connector | 🔧 FTP/MVS vorhanden; JES separat in #35 |
 | PR 7–9 | `pinakes` / `propylaea` / `katagogion` ports-first (#7/#3/#12) | ⬜ offen |
 
 ---
 
-## 4. Issue-Hygiene (Stand der Prüfung)
+## 4. Issue-Hygiene (Stand der Ausführung)
 
-| Issue | Befund | Aktion |
+| Issue | Befund | Ausgeführte Aktion |
 | ---: | --- | --- |
 | #20, #27, #30 | zeichengleiche Duplikate von #18, #24, #28; Deliverables in `main` | als Duplikate geschlossen |
+| #8 | Connector-SPI sowie local/FTP/MVS vorhanden; Rest war zu breit gebündelt | geschlossen; ersetzt durch #34–#39 |
+| #11 | Thin-Adapter-Regel implementiert, dokumentiert und per ArchUnit erzwungen | geschlossen |
+| #15 | Harbor-Boundary implementiert | geschlossen |
+| #5 | teilweise erledigt, alte Beschreibung zu breit | auf ChangeDetection/Invalidation/Scope/Depth/Size neu zugeschnitten |
+| #10 | Walking Skeleton vorhanden, alte Beschreibung als Erstdefinition veraltet | auf produktive Mediated-Komposition und nachfolgendes Run-Modell neu formuliert |
+| #13 | Boundary-Regeln vorhanden, Adapter-Vokabular unklar erforderlich | bewusst offen gelassen; Architekturentscheidung ausstehend |
 
-Klassifikation der 9 verbleibenden offenen Issues gegen den Code-Stand (`122f999`):
+### Neue konkrete Issues
 
-| Issue | Thema | Code-Stand | Erfüllt durch | Restarbeit | Empfehlung |
-| ---: | --- | --- | --- | --- | --- |
-| #3 | propylaea | 0 Klassen | — | vollständig (Model-first, Plan PR 8) | offen lassen |
-| #5 | tamias | AccessPolicy, PatternResourcePolicy, IndexingRule vorhanden | PR #32 (mediated bronze model) | ChangeDetectionStrategy, CacheInvalidationPolicy, ResourceScope/Depth/Size | **neu zuschneiden** auf die Restarbeit |
-| #7 | pinakes | 0 Klassen | — | vollständig (ports-first, Plan PR 7) | offen lassen |
-| #8 | holkas | SPI (Registry, Connector, Listing, ReadMode) + file/ftp/mvs implementiert | PR #23 + Direkt-Commits Juni | NDV, mail, wiki/confluence/sharepoint, JES | **schließen**, pro Connector neue kleine Issues |
-| #10 | acropolis | Walking Skeleton (`ResourceLifecycleCoordinator`) vorhanden, nur test-verdrahtet | PR #23 | Run/Plan/Step-Modell + produktive Komposition über `MediatedResourceService` | **umformulieren**: nicht Erstdefinition, sondern Weiterentwicklung Skeleton → Lifecycle Run Model |
-| #11 | exedra Thin-Adapter | Shell vorhanden; Regel schriftlich neu bewertet *und* per ArchUnit `EXEDRA_MUST_STAY_THIN_UI_SHELL` erzwungen | PR #29 + architecture-tests + Juni-Plan | keine | **schließen** mit Verweis auf ArchUnit-Regel |
-| #12 | katagogion | 0 Klassen | — | vollständig (ports-first, Plan PR 9) | offen lassen |
-| #13 | proasteion Boundary | Root 0 Klassen; Dependency-Regeln aber via architecture-tests erzwungen | architecture-tests-PRs | nur noch Adapter-Vokabular (OuterAdapter etc.) — Bedarf prüfen | **neu bewerten**: evtl. auf „Vokabular optional" reduzieren oder schließen |
-| #15 | emporion | Harbor (ResourceHarbor, Request/Result/Inspection) implementiert | Direkt-Commits Juni | keine (Vertiefung fällt unter #10) | **schließen** |
+| Issue | Thema | Abhängigkeit/Besonderheit |
+| ---: | --- | --- |
+| #33 | Chalcotheca Resource Records, Version History, Lifecycle Persistence | Voraussetzung für belastbare ChangeDetection/`UNCHANGED` |
+| #34 | NDV Connector | `NdvAuthenticationStrategy` + `NdvAccessHandle`, proprietäre Runtime isolieren |
+| #35 | JES Submit/Spool | verwendet ausschließlich bestehenden `FtpAccessHandle`; kein zweiter Login |
+| #36 | lokale PST/OST-Mail-Ressourcen | kein spekulativer Auth-/Adyton-Pfad; Deigma übernimmt tiefe Extraktion |
+| #37 | MediaWiki | Token-Login → wiederverwendbarer Cookie-/Session-Handle |
+| #38 | Confluence | getrennte Basic- und Windows-MY-mTLS-Strategien |
+| #39 | SharePoint | SSO-first, Credentials/Fallback nur kontrolliert und isoliert |
 
-Auffällig: Ab Juni wechselte der Workflow von Copilot-Issue+PR auf Direkt-Commits nach `main` (FTP/MVS, Harbor, platform-Module) — dadurch sind Issues veraltet, ohne geschlossen zu werden. Für künftige Arbeit entweder zum Issue-Workflow zurückkehren oder dieses Inventar als führende Statusquelle pflegen.
+Auffällig: Ab Juni wechselte der Workflow von Copilot-Issue+PR auf Direkt-Commits nach `main` (FTP/MVS, Harbor, platform-Module) — dadurch waren Issues veraltet, ohne geschlossen zu werden. Für künftige Arbeit entweder zum Issue-Workflow zurückkehren oder dieses Inventar als führende Statusquelle pflegen und Issues nur für konkrete nächste Slices anlegen.
 
 ---
 
 ## 5. Nächste Schritte (konsolidiert)
 
 1. **CI-Hygiene:** `exedra`-Swing-Tests headless-fähig machen (`GraphicsEnvironment.isHeadless()`-Assumes) — sonst ist die Suite als Regressionsnetz auf Linux/CI entwertet.
-2. **Produktiver Primärpfad (#10-Vorstufe):** `ResourceLifecycleCoordinator` auf `MediatedResourceService`/`AcquisitionPort` als einzige Beschaffungsquelle umstellen und adyton-Station im `MediatedResourceService` ergänzen; erst danach Run/Plan/Step-Modell extrahieren (klein: Run, Outcome, Summary, Failure).
-3. **`tamias` vervollständigen (#5):** ChangeDetectionStrategy + CacheInvalidationPolicy — Voraussetzung dafür, dass ein `UNCHANGED`-Outcome im Run-Modell überhaupt testbar ist (benötigt Digest/Version in `chalcotheca`).
-4. **`chalcotheca`-Persistenz:** BronzeResourceRecord + Versionierung (H2 später als Infra-Adapter).
-5. **NDV-Connector:** nach dem FTP/MVS-Muster (`AccessHandle` + `AuthenticationStrategy`); FTP-Slice als Vorlage nutzen.
-6. **§2.6-Entscheidungen** treffen und hier nachtragen.
+2. **Produktiver Primärpfad (#10, erste Slices):** `ResourceLifecycleCoordinator` auf `MediatedResourceService`/`AcquisitionPort` als einzige Beschaffungsquelle umstellen, produktiven äußeren Kompositionspunkt schaffen und Adyton-gestützte Access Preparation ohne Secret-Leak integrieren.
+3. **`chalcotheca` Resource Records/Persistenz (#33):** Digest/Version/Lifecycle-State und austauschbaren Persistenzport bereitstellen; H2 erst als späteren Infra-Adapter.
+4. **`tamias` vervollständigen (#5):** ChangeDetectionStrategy + CacheInvalidationPolicy + Scope/Depth/Size auf Basis von #33.
+5. **Run-Modell (#10, nach produktivem Pfad):** Run, Plan, Step, Outcome, Summary, Failure extrahieren; `UNCHANGED`/Tombstone mit #33/#5 integrieren.
+6. **Connector-Slices:** Mail (#36) als risikoarmer lokaler Harbor-Pfad; danach NDV (#34) nach dem FTP/MVS-Muster. JES (#35), Wiki (#37), Confluence (#38) und SharePoint (#39) separat priorisieren.
+7. **§2.6- und #13-Entscheidungen** treffen und hier nachtragen.
+
+Branch-Aufräumarbeiten und Headless-Fix sind unabhängig von der Issue-Bereinigung und können parallel erfolgen. Bei Squash-Merges darf die Löschentscheidung nicht allein auf `git branch --merged` beruhen, sondern auf PR-Merge-Status plus inhaltsbasiertem Vergleich gegen `main`.
 
 ---
 
