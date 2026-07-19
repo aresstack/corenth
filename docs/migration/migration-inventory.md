@@ -1,6 +1,6 @@
 # MainframeMate → Corenth — Master-Migrationsinventar
 
-**Stand:** Codeprüfung 2026-07-19 gegen `main` @ `122f999` ("Add trusted MVS session auth adapter", 2026-06-17); Trackerbereinigung aktualisiert am 2026-07-19
+**Stand:** Codeprüfung 2026-07-19 gegen `main` @ `122f999` ("Add trusted MVS session auth adapter", 2026-06-17); Tracker- und Headless-Verifikation aktualisiert am 2026-07-19
 **Zweck:** Eine einzige, laufend pflegbare Landkarte: Welcher MainframeMate-Referenzbestand (`research/`, ~1.400 Java-Dateien) ist in welcher Form in der Corenth-Zielarchitektur angekommen, was ist bewusst ausgeschlossen, was steht aus. Ergänzt die modulspezifischen Inventare, ersetzt sie nicht.
 
 Leitprinzip aus [mainframemate-migration.md](mainframemate-migration.md):
@@ -95,6 +95,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | --- | --- | --- | --- | --- | --- |
 | `ui`-Shell (MainFrame, Drawer, ToolTabRegistry, Settings-Shell), `toolbar-kit`, `event` | ~254 | `exedra` (generisches Shell-Framework) | ✅ migriert — **eingefroren**, Business-Panels bewusst nicht | #28/#29 ✔, #30 geschlossen | exedra/README |
 | Thin-Adapter-Grenze für Business-UI | — | `exedra` bleibt austauschbarer Adapter; `EXEDRA_MUST_STAY_THIN_UI_SHELL` | ✅ dokumentiert und erzwungen | #11 geschlossen | Plan „Korrektur zu #30/#11“ |
+| Exedra Headless-Tests | 50 Testfälle | leichtgewichtige Swing-Tests laufen headless; zwei displaypflichtige Tests besitzen Guards | ✅ verifiziert: 48 pass / 2 skip; realer CI-Lauf noch bestätigen | #40 | [Headless-Verifikation](../analysis/exedra-headless-test-verification.md) |
 | `ui`-Business-Panels, Commands, Editor-Integration | (in obigem) | — | 🚫 vorerst nicht — erst nach stabilen Use-Case-Ports | bei Bedarf neue kleine Issues | — |
 
 ### 2.6 Ohne definiertes Corenth-Ziel — Entscheidung ausstehend
@@ -121,7 +122,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | PR 2 | `holkas` Connector-SPI (#8) | ✅ erledigt; #8 geschlossen, Rest in #34–#39 |
 | PR 3 | `emporion` Harbor-Pipeline (#15) | ✅ erledigt; #15 geschlossen |
 | PR 4 | `tamias` IndexingPolicy/ChangeDetection/CacheInvalidation (#5) | 🟡 teilweise; #5 auf Restarbeit neu zugeschnitten, abhängig von #33 |
-| PR 5 | `acropolis` Run/Plan/Step/Status (#10) | ⬜ offen; #10 auf produktive Komposition vor Run-Modell neu formuliert |
+| PR 5 | `acropolis` Run/Plan/Step/Status (#10) | ⬜ offen; #10 auf produktive Komposition vor Run-Modell neu formuliert; kein Headless-Fix-Blocker |
 | PR 6 | FTP/MVS/JES als erster echter Connector | 🔧 FTP/MVS vorhanden; JES separat in #35 |
 | PR 7–9 | `pinakes` / `propylaea` / `katagogion` ports-first (#7/#3/#12) | ⬜ offen |
 
@@ -150,6 +151,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | #37 | MediaWiki | Token-Login → wiederverwendbarer Cookie-/Session-Handle |
 | #38 | Confluence | getrennte Basic- und Windows-MY-mTLS-Strategien |
 | #39 | SharePoint | SSO-first, Credentials/Fallback nur kontrolliert und isoliert |
+| #40 | Exedra Headless-CI-Verifikation | nicht blockierend für #10; erwartete Skips sichtbar machen, keine blanket Guards |
 
 Auffällig: Ab Juni wechselte der Workflow von Copilot-Issue+PR auf Direkt-Commits nach `main` (FTP/MVS, Harbor, platform-Module) — dadurch waren Issues veraltet, ohne geschlossen zu werden. Für künftige Arbeit entweder zum Issue-Workflow zurückkehren oder dieses Inventar als führende Statusquelle pflegen und Issues nur für konkrete nächste Slices anlegen.
 
@@ -157,15 +159,15 @@ Auffällig: Ab Juni wechselte der Workflow von Copilot-Issue+PR auf Direkt-Commi
 
 ## 5. Nächste Schritte (konsolidiert)
 
-1. **CI-Hygiene:** `exedra`-Swing-Tests headless-fähig machen (`GraphicsEnvironment.isHeadless()`-Assumes) — sonst ist die Suite als Regressionsnetz auf Linux/CI entwertet.
-2. **Produktiver Primärpfad (#10, erste Slices):** `ResourceLifecycleCoordinator` auf `MediatedResourceService`/`AcquisitionPort` als einzige Beschaffungsquelle umstellen, produktiven äußeren Kompositionspunkt schaffen und Adyton-gestützte Access Preparation ohne Secret-Leak integrieren.
-3. **`chalcotheca` Resource Records/Persistenz (#33):** Digest/Version/Lifecycle-State und austauschbaren Persistenzport bereitstellen; H2 erst als späteren Infra-Adapter.
-4. **`tamias` vervollständigen (#5):** ChangeDetectionStrategy + CacheInvalidationPolicy + Scope/Depth/Size auf Basis von #33.
-5. **Run-Modell (#10, nach produktivem Pfad):** Run, Plan, Step, Outcome, Summary, Failure extrahieren; `UNCHANGED`/Tombstone mit #33/#5 integrieren.
-6. **Connector-Slices:** Mail (#36) als risikoarmer lokaler Harbor-Pfad; danach NDV (#34) nach dem FTP/MVS-Muster. JES (#35), Wiki (#37), Confluence (#38) und SharePoint (#39) separat priorisieren.
+1. **Produktiver Primärpfad (#10, erste Slices):** `ResourceLifecycleCoordinator` auf `MediatedResourceService`/`AcquisitionPort` als einzige Beschaffungsquelle umstellen, produktiven äußeren Kompositionspunkt schaffen und Adyton-gestützte Access Preparation ohne Secret-Leak integrieren.
+2. **`chalcotheca` Resource Records/Persistenz (#33):** Digest/Version/Lifecycle-State und austauschbaren Persistenzport bereitstellen; H2 erst als späteren Infra-Adapter.
+3. **`tamias` vervollständigen (#5):** ChangeDetectionStrategy + CacheInvalidationPolicy + Scope/Depth/Size auf Basis von #33.
+4. **Run-Modell (#10, nach produktivem Pfad):** Run, Plan, Step, Outcome, Summary, Failure extrahieren; `UNCHANGED`/Tombstone mit #33/#5 integrieren.
+5. **Connector-Slices:** Mail (#36) als risikoarmer lokaler Harbor-Pfad; danach NDV (#34) nach dem FTP/MVS-Muster. JES (#35), Wiki (#37), Confluence (#38) und SharePoint (#39) separat priorisieren.
+6. **Exedra-CI-Verifikation (#40, parallel und nicht blockierend):** realen Gradle-/JUnit-Lauf auf dem Standard-Linux-Runner bestätigen und erwartete Skips sichtbar machen. Keine zusätzlichen Guards an leichtgewichtigen Swing-Tests.
 7. **§2.6-Entscheidungen** treffen und hier nachtragen.
 
-Branch-Aufräumarbeiten und Headless-Fix sind unabhängig von der Issue-Bereinigung und können parallel erfolgen. Bei Squash-Merges darf die Löschentscheidung nicht allein auf `git branch --merged` beruhen, sondern auf PR-Merge-Status plus inhaltsbasiertem Vergleich gegen `main`.
+Branch-Aufräumarbeiten und die Exedra-CI-Verifikation sind unabhängig von #10 und können parallel erfolgen. Der zuvor angenommene Headless-Codefix entfällt als Blocker. Bei Squash-Merges darf die Löschentscheidung nicht allein auf `git branch --merged` beruhen, sondern auf PR-Merge-Status plus inhaltsbasiertem Vergleich gegen `main`.
 
 ---
 
