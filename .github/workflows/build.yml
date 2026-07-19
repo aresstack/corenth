@@ -50,8 +50,10 @@ jobs:
 
       - name: Summarize test results and skipped tests
         if: always()
-        shell: python
+        shell: bash
         run: |
+          set -euo pipefail
+          python - <<'PY'
           import glob
           import os
           import xml.etree.ElementTree as ET
@@ -96,6 +98,7 @@ jobs:
           if summary_path:
               with open(summary_path, 'a', encoding='utf-8') as handle:
                   handle.write(summary)
+          PY
 
       - name: Upload test reports on failure
         if: failure()
