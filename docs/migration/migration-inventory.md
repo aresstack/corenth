@@ -117,7 +117,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 
 | Plan-PR | Inhalt | Stand |
 | --- | --- | --- |
-| PR 1 | `proasteion`-Root: OuterAdapter, AdapterKind, AdapterRegistry (#13) | ❓ neu bewerten — Dependency-Regeln via ArchUnit abgedeckt; Bedarf für gemeinsames Vokabular noch entscheiden |
+| PR 1 | `proasteion`-Root: OuterAdapter, AdapterKind, AdapterRegistry (#13) | ✅ Zweck erfüllt; #13 geschlossen. Boundary dokumentiert und per ArchUnit erzwungen; gemeinsames Adapter-Vokabular nach YAGNI erst bei konkretem Mehrfachbedarf |
 | PR 2 | `holkas` Connector-SPI (#8) | ✅ erledigt; #8 geschlossen, Rest in #34–#39 |
 | PR 3 | `emporion` Harbor-Pipeline (#15) | ✅ erledigt; #15 geschlossen |
 | PR 4 | `tamias` IndexingPolicy/ChangeDetection/CacheInvalidation (#5) | 🟡 teilweise; #5 auf Restarbeit neu zugeschnitten, abhängig von #33 |
@@ -137,7 +137,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | #15 | Harbor-Boundary implementiert | geschlossen |
 | #5 | teilweise erledigt, alte Beschreibung zu breit | auf ChangeDetection/Invalidation/Scope/Depth/Size neu zugeschnitten |
 | #10 | Walking Skeleton vorhanden, alte Beschreibung als Erstdefinition veraltet | auf produktive Mediated-Komposition und nachfolgendes Run-Modell neu formuliert |
-| #13 | Boundary-Regeln vorhanden, Adapter-Vokabular unklar erforderlich | bewusst offen gelassen; Architekturentscheidung ausstehend |
+| #13 | Boundary-Regeln vorhanden; reales gemeinsames Adapter-Vokabular bislang nicht benötigt | geschlossen; YAGNI-Entscheidung und Abhängigkeitsrichtungen in `proasteion/README.md` dokumentiert |
 
 ### Neue konkrete Issues
 
@@ -163,7 +163,7 @@ Auffällig: Ab Juni wechselte der Workflow von Copilot-Issue+PR auf Direkt-Commi
 4. **`tamias` vervollständigen (#5):** ChangeDetectionStrategy + CacheInvalidationPolicy + Scope/Depth/Size auf Basis von #33.
 5. **Run-Modell (#10, nach produktivem Pfad):** Run, Plan, Step, Outcome, Summary, Failure extrahieren; `UNCHANGED`/Tombstone mit #33/#5 integrieren.
 6. **Connector-Slices:** Mail (#36) als risikoarmer lokaler Harbor-Pfad; danach NDV (#34) nach dem FTP/MVS-Muster. JES (#35), Wiki (#37), Confluence (#38) und SharePoint (#39) separat priorisieren.
-7. **§2.6- und #13-Entscheidungen** treffen und hier nachtragen.
+7. **§2.6-Entscheidungen** treffen und hier nachtragen.
 
 Branch-Aufräumarbeiten und Headless-Fix sind unabhängig von der Issue-Bereinigung und können parallel erfolgen. Bei Squash-Merges darf die Löschentscheidung nicht allein auf `git branch --merged` beruhen, sondern auf PR-Merge-Status plus inhaltsbasiertem Vergleich gegen `main`.
 
