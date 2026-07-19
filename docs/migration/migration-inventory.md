@@ -129,9 +129,22 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | Issue | Befund | Aktion |
 | ---: | --- | --- |
 | #20, #27, #30 | zeichengleiche Duplikate von #18, #24, #28; Deliverables in `main` | als Duplikate geschlossen |
-| #8 (holkas) | SPI + file/ftp/mvs implementiert; NDV/mail/wiki/JES offen | schließen und pro Connector neue, kleine Issues anlegen |
-| #15 (emporion) | Harbor implementiert | schließen |
-| #5, #10, #13, #7, #3, #12, #11 | echte offene Arbeit gemäß Plan | offen lassen, Reihenfolge s. §5 |
+
+Klassifikation der 9 verbleibenden offenen Issues gegen den Code-Stand (`122f999`):
+
+| Issue | Thema | Code-Stand | Erfüllt durch | Restarbeit | Empfehlung |
+| ---: | --- | --- | --- | --- | --- |
+| #3 | propylaea | 0 Klassen | — | vollständig (Model-first, Plan PR 8) | offen lassen |
+| #5 | tamias | AccessPolicy, PatternResourcePolicy, IndexingRule vorhanden | PR #32 (mediated bronze model) | ChangeDetectionStrategy, CacheInvalidationPolicy, ResourceScope/Depth/Size | **neu zuschneiden** auf die Restarbeit |
+| #7 | pinakes | 0 Klassen | — | vollständig (ports-first, Plan PR 7) | offen lassen |
+| #8 | holkas | SPI (Registry, Connector, Listing, ReadMode) + file/ftp/mvs implementiert | PR #23 + Direkt-Commits Juni | NDV, mail, wiki/confluence/sharepoint, JES | **schließen**, pro Connector neue kleine Issues |
+| #10 | acropolis | Walking Skeleton (`ResourceLifecycleCoordinator`) vorhanden, nur test-verdrahtet | PR #23 | Run/Plan/Step-Modell + produktive Komposition über `MediatedResourceService` | **umformulieren**: nicht Erstdefinition, sondern Weiterentwicklung Skeleton → Lifecycle Run Model |
+| #11 | exedra Thin-Adapter | Shell vorhanden; Regel schriftlich neu bewertet *und* per ArchUnit `EXEDRA_MUST_STAY_THIN_UI_SHELL` erzwungen | PR #29 + architecture-tests + Juni-Plan | keine | **schließen** mit Verweis auf ArchUnit-Regel |
+| #12 | katagogion | 0 Klassen | — | vollständig (ports-first, Plan PR 9) | offen lassen |
+| #13 | proasteion Boundary | Root 0 Klassen; Dependency-Regeln aber via architecture-tests erzwungen | architecture-tests-PRs | nur noch Adapter-Vokabular (OuterAdapter etc.) — Bedarf prüfen | **neu bewerten**: evtl. auf „Vokabular optional" reduzieren oder schließen |
+| #15 | emporion | Harbor (ResourceHarbor, Request/Result/Inspection) implementiert | Direkt-Commits Juni | keine (Vertiefung fällt unter #10) | **schließen** |
+
+Auffällig: Ab Juni wechselte der Workflow von Copilot-Issue+PR auf Direkt-Commits nach `main` (FTP/MVS, Harbor, platform-Module) — dadurch sind Issues veraltet, ohne geschlossen zu werden. Für künftige Arbeit entweder zum Issue-Workflow zurückkehren oder dieses Inventar als führende Statusquelle pflegen.
 
 ---
 
