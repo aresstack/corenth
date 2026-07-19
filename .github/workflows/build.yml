@@ -1,0 +1,109 @@
+name: Build and test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test (Java 8 target)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Install headless AWT font dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            fontconfig \
+            libfreetype6 \
+            fonts-dejavu-core
+
+      - name: Run complete Gradle build and test suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon clean build --stacktrace
+
+      - name: Summarize test results and skipped tests
+        if: always()
+        shell: python
+        run: |
+          import glob
+          import os
+          import xml.etree.ElementTree as ET
+
+          files = glob.glob('**/build/test-results/test/*.xml', recursive=True)
+          totals = {'tests': 0, 'failures': 0, 'errors': 0, 'skipped': 0}
+          skipped_cases = []
+
+          for path in files:
+              try:
+                  root = ET.parse(path).getroot()
+              except ET.ParseError as exc:
+                  print('Could not parse {}: {}'.format(path, exc))
+                  continue
+
+              for key in totals:
+                  totals[key] += int(root.attrib.get(key, 0))
+
+              for case in root.findall('.//testcase'):
+                  if case.find('skipped') is not None:
+                      skipped_cases.append('{}.{}'.format(
+                          case.attrib.get('classname', '<unknown>'),
+                          case.attrib.get('name', '<unknown>')))
+
+          lines = [
+              '## Gradle test summary',
+              '',
+              '- Result files: {}'.format(len(files)),
+              '- Tests: {}'.format(totals['tests']),
+              '- Failures: {}'.format(totals['failures']),
+              '- Errors: {}'.format(totals['errors']),
+              '- Skipped: {}'.format(totals['skipped']),
+          ]
+
+          if skipped_cases:
+              lines.extend(['', '### Skipped tests'])
+              lines.extend('- `{}`'.format(case) for case in skipped_cases)
+
+          summary = '\n'.join(lines) + '\n'
+          print(summary)
+          summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary_path:
+              with open(summary_path, 'a', encoding='utf-8') as handle:
+                  handle.write(summary)
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
