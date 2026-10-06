@@ -21,6 +21,19 @@ ext.architectureProjects = [
         ':proasteion:platform:security-keepassrpc'
 ]
 
+// Every Gradle project that compiles production classes must be listed explicitly above so that
+// its classes are imported by CorenthArchitectureRulesTest. This guard turns a forgotten entry
+// (for example a future ':proasteion:application' bootstrap module, see
+// docs/adr/0001-composition-root.md) into a configuration failure instead of silently unscanned code.
+def unlistedProjects = rootProject.subprojects
+        .findAll { candidate -> candidate.path != project.path && !architectureProjects.contains(candidate.path) }
+        .collect { candidate -> candidate.path }
+        .sort()
+if (!unlistedProjects.isEmpty()) {
+    throw new GradleException("architecture-tests: these Gradle projects are not covered by the architecture rules; "
+            + "add them to architectureProjects in architecture-tests/build.gradle: " + unlistedProjects)
+}
+
 dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

@@ -3,7 +3,11 @@ package com.aresstack.corenth.astu.acropolis;
 import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceKind;
 import com.aresstack.corenth.astu.VirtualResourceRef;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.InMemoryResourceArchive;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceAccess;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceService;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndexConfig;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalSearchResult;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LuceneLexicalIndex;
@@ -12,14 +16,13 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.Lexi
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.LexicalChunkingConfig;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.LuceneTokenCounter;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.NlpTextChunker;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ActorIdentity;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ActorType;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.IndexingRule;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PatternResourcePolicy;
-import com.aresstack.corenth.proasteion.emporion.DefaultResourceHarbor;
-import com.aresstack.corenth.proasteion.emporion.HarborInspection;
-import com.aresstack.corenth.proasteion.emporion.HarborRequest;
-import com.aresstack.corenth.proasteion.emporion.HarborResult;
-import com.aresstack.corenth.proasteion.emporion.ResourceHarbor;
-import com.aresstack.corenth.proasteion.emporion.deigma.ContentDetector;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessDecision;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessPolicy;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
 import com.aresstack.corenth.proasteion.emporion.deigma.DetectedContentType;
 import com.aresstack.corenth.proasteion.emporion.deigma.ExtractedBlock;
 import com.aresstack.corenth.proasteion.emporion.deigma.ExtractionRegistry;
@@ -31,7 +34,7 @@ import com.aresstack.corenth.proasteion.emporion.deigma.impl.PlainTextExtractor;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.SimpleContentDetector;
 import com.aresstack.corenth.proasteion.emporion.holkas.DefaultResourceConnectorRegistry;
 import com.aresstack.corenth.proasteion.emporion.holkas.FileSystemResourceConnector;
-import com.aresstack.corenth.proasteion.emporion.holkas.RawResource;
+import com.aresstack.corenth.proasteion.emporion.holkas.HolkasAcquisitionPort;
 
 import org.junit.After;
 import org.junit.Before;
@@ -45,9 +48,6 @@ import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.Charset;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -56,21 +56,26 @@ import java.util.List;
 import static org.junit.Assert.*;
 
 /**
- * Integration test proving the full walking skeleton path:
- * file: URI → holkas → deigma → tamias → chalcotheca → anagraphai → search result.
+ * Integration test proving the full walking skeleton path through the mediated bronze archive
+ * counter:
+ * file: URI → acropolis lifecycle → MediatedResourceAccess (MediatedResourceService) → Tamias
+ * access decision → AcquisitionPort (HolkasAcquisitionPort, FileSystemResourceConnector internally)
+ * → deigma → tamias indexing policy → chalcotheca snapshot → anagraphai → search result.
  *
- * <p>This test wires outer adapter implementations (holkas, deigma) to the
- * inward-facing ports used by acropolis. The main code never compiles against
- * proasteion packages — only this test composition layer does.
+ * <p>This test is the composition layer: it wires outer adapter implementations (holkas, deigma)
+ * to the inner contracts. Production code in {@code acropolis} never compiles against
+ * {@code proasteion} packages and never touches connectors or the acquisition port.
  */
 public class WalkingSkeletonIntegrationTest {
 
     private static final Charset UTF_8 = Charset.forName("UTF-8");
+    private static final ActorIdentity LIFECYCLE_ACTOR = new ActorIdentity("walking-skeleton", ActorType.SERVICE);
 
     @Rule
     public TemporaryFolder tempFolder = new TemporaryFolder();
 
     private LuceneLexicalIndex lexicalIndex;
+    private MediatedResourceService counter;
     private ResourceLifecycleCoordinator coordinator;
     private SearchCoordinator searchCoordinator;
 
@@ -81,13 +86,10 @@ public class WalkingSkeletonIntegrationTest {
         LexicalIndexConfig indexConfig = new LexicalIndexConfig(indexDir.toPath());
         lexicalIndex = new LuceneLexicalIndex(indexConfig);
 
-        // Adapter: holkas file connector → RawResourceProvider port
-        RawResourceProvider resourceProvider = createFileResourceProvider();
-
         // Adapter: deigma detection + extraction → ContentInspector port
         ContentInspector inspector = createDeigmaInspector();
 
-        // Tamias: policy allowing .txt and .md files under 1MB
+        // Tamias: indexing policy allowing .txt and .md files under 1MB
         IndexingRule textRule = new IndexingRule(
                 "file-text-documents",
                 Arrays.asList("file"),
@@ -97,7 +99,7 @@ public class WalkingSkeletonIntegrationTest {
         );
         PatternResourcePolicy policy = new PatternResourcePolicy(Arrays.asList(textRule));
 
-        // Chalcotheca: in-memory archive
+        // Chalcotheca: in-memory archive, shared by counter and lifecycle
         InMemoryResourceArchive archive = new InMemoryResourceArchive();
 
         // Anagraphai: lexical chunker with sentence-aware splitting
@@ -106,9 +108,12 @@ public class WalkingSkeletonIntegrationTest {
                 new LuceneTokenCounter(),
                 new LexicalChunkingConfig());
 
-        // Acropolis: coordinator and search
+        // Chalcotheca: the archive counter over the real file connector
+        counter = mediatedFileAccess(archive);
+
+        // Acropolis: coordinator over the mediated counter, and search
         coordinator = new ResourceLifecycleCoordinator(
-                resourceProvider, inspector, policy, archive, lexicalIndex, chunker);
+                counter, LIFECYCLE_ACTOR, inspector, policy, archive, lexicalIndex, chunker);
         searchCoordinator = new SearchCoordinator(lexicalIndex);
     }
 
@@ -121,19 +126,15 @@ public class WalkingSkeletonIntegrationTest {
 
     @Test
     public void fullPathProcessAndSearch_txtFile() throws IOException {
-        // Create a temporary .txt file
         File txtFile = tempFolder.newFile("architecture-notes.txt");
         writeFile(txtFile, "The Corenth architecture uses a walking skeleton approach "
                 + "to prove the full pipeline end to end.");
 
-        // Address as file: URI
         VirtualResourceRef ref = fileRef(txtFile);
 
-        // Process through the full pipeline
         ProcessingResult result = coordinator.process(ref);
         assertEquals(ProcessingResult.Status.INDEXED, result.status());
 
-        // Search and verify the result is linked to the original VirtualResourceRef
         List<LexicalSearchResult> results = searchCoordinator.search("architecture", 10);
         assertFalse("Expected at least one search result", results.isEmpty());
         assertEquals(ref, results.get(0).resourceRef());
@@ -142,7 +143,6 @@ public class WalkingSkeletonIntegrationTest {
 
     @Test
     public void fullPathProcessAndSearch_mdFile() throws IOException {
-        // Create a temporary .md file
         File mdFile = tempFolder.newFile("readme.md");
         writeFile(mdFile, "# Corenth README\n\nThis project implements modular resource indexing.");
 
@@ -156,25 +156,19 @@ public class WalkingSkeletonIntegrationTest {
     }
 
     @Test
-    public void fullPathProcessAndSearch_txtFile_throughEmporionHarbor() throws IOException {
-        File txtFile = tempFolder.newFile("harbor-notes.txt");
-        writeFile(txtFile, "Harbor coordinates raw acquisition and shallow extraction.");
-
+    public void fullPath_bronzeContentIsCachedByTheArchiveCounter() throws IOException {
+        File txtFile = tempFolder.newFile("counter-cached.txt");
+        writeFile(txtFile, "Content served by the bronze archive counter.");
         VirtualResourceRef ref = fileRef(txtFile);
-        ResourceHarbor harbor = createFileHarbor();
-        HarborBridge bridge = new HarborBridge(harbor);
-        ResourceLifecycleCoordinator harborCoordinator = new ResourceLifecycleCoordinator(
-                bridge, bridge, new PatternResourcePolicy(Arrays.asList(new IndexingRule(
-                "allow-txt", Arrays.asList("file"), Arrays.asList("**/*.txt"),
-                Collections.<String>emptyList(), Long.MAX_VALUE))),
-                new InMemoryResourceArchive(), lexicalIndex);
 
-        ProcessingResult result = harborCoordinator.process(ref);
-        assertEquals(ProcessingResult.Status.INDEXED, result.status());
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        MediatedResourceService counter = mediatedFileAccess(archive);
+        ResourceLifecycleCoordinator counterCoordinator = new ResourceLifecycleCoordinator(
+                counter, LIFECYCLE_ACTOR, createDeigmaInspector(), allowTextRule(), archive, lexicalIndex);
 
-        List<LexicalSearchResult> results = searchCoordinator.search("Harbor", 10);
-        assertFalse("Expected Harbor-backed search result", results.isEmpty());
-        assertEquals(ref, results.get(0).resourceRef());
+        assertFalse(counter.hasCachedContent(ref.uri()));
+        assertEquals(ProcessingResult.Status.INDEXED, counterCoordinator.process(ref).status());
+        assertTrue("the lifecycle read must have gone through the counter", counter.hasCachedContent(ref.uri()));
     }
 
     @Test
@@ -190,7 +184,6 @@ public class WalkingSkeletonIntegrationTest {
 
     @Test
     public void policyDenies_unsupportedExtension() throws IOException {
-        // Create a .pdf file (not in include patterns)
         File pdfFile = tempFolder.newFile("document.pdf");
         writeFile(pdfFile, "fake pdf content");
 
@@ -202,7 +195,6 @@ public class WalkingSkeletonIntegrationTest {
 
     @Test
     public void policyDenies_excludedPath() throws IOException {
-        // Create a file under a .git directory
         File gitDir = tempFolder.newFolder(".git");
         File gitFile = new File(gitDir, "config.txt");
         writeFile(gitFile, "git config content");
@@ -214,8 +206,34 @@ public class WalkingSkeletonIntegrationTest {
     }
 
     @Test
-    public void policyDenies_fileTooLarge() throws IOException {
-        // Create an indexing rule with a very small maxBytes
+    public void policyDenies_excludedPath_beforeAnyMediatedRead() throws IOException {
+        File gitDir = tempFolder.newFolder(".git-early");
+        File gitFile = new File(gitDir, "config.txt");
+        writeFile(gitFile, "git config content");
+        VirtualResourceRef ref = fileRef(gitFile);
+
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        MediatedResourceService counter = mediatedFileAccess(archive);
+        PatternResourcePolicy excluding = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                "exclude-git-early", Arrays.asList("file"), Arrays.asList("**/*.txt"),
+                Arrays.asList("**/.git-early/**"), Long.MAX_VALUE)));
+        ResourceLifecycleCoordinator excludingCoordinator = new ResourceLifecycleCoordinator(
+                counter, LIFECYCLE_ACTOR, createDeigmaInspector(), excluding, archive, lexicalIndex);
+
+        ProcessingResult result = excludingCoordinator.process(ref);
+        assertEquals(ProcessingResult.Status.DENIED, result.status());
+        assertFalse("an excluded resource must not be acquired at all", counter.hasCachedContent(ref.uri()));
+    }
+
+    /**
+     * Documents a guarantee weakened by #10 Slice 1: before the slice the skeleton denied
+     * oversized files before fetching them (size probe on the direct provider). The mediated
+     * contract has no size probe, so the counter acquires and retains the content and the
+     * lifecycle denies it only afterwards. When a {@code READ_METADATA} operation exists
+     * (#5/#33), this test must be inverted (expect no cached content).
+     */
+    @Test
+    public void knownGap_oversizedFile_isAcquiredAndRetainedByCounterBeforeDenial() throws IOException {
         IndexingRule tinyRule = new IndexingRule(
                 "tiny-rule",
                 Arrays.asList("file"),
@@ -225,13 +243,10 @@ public class WalkingSkeletonIntegrationTest {
         );
         PatternResourcePolicy tinyPolicy = new PatternResourcePolicy(Arrays.asList(tinyRule));
 
-        // Replace coordinator with tiny policy
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        MediatedResourceService tinyCounter = mediatedFileAccess(archive);
         ResourceLifecycleCoordinator tinyCoordinator = new ResourceLifecycleCoordinator(
-                createFileResourceProvider(),
-                createDeigmaInspector(),
-                tinyPolicy,
-                new InMemoryResourceArchive(),
-                lexicalIndex);
+                tinyCounter, LIFECYCLE_ACTOR, createDeigmaInspector(), tinyPolicy, archive, lexicalIndex);
 
         File bigFile = tempFolder.newFile("big.txt");
         writeFile(bigFile, "This content is definitely larger than 10 bytes.");
@@ -240,47 +255,8 @@ public class WalkingSkeletonIntegrationTest {
         ProcessingResult result = tinyCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.DENIED, result.status());
         assertTrue(result.message().contains("maxBytes"));
-    }
-
-    @Test
-    public void policyDenies_fileTooLarge_beforeFetch() throws IOException {
-        File bigFile = tempFolder.newFile("big-before-fetch.txt");
-        writeFile(bigFile, "This content is definitely larger than 10 bytes.");
-        VirtualResourceRef ref = fileRef(bigFile);
-
-        final int[] fetchCalls = new int[1];
-        RawResourceProvider countingProvider = new RawResourceProvider() {
-            @Override
-            public FetchedResource fetch(VirtualResourceRef ignored) {
-                fetchCalls[0]++;
-                return new FetchedResource(new byte[]{1}, "x.txt", 1);
-            }
-
-            @Override
-            public Long probeSizeBytes(VirtualResourceRef ignored) {
-                return Long.valueOf(1024);
-            }
-        };
-
-        PatternResourcePolicy tinyPolicy = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
-                "tiny-rule",
-                Arrays.asList("file"),
-                Arrays.asList("**/*.txt"),
-                Collections.<String>emptyList(),
-                10
-        )));
-
-        ResourceLifecycleCoordinator tinyCoordinator = new ResourceLifecycleCoordinator(
-                countingProvider,
-                createDeigmaInspector(),
-                tinyPolicy,
-                new InMemoryResourceArchive(),
-                lexicalIndex);
-
-        ProcessingResult result = tinyCoordinator.process(ref);
-        assertEquals(ProcessingResult.Status.DENIED, result.status());
-        assertTrue(result.message().contains("maxBytes"));
-        assertEquals(0, fetchCalls[0]);
+        assertTrue("size is only known after the counter acquired the content, which it retains",
+                tinyCounter.hasCachedContent(ref.uri()));
     }
 
     @Test
@@ -296,12 +272,9 @@ public class WalkingSkeletonIntegrationTest {
         PatternResourcePolicy denyPolicy = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
                 "md-only", Arrays.asList("file"), Arrays.asList("**/*.md"),
                 Collections.<String>emptyList(), Long.MAX_VALUE)));
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
         ResourceLifecycleCoordinator denyCoordinator = new ResourceLifecycleCoordinator(
-                createFileResourceProvider(),
-                createDeigmaInspector(),
-                denyPolicy,
-                new InMemoryResourceArchive(),
-                lexicalIndex);
+                mediatedFileAccess(archive), LIFECYCLE_ACTOR, createDeigmaInspector(), denyPolicy, archive, lexicalIndex);
 
         ProcessingResult denied = denyCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.DENIED, denied.status());
@@ -313,19 +286,14 @@ public class WalkingSkeletonIntegrationTest {
         // Shared archive so snapshot state is consistent across cycles
         InMemoryResourceArchive sharedArchive = new InMemoryResourceArchive();
 
-        // Accept-all policy for .txt files
-        PatternResourcePolicy acceptPolicy = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
-                "allow-txt", Arrays.asList("file"), Arrays.asList("**/*.txt"),
-                Collections.<String>emptyList(), Long.MAX_VALUE)));
-
-        // Deny-all-txt policy (only .md accepted)
+        PatternResourcePolicy acceptPolicy = allowTextRule();
         PatternResourcePolicy denyPolicy = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
                 "md-only", Arrays.asList("file"), Arrays.asList("**/*.md"),
                 Collections.<String>emptyList(), Long.MAX_VALUE)));
 
         // Step 1: Index a .txt file with accepting policy
         ResourceLifecycleCoordinator acceptCoordinator = new ResourceLifecycleCoordinator(
-                createFileResourceProvider(), createDeigmaInspector(),
+                mediatedFileAccess(sharedArchive), LIFECYCLE_ACTOR, createDeigmaInspector(),
                 acceptPolicy, sharedArchive, lexicalIndex);
 
         File txtFile = tempFolder.newFile("reaccept.txt");
@@ -338,7 +306,7 @@ public class WalkingSkeletonIntegrationTest {
 
         // Step 2: Deny the same ref — lexical entry + archive snapshot removed
         ResourceLifecycleCoordinator denyCoordinator = new ResourceLifecycleCoordinator(
-                createFileResourceProvider(), createDeigmaInspector(),
+                mediatedFileAccess(sharedArchive), LIFECYCLE_ACTOR, createDeigmaInspector(),
                 denyPolicy, sharedArchive, lexicalIndex);
 
         ProcessingResult denied = denyCoordinator.process(ref);
@@ -358,13 +326,34 @@ public class WalkingSkeletonIntegrationTest {
 
         VirtualResourceRef ref = fileRef(txtFile);
 
-        // First processing should index
         ProcessingResult first = coordinator.process(ref);
         assertEquals(ProcessingResult.Status.INDEXED, first.status());
 
-        // Second processing should detect unchanged
         ProcessingResult second = coordinator.process(ref);
         assertEquals(ProcessingResult.Status.UNCHANGED, second.status());
+    }
+
+    /**
+     * Documents a guarantee lost in #10 Slice 1 and tracked by #33/#5: before the slice the
+     * direct provider path re-read the source on every run, so a rewritten file produced a new
+     * digest and was re-indexed. The archive counter caches bronze content without
+     * invalidation, so a changed source is now served from the cache within one service
+     * instance and the lifecycle reports {@code UNCHANGED}. When invalidation exists, this
+     * test must be inverted (expect {@code INDEXED} and the new term to be searchable).
+     */
+    @Test
+    public void knownGap_changedSourceContent_isServedFromCounterCacheUntilInvalidationExists() throws IOException {
+        File txtFile = tempFolder.newFile("mutable.txt");
+        writeFile(txtFile, "original mutable content");
+        VirtualResourceRef ref = fileRef(txtFile);
+        assertEquals(ProcessingResult.Status.INDEXED, coordinator.process(ref).status());
+
+        writeFile(txtFile, "replacement mutable content");
+        ProcessingResult second = coordinator.process(ref);
+        assertEquals(ProcessingResult.Status.UNCHANGED, second.status());
+        assertTrue("the stale bytes come from the counter cache", counter.hasCachedContent(ref.uri()));
+        assertTrue("stale bronze cache: new content is not visible yet",
+                searchCoordinator.search("replacement", 10).isEmpty());
     }
 
     @Test
@@ -374,7 +363,6 @@ public class WalkingSkeletonIntegrationTest {
 
         VirtualResourceRef ref = fileRef(txtFile);
 
-        // Inspector that returns success but with only null/empty text blocks
         ContentInspector emptyInspector = new ContentInspector() {
             @Override
             public InspectionResult inspect(VirtualResourceRef r, byte[] content, String filenameHint) {
@@ -383,14 +371,9 @@ public class WalkingSkeletonIntegrationTest {
             }
         };
 
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
         ResourceLifecycleCoordinator coord = new ResourceLifecycleCoordinator(
-                createFileResourceProvider(),
-                emptyInspector,
-                new PatternResourcePolicy(Arrays.asList(new IndexingRule(
-                        "allow-all", Arrays.asList("file"), Arrays.asList("**/*"),
-                        Collections.<String>emptyList(), Long.MAX_VALUE))),
-                new InMemoryResourceArchive(),
-                lexicalIndex);
+                mediatedFileAccess(archive), LIFECYCLE_ACTOR, emptyInspector, allowAllFiles(), archive, lexicalIndex);
 
         ProcessingResult result = coord.process(ref);
         assertEquals(ProcessingResult.Status.FAILED, result.status());
@@ -414,14 +397,9 @@ public class WalkingSkeletonIntegrationTest {
             }
         };
 
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
         ResourceLifecycleCoordinator emptyCoordinator = new ResourceLifecycleCoordinator(
-                createFileResourceProvider(),
-                emptyInspector,
-                new PatternResourcePolicy(Arrays.asList(new IndexingRule(
-                        "allow-all", Arrays.asList("file"), Arrays.asList("**/*"),
-                        Collections.<String>emptyList(), Long.MAX_VALUE))),
-                new InMemoryResourceArchive(),
-                lexicalIndex);
+                mediatedFileAccess(archive), LIFECYCLE_ACTOR, emptyInspector, allowAllFiles(), archive, lexicalIndex);
 
         ProcessingResult failed = emptyCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.FAILED, failed.status());
@@ -430,15 +408,12 @@ public class WalkingSkeletonIntegrationTest {
 
     @Test
     public void noTextThenReprocessed_unchangedContent_reindexes() throws IOException {
-        // Shared archive so snapshot state is consistent across cycles
         InMemoryResourceArchive sharedArchive = new InMemoryResourceArchive();
-        PatternResourcePolicy acceptPolicy = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
-                "allow-all", Arrays.asList("file"), Arrays.asList("**/*"),
-                Collections.<String>emptyList(), Long.MAX_VALUE)));
+        PatternResourcePolicy acceptPolicy = allowAllFiles();
 
         // Step 1: Index with normal inspector
         ResourceLifecycleCoordinator normalCoordinator = new ResourceLifecycleCoordinator(
-                createFileResourceProvider(), createDeigmaInspector(),
+                mediatedFileAccess(sharedArchive), LIFECYCLE_ACTOR, createDeigmaInspector(),
                 acceptPolicy, sharedArchive, lexicalIndex);
 
         File txtFile = tempFolder.newFile("notext-reindex.txt");
@@ -457,7 +432,7 @@ public class WalkingSkeletonIntegrationTest {
             }
         };
         ResourceLifecycleCoordinator emptyCoordinator = new ResourceLifecycleCoordinator(
-                createFileResourceProvider(), emptyInspector,
+                mediatedFileAccess(sharedArchive), LIFECYCLE_ACTOR, emptyInspector,
                 acceptPolicy, sharedArchive, lexicalIndex);
 
         ProcessingResult noText = emptyCoordinator.process(ref);
@@ -486,14 +461,9 @@ public class WalkingSkeletonIntegrationTest {
             }
         };
 
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
         ResourceLifecycleCoordinator coord = new ResourceLifecycleCoordinator(
-                createFileResourceProvider(),
-                mixedInspector,
-                new PatternResourcePolicy(Arrays.asList(new IndexingRule(
-                        "allow-all", Arrays.asList("file"), Arrays.asList("**/*"),
-                        Collections.<String>emptyList(), Long.MAX_VALUE))),
-                new InMemoryResourceArchive(),
-                lexicalIndex);
+                mediatedFileAccess(archive), LIFECYCLE_ACTOR, mixedInspector, allowAllFiles(), archive, lexicalIndex);
 
         ProcessingResult result = coord.process(ref);
         assertEquals(ProcessingResult.Status.INDEXED, result.status());
@@ -507,64 +477,59 @@ public class WalkingSkeletonIntegrationTest {
     }
 
     @Test
-    public void processWithInvalidRef_producesFailedResult() throws IOException {
-        File txtFile = tempFolder.newFile("invalid-ref.txt");
-        writeFile(txtFile, "content");
-        final VirtualResourceRef fileRef = fileRef(txtFile);
+    public void processWithUnsupportedScheme_producesFailedResult_fromTheCounter() {
+        // The indexing policy accepts any scheme; the counter has only a file: connector,
+        // so acquisition fails inside the mediated path and surfaces as FAILED, not as an exception.
+        VirtualResourceRef ref = new VirtualResourceRef(
+                BookmarkUri.parse("ndv://mainframe/library/program"), VirtualResourceKind.FILE);
+        PatternResourcePolicy anyScheme = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                "any-scheme", Collections.<String>emptyList(), Arrays.asList("**/*"),
+                Collections.<String>emptyList(), Long.MAX_VALUE)));
 
-        RawResourceProvider invalidProvider = new RawResourceProvider() {
-            @Override
-            public FetchedResource fetch(VirtualResourceRef ref) {
-                throw new IllegalArgumentException("unsupported scheme");
-            }
-        };
-
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
         ResourceLifecycleCoordinator localCoordinator = new ResourceLifecycleCoordinator(
-                invalidProvider,
-                createDeigmaInspector(),
-                new PatternResourcePolicy(Arrays.asList(new IndexingRule(
-                        "allow-all", Arrays.asList("file"), Arrays.asList("**/*"),
-                        Collections.<String>emptyList(), Long.MAX_VALUE))),
-                new InMemoryResourceArchive(),
-                lexicalIndex);
+                mediatedFileAccess(archive), LIFECYCLE_ACTOR, createDeigmaInspector(), anyScheme, archive, lexicalIndex);
 
-        ProcessingResult result = localCoordinator.process(fileRef);
+        ProcessingResult result = localCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.FAILED, result.status());
-        assertTrue(result.message().contains("Invalid resource reference"));
+        assertTrue(result.message(), result.message().contains("Acquisition failed"));
     }
 
-    // --- Adapter wiring: bridges proasteion implementations to acropolis ports ---
+    // --- Composition: the mediated counter over a real file connector ---
 
-    private static RawResourceProvider createFileResourceProvider() {
-        final FileSystemResourceConnector connector = new FileSystemResourceConnector();
-        return new RawResourceProvider() {
-            @Override
-            public FetchedResource fetch(VirtualResourceRef ref) throws IOException {
-                RawResource raw = connector.fetch(ref);
-                return new FetchedResource(
-                        raw.content().bytes(), raw.filename(), raw.content().sizeBytes());
-            }
+    /**
+     * Builds the archive counter the way a composition point would: Tamias access policy,
+     * Holkas acquisition behind {@link AcquisitionPort}, shared snapshot archive.
+     * The access policy permits everything; the indexing policy is still exercised per test.
+     */
+    private static MediatedResourceService mediatedFileAccess(ResourceArchive archive) {
+        AcquisitionPort acquisition = new HolkasAcquisitionPort(
+                DefaultResourceConnectorRegistry.of(new FileSystemResourceConnector()));
+        return new MediatedResourceService(permitAll(), acquisition, archive);
+    }
 
+    private static ResourceAccessPolicy permitAll() {
+        return new ResourceAccessPolicy() {
             @Override
-            public Long probeSizeBytes(VirtualResourceRef ref) throws IOException {
-                if (ref == null || ref.uri() == null || ref.uri().toURI() == null) {
-                    return null;
-                }
-                Path path = Paths.get(ref.uri().toURI());
-                return Long.valueOf(Files.size(path));
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                return ResourceAccessDecision.allow();
             }
         };
     }
 
-    private static ResourceHarbor createFileHarbor() {
-        ExtractionRegistry registry = new ExtractionRegistry();
-        registry.register(new PlainTextExtractor());
-        registry.register(new MarkdownTextExtractor());
-        return new DefaultResourceHarbor(
-                DefaultResourceConnectorRegistry.of(new FileSystemResourceConnector()),
-                new SimpleContentDetector(),
-                registry);
+    private static PatternResourcePolicy allowTextRule() {
+        return new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                "allow-txt", Arrays.asList("file"), Arrays.asList("**/*.txt"),
+                Collections.<String>emptyList(), Long.MAX_VALUE)));
     }
+
+    private static PatternResourcePolicy allowAllFiles() {
+        return new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                "allow-all", Arrays.asList("file"), Arrays.asList("**/*"),
+                Collections.<String>emptyList(), Long.MAX_VALUE)));
+    }
+
+    // --- Adapter wiring: deigma → ContentInspector port ---
 
     private static ContentInspector createDeigmaInspector() {
         final SimpleContentDetector detector = new SimpleContentDetector();
@@ -599,53 +564,6 @@ public class WalkingSkeletonIntegrationTest {
                 return InspectionResult.success(detectedType.mimeType(), textBlocks);
             }
         };
-    }
-
-    private static final class HarborBridge implements RawResourceProvider, ContentInspector {
-        private final ResourceHarbor harbor;
-        private HarborInspection lastInspection;
-
-        private HarborBridge(ResourceHarbor harbor) {
-            this.harbor = harbor;
-        }
-
-        @Override
-        public FetchedResource fetch(VirtualResourceRef ref) throws IOException {
-            HarborResult<HarborInspection> result = harbor.inspect(new HarborRequest(ref));
-            if (!result.isSuccess()) {
-                throw new IOException(result.errorMessage());
-            }
-            lastInspection = result.value();
-            return new FetchedResource(
-                    lastInspection.rawResource().content().bytes(),
-                    lastInspection.rawResource().filename(),
-                    lastInspection.rawResource().content().sizeBytes());
-        }
-
-        @Override
-        public InspectionResult inspect(VirtualResourceRef ref, byte[] content, String filenameHint) {
-            if (lastInspection == null || !lastInspection.rawResource().ref().equals(ref)) {
-                return InspectionResult.failure("No Harbor inspection available for resource: " + ref);
-            }
-            if (!lastInspection.extractionResult().isSuccess()) {
-                return InspectionResult.failure(lastInspection.extractionResult().errorMessage());
-            }
-            List<String> textBlocks = new ArrayList<String>();
-            for (ExtractedBlock block : lastInspection.extractionResult().document().blocks()) {
-                textBlocks.add(block.text());
-            }
-            return InspectionResult.success(
-                    lastInspection.detectedContentType().mimeType(), textBlocks);
-        }
-
-        @Override
-        public Long probeSizeBytes(VirtualResourceRef ref) throws IOException {
-            if (ref == null || ref.uri() == null || ref.uri().toURI() == null) {
-                return null;
-            }
-            Path path = Paths.get(ref.uri().toURI());
-            return Long.valueOf(Files.size(path));
-        }
     }
 
     private VirtualResourceRef fileRef(File file) {

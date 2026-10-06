@@ -12,10 +12,19 @@ import com.aresstack.corenth.astu.VirtualResourceRef;
 public interface ResourcePolicy {
 
     /**
+     * Sentinel passed as {@code sizeBytes} when the policy is evaluated before the content
+     * has been acquired and its size is therefore not yet known (the mediated access
+     * contract offers no size probe yet, see #5/#33). Implementations must not treat it as
+     * an empty resource; size limits are enforced in a second evaluation with the real size.
+     */
+    long SIZE_UNKNOWN = -1L;
+
+    /**
      * Evaluates whether the given resource should be accepted.
      *
      * @param ref       the resource reference
-     * @param sizeBytes the content size in bytes
+     * @param sizeBytes the content size in bytes, or {@link #SIZE_UNKNOWN} when evaluated
+     *                  before acquisition
      * @return the policy decision with reason
      */
     PolicyReason evaluate(VirtualResourceRef ref, long sizeBytes);

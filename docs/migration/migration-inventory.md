@@ -1,6 +1,6 @@
 # MainframeMate → Corenth — Master-Migrationsinventar
 
-**Stand:** Codeprüfung 2026-07-19 gegen `main` @ `122f999` ("Add trusted MVS session auth adapter", 2026-06-17); Tracker-, Headless- und Lückenbereinigung aktualisiert am 2026-07-19
+**Stand:** Codeprüfung 2026-07-19 gegen `main` @ `122f999` ("Add trusted MVS session auth adapter", 2026-06-17); Tracker-, Headless- und Lückenbereinigung aktualisiert am 2026-07-19; Session 0 (2026-10-06): #10 Slice 1 umgesetzt, ADR-0001, Produktionsreife-Aussagen zu KeePassRPC, FTP/MVS und CI präzisiert
 **Zweck:** Eine einzige, laufend pflegbare Landkarte: Welcher MainframeMate-Referenzbestand (`research/`, ~1.400 Java-Dateien) ist in welcher Form in der Corenth-Zielarchitektur angekommen, was ist bewusst ausgeschlossen, was steht aus. Ergänzt die modulspezifischen Inventare, ersetzt sie nicht.
 
 Leitprinzip aus [mainframemate-migration.md](mainframemate-migration.md):
@@ -35,9 +35,11 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | `exedra`/`katagogion` ↛ `tamias` | ArchUnit `CLIENT_ADAPTERS_MUST_NOT_BYPASS_RESOURCE_POLICY` | ✅ erzwungen |
 | Rollenreinheit holkas/deigma/tamias/anagraphai/exedra | je eigene ArchUnit-Regel | ✅ erzwungen |
 | Raw `SecretMaterial` nur in `adyton` + vertrauenswürdigen Secret-Adaptern | ArchUnit Secret-Containment-Regeln | ✅ erzwungen |
-| **Mediated bronze access als Primärpfad** | — | ⚠️ **nur in Tests verdrahtet, kein produktiver Kompositionspunkt** |
+| `acropolis` ↛ `MediatedResourceService`/`AcquisitionPort`/`holkas` (Lifecycle nur über `MediatedResourceAccess`) | ArchUnit `ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS` | ✅ erzwungen (seit #10 Slice 1) |
+| Vollständige Modulabdeckung der Architekturtests | Konfigurations-Guard in `architecture-tests/build.gradle` (nicht gelistetes Projekt bricht den Build) | ✅ erzwungen |
+| **Mediated bronze access als Primärpfad** | Lifecycle liest seit #10 Slice 1 ausschließlich über `MediatedResourceAccess` | 🟡 **Lifecycle-Seite umgesetzt; weiterhin nur in Tests komponiert, kein produktiver Kompositionspunkt** |
 
-**Zentrale Lücke:** Es fehlt keine Klasse der Kette, sondern die produktive Komposition. `MediatedResourceService` (Chalcotheca-Schalter) und `ResourceLifecycleCoordinator` (Indexing-Skeleton) existieren beide, werden aber ausschließlich von Tests instanziiert (`MediatedHolkasFileSliceTest`, `WalkingSkeletonIntegrationTest`). Zudem fehlt im vermittelten Datenfluss eine Adyton-gestützte Access-Preparation-Station für authentifizierungspflichtige externe Beschaffung. Issue #10 verlangt nun außerdem vor dem Bootstrap-Code eine explizite Entscheidung über dessen neutralen Modulort; `proasteion`-Root und eine ausschließlich Exedra/Swing-gebundene Komposition sind ausgeschlossen. → Nächste Schritte in §5.
+**Zentrale Lücke (Stand Session 0):** Der Lifecycle (`ResourceLifecycleCoordinator`) beschafft seit #10 Slice 1 nur noch über den Chalcotheca-Vertrag `MediatedResourceAccess` (implementiert von `MediatedResourceService`); der frühere `RawResourceProvider`-Direktpfad ist entfernt. Was weiterhin fehlt, ist die produktive Komposition: Schalter und Lifecycle werden ausschließlich von Tests instanziiert — mit echten Holkas-/Deigma-Adaptern und Permit-all-Testpolicy in `MediatedHolkasFileSliceTest` (Schalter), `MediatedAccessWalkingSkeletonTest` und `WalkingSkeletonIntegrationTest` (Schalter + Lifecycle); `MediatedLifecycleCoordinatorTest` prüft nur Vertrag und Entscheidungsabbildung gegen Fakes —, es gibt keine produktive `ResourceAccessPolicy`-Implementierung und keinen produktiven Deigma→`ContentInspector`-Adapter, und die Adyton-gestützte Access-Preparation-Station für authentifizierungspflichtige Beschaffung existiert nicht (`REQUIRE_AUTH` endet derzeit als `DENIED`). Der Ort des Kompositionspunkts ist in [ADR-0001](../adr/0001-composition-root.md) entschieden (`proasteion:application`, Umsetzung in #10 Slice 2). Offen bleibt außerdem die Konsolidierung der drei invalidierungslosen Service-Caches gegen die #33-Records und die #5-Invalidierung (dokumentiert in `MediatedResourceService` und `astu/acropolis/chalcotheca/README.md`). Zwei Garantien des alten Direktpfads sind durch Slice 1 bis dahin geschwächt und als `knownGap_…`-Tests festgehalten: zu große Ressourcen werden erst nach der Beschaffung abgelehnt und bleiben im Schalter-Cache; geänderte Quellen werden innerhalb einer Service-Instanz nicht neu gelesen (`UNCHANGED`). → Nächste Schritte in §5.
 
 ---
 
@@ -48,10 +50,10 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | research/-Quelle | Umfang | Corenth-Ziel | Status | Issue | Detailinventar |
 | --- | --- | --- | --- | --- | --- |
 | `core/files/auth`, `app/util` (CredentialStore, SessionCipher, Crypto-Provider) | ~16 | `adyton` | ✅ migriert (Boundary, Broker, Lease, Cache, Strategien) | #1/#14 ✔ | [adyton-inventory](mainframemate-adyton-inventory.md) |
-| `app/util/KeePassRpcClient`, `KeePassProvider` (RPC-Teil) | ~3 | `proasteion:platform:security-keepassrpc` | ✅ migriert (`KeePassRpcSecretMaterialProvider`) | — | — *(Inventar fehlt)* |
+| `app/util/KeePassRpcClient`, `KeePassProvider` (RPC-Teil) | ~3 | `proasteion:platform:security-keepassrpc` | 🟡 teilweise — Adapter-Hülle vorhanden (`KeePassRpcSecretMaterialProvider` implementiert `SecretMaterialProvider`, ArchUnit-vertrauenswürdig), **aber kein bewiesener produktiver Auth-Pfad:** `ReflectiveKeePassRpcSecretLookup` ruft per Reflection `findByRef`/`find`/`get`/`resolve`/`findLogin` auf; die gebündelte `com.aresstack:keepassrpc-java:0.1.0-beta.1` bietet `KeePassRpcCredentialClient.getUserName(String)`/`getPassword(String)` und wird im Modul nirgends importiert. Funktioniert nur gegen Test-Stubs (verifiziert Session 0, `javap` gegen das aufgelöste Jar). Korrektur als eigener kleiner Folge-Slice mit echtem Library-Integrationstest, nicht Teil von #10 | — | — *(Inventar fehlt)* |
 | Interactive-Prompt-, DPAPI-/PowerShell-/AES-Secret-Source-Adapter | ~4+ | vertrauenswürdige `proasteion:platform:security-*`-Adapter hinter Adyton-Ports | ⬜ offen — Prompt zuerst, persistenter Store/DPAPI danach | #43 | [Auth-Analyse §8](../analysis/mainframemate-authentication-flows.md) |
 | `KeePassRpcPairingDialog`, `LoginManager`-Swing-Teile | ~3 | — | 🚫 do-not-copy (UI im Vault verboten) | — | adyton-inventory |
-| `win-proxy`, Proxy-PS-Skripte | ~10 | `proasteion:platform:network(-winproxy)` | ✅ migriert | — | — *(Inventar fehlt)* |
+| `win-proxy`, Proxy-PS-Skripte | ~10 | `proasteion:platform:network(-winproxy)` | 🟡 teilweise — Routenplanung (Platform-Proxy-/Secure-Gateway-Stufen) und Winproxy-Resolver vorhanden; kein produktiver Transport nutzt einen `NetworkRoutePlan`, Winproxy-Modul ohne Tests | — | — *(Inventar fehlt)* |
 
 ### 2.2 Ressourcenmodell, Archiv, Policy, Orchestrierung
 
@@ -61,7 +63,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | `app/ui/VirtualResource*` (UI+Backend-State vermischt) | ~4 | — | 🚫 do-not-copy | — | astu-inventory |
 | `archive` (CacheRepository, ArchiveRun, Hashing, Snapshots) | 6 | `chalcotheca` (Bronze-Modell, ResourceArchive, MediatedResourceService) | 🟡 teilweise — In-Memory ja; **Resource Records, Versionierung und Lifecycle-State offen** | #33 offen | — *(Inventar fehlt)* |
 | `indexing/model/IndexSource` (scope, patterns, depth, size, changeDetection …) | ~7 | `tamias` | 🟡 teilweise — AccessPolicy + `IndexingRule`/Pattern ja; **ChangeDetectionStrategy, CacheInvalidationPolicy, ResourceScope/Depth/Size fehlen** | #5 neu zugeschnitten | — *(Inventar fehlt)* |
-| `indexing/service/IndexingPipeline`, `IndexRunStatus` | ~7 | `acropolis` (produktive Mediated-Komposition + Run/Plan/Step/Status) | ⬜ offen — Coordinator ist Walking Skeleton; produktive Komposition und Run-Modell fehlen | #10 neu formuliert; Bootstrap-Ort explizit zu entscheiden | [Plan PR 5](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
+| `indexing/service/IndexingPipeline`, `IndexRunStatus` | ~7 | `acropolis` (produktive Mediated-Komposition + Run/Plan/Step/Status) | 🟡 teilweise — Slice 1 erledigt: Coordinator liest nur über `MediatedResourceAccess`, Direktpfad entfernt, ArchUnit-Regel; Bootstrap-Ort in ADR-0001 entschieden; produktive Komposition (Slice 2), Adyton-Station (Slice 3) und Run-Modell (Slice 4) fehlen | #10 | [ADR-0001](../adr/0001-composition-root.md), [Plan PR 5](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
 | `indexing/connector/SourceScanner` (scan → fetch → process) | ~4 | `emporion` (ResourceHarbor, HarborRequest/Result/Inspection) | ✅ migriert (vereinfachte Harbor-Pipeline) | #15 geschlossen | — *(Inventar fehlt)* |
 
 ### 2.3 Connectors (holkas) & Extraktion (deigma)
@@ -70,7 +72,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | --- | --- | --- | --- | --- | --- |
 | `core/files/api` (FileService, FileNode, FilePayload) | ~6 | `holkas` SPI (ResourceConnector[Registry], Listing, ReadMode, RawResource*) | ✅ migriert | #8 geschlossen | [Plan PR 2](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
 | `files/impl/local` | ~4 | `holkas` `FileSystemResourceConnector` | ✅ migriert | #8 geschlossen | — |
-| `files/impl/ftp` + MVS (CommonsNet, MvsPathDialect, Listing, QuoteNormalizer) | ~14 | `holkas/ftp` + `holkas/mvs` + adyton-Strategie (`MvsFtpAuthenticationStrategy`) | 🔧 in Arbeit — Session/AccessHandle/Dialekt vorhanden | #8 geschlossen; Folgeslices separat | — *(Inventar fehlt — anlegen, dient als Vorlage für NDV)* |
+| `files/impl/ftp` + MVS (CommonsNet, MvsPathDialect, Listing, QuoteNormalizer) | ~14 | `holkas/ftp` + `holkas/mvs` + `MvsFtpAuthenticationStrategy` (liegt in `proasteion:platform:security-keepassrpc`, nicht in adyton) | 🟡 teilweise — **architektonisch modellierter und gegen Fakes getesteter FTP/MVS-Pfad, aber noch kein produktiver FTP-Transport:** MVS-Adressmodell, `FtpMvsResourceConnector`, `AccessBroker`/`AuthenticationStrategy`, `FtpAccessHandle`, `FtpClientSession`/`FtpClientSessionFactory`/`MvsFtpSessionAuthenticator` existieren nur als Ports plus Test-Fakes; keine Implementierung außerhalb von Tests, kein commons-net in einem Gradle-Modul (verifiziert Session 0). Ein echter Transport ist Voraussetzung für #35 und für jeden Live-Test | #8 geschlossen; Transport-Slice fehlt als Issue | — *(Inventar fehlt — anlegen, dient als Vorlage für NDV)* |
 | `files/impl/ftp/jes` (JES Submit/Spool) | ~3 | `holkas` (JES über vorhandenen `FtpAccessHandle`) | ⬜ offen | #35 | Auth-Analyse §2/§8 |
 | `ndv/**`, `files/impl/ndv` | **172** | `holkas`-Adapter + adyton `NdvAuthenticationStrategy`/`NdvAccessHandle` | ⬜ offen — größter unmigrierter Connector | #34 | Auth-Analyse §2/§8 |
 | `mail` (lokale PST/OST) | 6 | `holkas` mail + `deigma` Attachments | ⬜ offen — bewusst ohne spekulativen Auth-Pfad | #36 | deigma-inventory |
@@ -95,7 +97,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | --- | --- | --- | --- | --- | --- |
 | `ui`-Shell (MainFrame, Drawer, ToolTabRegistry, Settings-Shell), `toolbar-kit`, `event` | ~254 | `exedra` (generisches Shell-Framework) | ✅ migriert — **eingefroren**, Business-Panels bewusst nicht | #28/#29 ✔, #30 geschlossen | exedra/README |
 | Thin-Adapter-Grenze für Business-UI | — | `exedra` bleibt austauschbarer Adapter; `EXEDRA_MUST_STAY_THIN_UI_SHELL` | ✅ dokumentiert und erzwungen | #11 geschlossen | Plan „Korrektur zu #30/#11“ |
-| Exedra Headless-Tests | 50 Testfälle | leichtgewichtige Swing-Tests laufen headless; zwei displaypflichtige Tests besitzen Guards | ✅ verifiziert: 48 pass / 2 skip; realer CI-Lauf noch bestätigen | #40 / PR #41 WIP | [Headless-Verifikation](../analysis/exedra-headless-test-verification.md) |
+| Exedra Headless-Tests | 50 Testfälle | leichtgewichtige Swing-Tests laufen headless; zwei displaypflichtige Tests besitzen Guards | ✅ verifiziert: 48 pass / 2 skip, durch CI-Lauf 8 auf `main` und Lauf 9 auf PR #46 (`pull_request`) bestätigt, Skips namentlich in der Summary | #40 erfüllt; PR #41 redundant, wird nicht gemergt | [Headless-Verifikation](../analysis/exedra-headless-test-verification.md), [CI-Stand](../analysis/ci-build-test-gap.md) |
 | `ui`-Business-Panels, Commands, Editor-Integration | (in obigem) | — | 🚫 vorerst nicht — erst nach stabilen Use-Case-Ports | bei Bedarf neue kleine Issues | — |
 
 ### 2.6 Ohne definiertes Corenth-Ziel — Entscheidung in #44
@@ -122,8 +124,8 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | PR 2 | `holkas` Connector-SPI (#8) | ✅ erledigt; #8 geschlossen, Rest in #34–#39 |
 | PR 3 | `emporion` Harbor-Pipeline (#15) | ✅ erledigt; #15 geschlossen |
 | PR 4 | `tamias` IndexingPolicy/ChangeDetection/CacheInvalidation (#5) | 🟡 teilweise; #5 auf Restarbeit neu zugeschnitten, abhängig von #33 |
-| PR 5 | `acropolis` Run/Plan/Step/Status (#10) | ⬜ offen; produktive Komposition vor Run-Modell; neutraler Bootstrap-Ort vor Implementierung zu dokumentieren; kein Headless-Fix-Blocker |
-| PR 6 | FTP/MVS/JES als erster echter Connector | 🔧 FTP/MVS vorhanden; JES separat in #35 |
+| PR 5 | `acropolis` Run/Plan/Step/Status (#10) | 🟡 Slice 1 (mediated Beschaffung) umgesetzt, Bootstrap-Ort in ADR-0001 dokumentiert; produktive Komposition (Slice 2) vor Run-Modell; kein Headless-Fix-Blocker |
+| PR 6 | FTP/MVS/JES als erster echter Connector | 🟡 FTP/MVS nur als Ports, `FtpAccessHandle` und Test-Fakes modelliert, kein produktiver FTP-Transport (s. §2.3); JES separat in #35, setzt den Transport-Slice voraus |
 | PR 7–9 | `pinakes` / `propylaea` / `katagogion` ports-first (#7/#3/#12) | ⬜ offen |
 
 ---
@@ -133,7 +135,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | Issue | Befund | Ausgeführte Aktion |
 | ---: | --- | --- |
 | #20, #27, #30 | zeichengleiche Duplikate von #18, #24, #28; Deliverables in `main` | als Duplikate geschlossen |
-| #8 | Connector-SPI sowie local/FTP/MVS vorhanden; Rest war zu breit gebündelt | geschlossen; ersetzt durch #34–#39 |
+| #8 | Connector-SPI und `file:`-Connector vorhanden; FTP/MVS nur als Ports plus Test-Fakes ohne produktiven Transport (§2.3); Rest war zu breit gebündelt | geschlossen; ersetzt durch #34–#39 — der FTP-Transport-Slice ist dabei durch kein Issue abgedeckt und muss separat angelegt werden |
 | #11 | Thin-Adapter-Regel implementiert, dokumentiert und per ArchUnit erzwungen | geschlossen |
 | #15 | Harbor-Boundary implementiert | geschlossen |
 | #5 | teilweise erledigt, alte Beschreibung zu breit | auf ChangeDetection/Invalidation/Scope/Depth/Size neu zugeschnitten |
@@ -151,7 +153,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | #37 | MediaWiki | Token-Login → wiederverwendbarer Cookie-/Session-Handle |
 | #38 | Confluence | getrennte Basic- und Windows-MY-mTLS-Strategien |
 | #39 | SharePoint | SSO-first, Credentials/Fallback nur kontrolliert und isoliert |
-| #40 | Exedra Headless-CI-Verifikation | nicht blockierend für #10; erwartete Skips sichtbar machen; PR #41 WIP |
+| #40 | Exedra Headless-CI-Verifikation | nicht blockierend für #10; Skips sind seit `build.yml` in der Summary sichtbar; PR #41 redundant (nicht mergen) |
 | #42 | Deigma-Schwer-Extraktoren | PDF/DOCX/XLSX/HTML/strukturierte Records; schwere Bibliotheken isoliert; vor/parallel zu #36 |
 | #43 | Adyton Secret-Source-Adapter | interaktiver Provider zuerst, verschlüsselter Store/DPAPI danach; KeePassRPC bleibt Peer |
 | #44 | Research-Disposition | reines Entscheidungs-Issue für §2.6; beeinflusst insbesondere #12/wd4j |
@@ -164,7 +166,7 @@ Auffällig: Ab Juni wechselte der Workflow von Copilot-Issue+PR auf Direkt-Commi
 
 ### Strang A — kritischer Lifecycle-Pfad
 
-1. **#33 und #10 erste Kompositionsslices parallel:** Chalcotheca Resource Records/Persistenz können unabhängig von der Umstellung des `ResourceLifecycleCoordinator` auf `MediatedResourceService`/`AcquisitionPort` beginnen. Vor dem produktiven Bootstrap-Code muss #10 den neutralen Modulort dokumentieren; bevorzugt ein kleines äußeres Application-/Bootstrap-Modul statt `proasteion`-Root oder exklusiver Exedra-Komposition.
+1. **#33 und #10 Slice 2 parallel:** Die Umstellung des `ResourceLifecycleCoordinator` auf `MediatedResourceAccess` (#10 Slice 1) und die Entscheidung über den Bootstrap-Ort ([ADR-0001](../adr/0001-composition-root.md): `proasteion:application`) sind erledigt. Chalcotheca Resource Records/Persistenz (#33) und der produktive Kompositionspunkt (#10 Slice 2) können nun unabhängig voneinander beginnen; Slice 2 muss die erste produktive `ResourceAccessPolicy` explizit wählen und das neue Modul in die ArchUnit-Abdeckung aufnehmen. Die Cache-Konsolidierung des Schalters erfolgt erst gegen den #33-Vertrag.
 2. **`tamias` vervollständigen (#5):** ChangeDetectionStrategy + CacheInvalidationPolicy + Scope/Depth/Size auf Basis der Digests/Versionen aus #33.
 3. **Run-/Outcome-Modell (#10, danach):** Run, Plan, Step, Outcome, Summary und Failure extrahieren; `UNCHANGED`/Tombstone mit #33/#5 integrieren.
 
@@ -172,12 +174,12 @@ Auffällig: Ab Juni wechselte der Workflow von Copilot-Issue+PR auf Direkt-Commi
 
 4. **Deigma-Schwer-Extraktoren (#42):** nach #10s erstem produktiven Pfad, vor oder parallel zu Mail; damit PDF/Office/HTML und Attachments nicht am Plaintext-/Markdown-Limit enden.
 5. **Connector-Reihenfolge:** Mail (#36) zuerst als risikoarmer lokaler Realtest des vollständigen Lifecycle-Pfads; danach NDV (#34), JES (#35) und getrennt Wiki (#37), Confluence (#38), SharePoint (#39).
-6. **Weitere Secret-Quellen (#43):** interaktiven, headless-testbaren Prompt-Provider zuerst; persistente/DPAPI-Adapter danach. Für den ersten authentifizierten #10-Slice reicht vorhandenes KeePassRPC.
+6. **Weitere Secret-Quellen (#43):** interaktiven, headless-testbaren Prompt-Provider zuerst; persistente/DPAPI-Adapter danach. Für den ersten authentifizierten #10-Slice (Slice 3) reicht das vorhandene KeePassRPC **nicht** ohne Weiteres: seine Lookup-Bindung an `keepassrpc-java` ist nicht funktionsfähig (§2.1). Entweder diese Bindung in einem kleinen Folge-Slice mit Library-Integrationstest korrigieren oder den #43-Prompt-Provider als ersten authentifizierten Pfad nutzen.
 
 ### Parallel / nachrangig
 
 7. **Research-Disposition (#44):** §2.6 vollständig auf `MIGRATE`, `EXTERNAL` oder `DO_NOT_MIGRATE` heben; wd4j-Bezug zu #12 ausdrücklich entscheiden.
-8. **Exedra-CI-Verifikation (#40 / PR #41, parallel und nicht blockierend):** realen Gradle-/JUnit-Lauf bestätigen und erwartete Skips sichtbar machen. Keine zusätzlichen Guards an leichtgewichtigen Swing-Tests.
+8. **CI als Merge-Gate (#45 / #40):** PR-Lauf nachgewiesen (PR #46, Lauf 9: 394 Tests, 0 Fehler, 2 Skips); jetzt Required Check `Build and test (Java 8 target)` im Ruleset aktivieren, #41 ohne Merge schließen, #40 schließen. Keine zusätzlichen Guards an leichtgewichtigen Swing-Tests. Stand und Begründung: `docs/analysis/ci-build-test-gap.md`.
 9. **#7/#3/#12** bleiben bis nach dem tragfähigen Lifecycle und den priorisierten Adapter-Slices ports-first im Backlog.
 
 Branch-Aufräumarbeiten und die Exedra-CI-Verifikation sind unabhängig von #10 und können parallel erfolgen. Der zuvor angenommene Headless-Codefix entfällt als Blocker. Bei Squash-Merges darf die Löschentscheidung nicht allein auf `git branch --merged` beruhen, sondern auf PR-Merge-Status plus inhaltsbasiertem Vergleich gegen `main`.

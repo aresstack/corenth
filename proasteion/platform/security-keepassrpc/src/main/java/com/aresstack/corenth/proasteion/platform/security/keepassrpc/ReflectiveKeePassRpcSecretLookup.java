@@ -7,11 +7,16 @@ import java.lang.reflect.Method;
 import java.util.Map;
 
 /**
- * Reflection-based bridge for the external KeePassRPC client object.
+ * Reflection-based bridge for a KeePassRPC-like client object exposing
+ * {@code findByRef/find/get/resolve(String)} or {@code findLogin(String,String)}.
  * <p>
- * This keeps the Corenth boundary stable while the concrete KeePassRPC client
- * API can evolve independently. The adapter accepts returned objects exposing
- * username/password via common JavaBean-style methods or a {@link Map}.
+ * It does <b>not</b> support the bundled
+ * {@code com.aresstack.keepassrpc.client.KeePassRpcCredentialClient}
+ * ({@code getUserName(String)}/{@code getPassword(String)}); against that client
+ * every lookup ends in {@link SecretUnavailableException}. A typed lookup against
+ * the real client is still required for production use; currently this bridge is
+ * exercised only by test stubs. Returned objects may expose username/password via
+ * common JavaBean-style methods or a {@link Map}.
  */
 public final class ReflectiveKeePassRpcSecretLookup implements KeePassRpcSecretLookup {
 

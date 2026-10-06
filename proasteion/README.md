@@ -19,6 +19,7 @@ Concrete adapter families remain independently understandable and depend only on
 - `emporion:holkas` — raw acquisition connectors behind Chalcotheca's `AcquisitionPort`; clients must not call Holkas directly.
 - `emporion:deigma` — shallow content detection and extraction; it must not own transport, archive, policy or indexing.
 - `platform:*` — operating-system and infrastructure adapters such as network routing and trusted secret providers.
+- `application` — *planned* (#10 Slice 2, [ADR-0001](../docs/adr/0001-composition-root.md)): the neutral outer bootstrap module that wires policies, archive, connectors, extractors, index and lifecycle for hosts such as Exedra, CLI or test hosts; it must stay free of UI technology and must not be depended upon by the inner city.
 
 These rules are enforced in `architecture-tests`, including the prohibition on inner-city dependencies on `proasteion` and the mediated-resource-access rules for client adapters.
 

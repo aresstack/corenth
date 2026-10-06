@@ -189,11 +189,11 @@ Platform-specific backends and protocol strategies should be implemented as
 separate adapter modules. They must not be hardwired into this core module.
 
 Deferred adapter work (from the analysis):
-- FTP `AuthenticationStrategy` + `FtpAccessHandle`
+- FTP `AuthenticationStrategy` + `FtpAccessHandle` — done (June 2026): `MvsFtpAuthenticationStrategy` in `proasteion:platform:security-keepassrpc`, `FtpAccessHandle` in `proasteion:emporion:holkas`; still open: a production FTP transport implementing the `MvsFtpSessionAuthenticator` SPI
 - NDV `AuthenticationStrategy` + `NdvAccessHandle`
 - Wiki `AuthenticationStrategy` + `WikiAccessHandle`
 - Confluence Basic Auth / mTLS strategies
-- KeePassRPC adapter implementing `CredentialProvider`
+- KeePassRPC adapter: exists as `KeePassRpcSecretMaterialProvider` in `proasteion:platform:security-keepassrpc` (implements `SecretMaterialProvider`, not `CredentialProvider`); still open: binding its lookup to the real `keepassrpc-java` `KeePassRpcCredentialClient` (`getUserName`/`getPassword`) — today only stub-tested
 - DPAPI/PowerShell adapter implementing `CredentialProvider`
 - AES file-key adapter implementing `CredentialProvider`
 - Interactive prompt adapter (UI module, not in adyton)

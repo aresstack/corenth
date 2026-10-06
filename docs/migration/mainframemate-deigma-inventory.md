@@ -39,7 +39,7 @@ All files listed in the issue were reviewed from the `research/` directory.
 | `ingestion/infrastructure/render/DocumentRenderer.java` | do-not-copy | — | UI rendering. Not part of extraction boundary. |
 | `ingestion/infrastructure/render/SwingPreviewPanel.java` | do-not-copy | — | Swing UI. Explicitly excluded per issue. |
 | `ingestion/infrastructure/render/HtmlPreviewRenderer.java` | do-not-copy | — | UI rendering for HTML preview. |
-| `ingestion/usecase/IngestDocumentUseCase.java` | adapt | (deferred) | Orchestration use case. Will be adapted when walking skeleton integrates deigma. |
+| `ingestion/usecase/IngestDocumentUseCase.java` | adapt | `acropolis:ResourceLifecycleCoordinator` (+ `emporion:DefaultResourceHarbor`) | Orchestration use case; deigma is reached through the `ContentInspector` port (adapter currently in test composition, production adapter comes with the #10 Slice 2 composition point). Further evolution (run model) tracked in #10. |
 | `ingestion/usecase/ExtractContentUseCase.java` | adapt | (deferred) | Content extraction orchestration. Pattern preserved in registry + extractor design. |
 | `files/codec/RecordStructureCodec.java` | adapter-candidate | (deferred) | Fixed-format file parsing concept. Useful for mainframe record structures. Deferred. |
 | `files/ftpconfig/FtpTransferConfig.java` | do-not-copy | — | Transport configuration. Belongs in proasteion connectors, not deigma. |

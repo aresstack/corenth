@@ -30,11 +30,13 @@ The full mode runs Gradle offline with `clean build`.
 
 The Exedra suite is designed to run on a headless Linux system. Lightweight Swing tests remain active; only the two display-dependent tests use existing JUnit `Assume` guards and are expected to be skipped when `GraphicsEnvironment.isHeadless()` is true.
 
-A normal headless run should therefore report approximately:
+A normal headless run of the Exedra module alone (`./gradlew :proasteion:exedra:test`) should therefore report approximately:
 
 ```text
 48 passed, 2 skipped, 0 failed
 ```
+
+The full `clean build` across all modules reports a larger total (394 tests on the Session 0 branch, 0 failures) with the same 2 skips, which are these Exedra tests.
 
 Minimal container images still need working AWT font support. On Debian/Ubuntu-derived systems, install or provide at least:
 

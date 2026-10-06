@@ -68,7 +68,7 @@ Die UI löst nur Anwendungsfälle aus und zeigt Ergebnisse an.
 | `anagraphai` | Lucene-Index, LexicalDocument, LexicalChunk, OpenNLP/BreakIterator-Chunking vorhanden | #27 ist weitgehend erfüllt. |
 | `chalcotheca` | Bronze-Modelle, ResourceArchive, MediatedResourceService vorhanden | Gute Richtung: Zugriff über Tamias vermitteln, nicht direkt auf Connectoren. |
 | `tamias` | ResourcePolicy/AccessPolicy, PatternResourcePolicy, Reason-Codes teilweise vorhanden | Muss um IndexingPolicy, ChangeDetection und CacheInvalidation erweitert werden. |
-| `acropolis` | ResourceLifecycleCoordinator und Walking-Skeleton vorhanden | Funktioniert als Start, sollte aber in Run/Plan/Step-Modell zerlegt werden. |
+| `acropolis` | ResourceLifecycleCoordinator und Walking-Skeleton vorhanden | Funktioniert als Start; zuerst Beschaffung auf den Vertrag `MediatedResourceAccess` umstellen (#10 Slice 1, umgesetzt 2026-10-06) und produktiv komponieren (#10 Slice 2/3, ADR-0001), erst danach in ein kleines Run-/Outcome-Modell zerlegen (#10 Slice 4/5). |
 | `proasteion` | Root-Modul leer | Gemeinsame Adapterbegriffe und Dependency-Regeln fehlen. |
 | `emporion` | Koordinationsmodul leer | Holkas+Deigma-Harbor-Pipeline fehlt. |
 | `katagogion` | leer | Plugin-/Tool-/MCP-Ports fehlen. |
@@ -306,6 +306,8 @@ Akzeptanz:
 
 ### PR 5 — `acropolis` Lifecycle-Orchestrierung zerlegen (#10)
 
+*Aktualisierung 2026-10-06: PR 5 wurde in #10 neu geschnitten — Slice 1 Mediated Acquisition über `MediatedResourceAccess` (umgesetzt, vor PR 4/#5), Slice 2 Kompositionspunkt `proasteion:application` (ADR-0001, parallel zu #33), Slice 3 Adyton-Station, danach Slice 4 kleines Run-/Outcome-Modell und Slice 5 Integration mit #33/#5. Die folgende Klassenliste gilt nicht mehr als Zielbild; maßgeblich ist `migration-inventory.md` §5.*
+
 Ziel: Den vorhandenen `ResourceLifecycleCoordinator` nicht weiter aufblasen, sondern in kleine, testbare Schritte zerlegen.
 
 Ergänzen:
@@ -539,6 +541,8 @@ Minimaler Backend-Slice:
 7. danach FTP/MVS/JES als erster echter externer Connector
 ```
 
+*Aktualisierung 2026-10-06: Schritte 1–3 erledigt; Schritt 6 ist #10 Slice 1 (umgesetzt) und kam vor Schritt 4/5. Aktuelle Reihenfolge laut `migration-inventory.md` §5: #10 Slice 2 Kompositionspunkt `proasteion:application` (ADR-0001) parallel zu #33, dann #10 Slice 3 Adyton-Station, dann #5 tamias, dann #10 Slice 4/5 Run-/Outcome-Modell; FTP/MVS/JES erst nach einem produktiven FTP-Transport (heute nur Ports und Test-Fakes).*
+
 ## Wichtige technische Tests aus MainframeMate, die migriert werden sollten
 
 | MainframeMate-Test | Corenth-Zieltest |
@@ -579,8 +583,8 @@ Minimaler Backend-Slice:
 | #13 | Als nächstes umsetzen. Gemeinsame Adaptergrenze und Dependency-Regeln. |
 | #8 | Danach Holkas-SPI stabilisieren, echte Connectoren erst schrittweise. |
 | #15 | Direkt nach Holkas-Core: Emporion als Harbor-Pipeline. |
-| #5 | Tamias um Policy-/Cache-/ChangeDetection-Modell ergänzen. |
-| #10 | Acropolis um Run-/Plan-/Step-/Status-Modell erweitern. |
+| #5 | Nach #33 und #10 Slice 2: Tamias ChangeDetection/Invalidation/Scope ergänzen. |
+| #10 | Zuerst Beschaffung über `MediatedResourceAccess` (Slice 1, umgesetzt), Kompositionspunkt `proasteion:application` (Slice 2, ADR-0001), Adyton-Station (Slice 3); danach kleines Run-/Outcome-Modell (Slice 4/5). |
 | #7 | Pinakes ports-first, keine Runtime-Integration im ersten PR. |
 | #3 | Propylaea model-first, Parser danach adaptieren. |
 | #12 | Katagogion ports-first, MCP/ServiceLoader später konkretisieren. |

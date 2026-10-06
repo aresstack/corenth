@@ -6,19 +6,22 @@ import com.aresstack.corenth.astu.VirtualResourceRef;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeContent;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeListing;
-import com.aresstack.corenth.astu.acropolis.chalcotheca.ContentHasher;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.InMemoryResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceService;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResult;
-import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceDigest;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndexConfig;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LuceneLexicalIndex;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ActorIdentity;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ActorType;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.IndexingRule;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PatternResourcePolicy;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessDecision;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessPolicy;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceOperation;
+import com.aresstack.corenth.proasteion.emporion.holkas.DefaultResourceConnectorRegistry;
 import com.aresstack.corenth.proasteion.emporion.holkas.FileSystemResourceConnector;
-import com.aresstack.corenth.proasteion.emporion.holkas.RawResource;
+import com.aresstack.corenth.proasteion.emporion.holkas.HolkasAcquisitionPort;
 
 import org.junit.Rule;
 import org.junit.Test;
@@ -30,25 +33,27 @@ import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.Charset;
-import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.junit.Assert.*;
 
 /**
- * Smoke test proving the mediated access model works with the existing file:
- * walking skeleton. Exercises:
+ * Smoke test proving the mediated access model works with the real file: connector behind
+ * the Holkas acquisition bridge, and that the lifecycle coordinator runs on top of it.
+ * Exercises:
  * <ul>
- *   <li>MediatedResourceService with a real file-backed AcquisitionPort</li>
- *   <li>READ_CONTENT through the mediated path using the holkas FileSystemResourceConnector</li>
- *   <li>LIST_CHILDREN through the mediated path</li>
- *   <li>Existing walking skeleton path (ResourceLifecycleCoordinator) still compiles and works</li>
+ *   <li>READ_CONTENT through MediatedResourceService backed by HolkasAcquisitionPort</li>
+ *   <li>LIST_CHILDREN through the same mediated path</li>
+ *   <li>ResourceLifecycleCoordinator processing a resource over the mediated contract</li>
  * </ul>
  */
 public class MediatedAccessWalkingSkeletonTest {
 
     private static final Charset UTF_8 = Charset.forName("UTF-8");
+    private static final ActorIdentity ACTOR = new ActorIdentity("smoke-user", ActorType.HUMAN);
 
     @Rule
     public TemporaryFolder tempFolder = new TemporaryFolder();
@@ -59,23 +64,10 @@ public class MediatedAccessWalkingSkeletonTest {
         writeFile(txtFile, "Mediated access content via holkas internally");
 
         BookmarkUri uri = BookmarkUri.parse(txtFile.toURI().toString());
-        ActorIdentity actor = new ActorIdentity("smoke-user", ActorType.HUMAN);
+        MediatedResourceService service = mediatedFileService(new InMemoryResourceArchive());
 
-        ResourceAccessPolicy allowAll = new ResourceAccessPolicy() {
-            @Override
-            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
-                return ResourceAccessDecision.allow();
-            }
-        };
-
-        AcquisitionPort fileAcquisition = createFileAcquisitionPort();
-        InMemoryResourceArchive archive = new InMemoryResourceArchive();
-
-        MediatedResourceService service = new MediatedResourceService(allowAll, fileAcquisition, archive);
-
-        ResourceAccessRequest request = new ResourceAccessRequest(
-                actor, uri, ResourceOperation.READ_CONTENT);
-        MediatedResult<BronzeContent> result = service.readContent(request);
+        MediatedResult<BronzeContent> result = service.readContent(
+                new ResourceAccessRequest(ACTOR, uri, ResourceOperation.READ_CONTENT));
 
         assertTrue("Mediated read should succeed", result.isSuccess());
         String content = new String(result.value().content(), UTF_8);
@@ -92,23 +84,10 @@ public class MediatedAccessWalkingSkeletonTest {
         writeFile(child2, "content b");
 
         BookmarkUri dirUri = BookmarkUri.parse(folder.toURI().toString());
-        ActorIdentity actor = new ActorIdentity("smoke-user", ActorType.HUMAN);
+        MediatedResourceService service = mediatedFileService(new InMemoryResourceArchive());
 
-        ResourceAccessPolicy allowAll = new ResourceAccessPolicy() {
-            @Override
-            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
-                return ResourceAccessDecision.allow();
-            }
-        };
-
-        AcquisitionPort fileAcquisition = createFileAcquisitionPort();
-        InMemoryResourceArchive archive = new InMemoryResourceArchive();
-
-        MediatedResourceService service = new MediatedResourceService(allowAll, fileAcquisition, archive);
-
-        ResourceAccessRequest request = new ResourceAccessRequest(
-                actor, dirUri, ResourceOperation.LIST_CHILDREN);
-        MediatedResult<BronzeListing> result = service.listChildren(request);
+        MediatedResult<BronzeListing> result = service.listChildren(
+                new ResourceAccessRequest(ACTOR, dirUri, ResourceOperation.LIST_CHILDREN));
 
         assertTrue("Mediated listing should succeed", result.isSuccess());
         BronzeListing listing = result.value();
@@ -123,16 +102,13 @@ public class MediatedAccessWalkingSkeletonTest {
     }
 
     @Test
-    public void existingWalkingSkeletonCoordinator_stillFunctions() throws IOException {
-        // Prove the existing ResourceLifecycleCoordinator can still be instantiated
-        // and process a resource — this confirms no API breakage.
+    public void lifecycleCoordinator_runsOverTheMediatedCounter() throws IOException {
         File txtFile = tempFolder.newFile("skeleton-intact.txt");
-        writeFile(txtFile, "Walking skeleton still works after mediated model introduction.");
+        writeFile(txtFile, "Walking skeleton runs through the mediated bronze archive counter.");
 
         VirtualResourceRef ref = new VirtualResourceRef(
                 BookmarkUri.parse(txtFile.toURI().toString()), VirtualResourceKind.FILE);
 
-        RawResourceProvider provider = createRawResourceProvider();
         ContentInspector inspector = new ContentInspector() {
             @Override
             public InspectionResult inspect(VirtualResourceRef r, byte[] content, String filenameHint) {
@@ -142,28 +118,22 @@ public class MediatedAccessWalkingSkeletonTest {
             }
         };
 
-        com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PatternResourcePolicy policy =
-                new com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PatternResourcePolicy(
-                        java.util.Arrays.asList(
-                                new com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.IndexingRule(
-                                        "all", java.util.Arrays.asList("file"),
-                                        java.util.Arrays.asList("**/*"),
-                                        java.util.Collections.<String>emptyList(), Long.MAX_VALUE)));
+        PatternResourcePolicy policy = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                "all", Arrays.asList("file"), Arrays.asList("**/*"),
+                Collections.<String>emptyList(), Long.MAX_VALUE)));
 
         InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        MediatedResourceService counter = mediatedFileService(archive);
 
         File indexDir = tempFolder.newFolder("lucene-idx");
-        com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndexConfig indexConfig =
-                new com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndexConfig(indexDir.toPath());
-        com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LuceneLexicalIndex lexicalIndex =
-                new com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LuceneLexicalIndex(indexConfig);
-
+        LuceneLexicalIndex lexicalIndex = new LuceneLexicalIndex(new LexicalIndexConfig(indexDir.toPath()));
         try {
             ResourceLifecycleCoordinator coordinator = new ResourceLifecycleCoordinator(
-                    provider, inspector, policy, archive, lexicalIndex);
+                    counter, ACTOR, inspector, policy, archive, lexicalIndex);
 
             ProcessingResult result = coordinator.process(ref);
             assertEquals(ProcessingResult.Status.INDEXED, result.status());
+            assertTrue("the lifecycle must have read through the counter", counter.hasCachedContent(ref.uri()));
         } finally {
             lexicalIndex.close();
         }
@@ -171,55 +141,16 @@ public class MediatedAccessWalkingSkeletonTest {
 
     // ── Helpers ──
 
-    private AcquisitionPort createFileAcquisitionPort() {
-        final FileSystemResourceConnector connector = new FileSystemResourceConnector();
-        return new AcquisitionPort() {
+    private static MediatedResourceService mediatedFileService(InMemoryResourceArchive archive) {
+        ResourceAccessPolicy allowAll = new ResourceAccessPolicy() {
             @Override
-            public BronzeContent fetchContent(BookmarkUri uri) throws IOException {
-                VirtualResourceRef ref = new VirtualResourceRef(uri, VirtualResourceKind.FILE);
-                RawResource raw = connector.fetch(ref);
-                byte[] bytes = raw.content().bytes();
-                ResourceDigest digest = ContentHasher.digest(bytes);
-                return new BronzeContent(uri, bytes, digest, System.currentTimeMillis());
-            }
-
-            @Override
-            public BronzeListing listChildren(BookmarkUri uri) throws IOException {
-                File dir = new File(Paths.get(uri.toURI()).toString());
-                File[] files = dir.listFiles();
-                List<BronzeListing.Entry> entries = new ArrayList<BronzeListing.Entry>();
-                if (files != null) {
-                    for (File f : files) {
-                        BookmarkUri childUri = BookmarkUri.parse(f.toURI().toString());
-                        VirtualResourceKind kind = f.isDirectory()
-                                ? VirtualResourceKind.DIRECTORY : VirtualResourceKind.FILE;
-                        entries.add(new BronzeListing.Entry(childUri, f.getName(), kind));
-                    }
-                }
-                return new BronzeListing(uri, entries, System.currentTimeMillis());
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                return ResourceAccessDecision.allow();
             }
         };
-    }
-
-    private RawResourceProvider createRawResourceProvider() {
-        final FileSystemResourceConnector connector = new FileSystemResourceConnector();
-        return new RawResourceProvider() {
-            @Override
-            public FetchedResource fetch(VirtualResourceRef ref) throws IOException {
-                RawResource raw = connector.fetch(ref);
-                return new FetchedResource(
-                        raw.content().bytes(), raw.filename(), raw.content().sizeBytes());
-            }
-
-            @Override
-            public Long probeSizeBytes(VirtualResourceRef ref) throws IOException {
-                if (ref == null || ref.uri() == null || ref.uri().toURI() == null) {
-                    return null;
-                }
-                return Long.valueOf(java.nio.file.Files.size(
-                        java.nio.file.Paths.get(ref.uri().toURI())));
-            }
-        };
+        AcquisitionPort fileAcquisition = new HolkasAcquisitionPort(
+                DefaultResourceConnectorRegistry.of(new FileSystemResourceConnector()));
+        return new MediatedResourceService(allowAll, fileAcquisition, archive);
     }
 
     private void writeFile(File file, String content) throws IOException {

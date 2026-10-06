@@ -19,9 +19,12 @@ package com.aresstack.corenth.adyton;
  * own authentication. In Corenth, the strategy encapsulates the authentication
  * step so the connector never sees the raw secret — only the resulting handle.
  * <p>
- * Examples for later adapter work:
+ * Examples (the FTP one exists as {@code MvsFtpAuthenticationStrategy} in
+ * {@code proasteion:platform:security-keepassrpc}; the others are later adapter work):
  * <ul>
- *   <li>{@code FtpAuthenticationStrategy} → creates an FTP client session</li>
+ *   <li>{@code MvsFtpAuthenticationStrategy} → returns an {@code FtpAccessHandle}; the FTP session
+ *       itself is opened through the adapter's {@code MvsFtpSessionAuthenticator} SPI, which has
+ *       no production implementation yet</li>
  *   <li>{@code WikiAuthenticationStrategy} → performs MediaWiki login, returns cookie handle</li>
  *   <li>{@code HttpBasicAuthenticationStrategy} → creates Authorization header handle</li>
  *   <li>{@code MtlsAuthenticationStrategy} → creates SSLContext handle</li>
