@@ -1,6 +1,6 @@
 # MainframeMate → Corenth — Master-Migrationsinventar
 
-**Stand:** Codeprüfung 2026-07-19 gegen `main` @ `122f999` ("Add trusted MVS session auth adapter", 2026-06-17); Tracker-, Headless- und Lückenbereinigung aktualisiert am 2026-07-19
+**Stand:** Codeprüfung 2026-07-19 gegen `main` @ `122f999` ("Add trusted MVS session auth adapter", 2026-06-17); Tracker-, Headless- und Lückenbereinigung aktualisiert am 2026-07-19; Session 0 (2026-10-06): #10 Slice 1 umgesetzt, ADR-0001, Produktionsreife-Aussagen zu KeePassRPC, FTP/MVS und CI präzisiert
 **Zweck:** Eine einzige, laufend pflegbare Landkarte: Welcher MainframeMate-Referenzbestand (`research/`, ~1.400 Java-Dateien) ist in welcher Form in der Corenth-Zielarchitektur angekommen, was ist bewusst ausgeschlossen, was steht aus. Ergänzt die modulspezifischen Inventare, ersetzt sie nicht.
 
 Leitprinzip aus [mainframemate-migration.md](mainframemate-migration.md):
@@ -35,9 +35,11 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | `exedra`/`katagogion` ↛ `tamias` | ArchUnit `CLIENT_ADAPTERS_MUST_NOT_BYPASS_RESOURCE_POLICY` | ✅ erzwungen |
 | Rollenreinheit holkas/deigma/tamias/anagraphai/exedra | je eigene ArchUnit-Regel | ✅ erzwungen |
 | Raw `SecretMaterial` nur in `adyton` + vertrauenswürdigen Secret-Adaptern | ArchUnit Secret-Containment-Regeln | ✅ erzwungen |
-| **Mediated bronze access als Primärpfad** | — | ⚠️ **nur in Tests verdrahtet, kein produktiver Kompositionspunkt** |
+| `acropolis` ↛ `MediatedResourceService`/`AcquisitionPort`/`holkas` (Lifecycle nur über `MediatedResourceAccess`) | ArchUnit `ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS` | ✅ erzwungen (seit #10 Slice 1) |
+| Vollständige Modulabdeckung der Architekturtests | Konfigurations-Guard in `architecture-tests/build.gradle` (nicht gelistetes Projekt bricht den Build) | ✅ erzwungen |
+| **Mediated bronze access als Primärpfad** | Lifecycle liest seit #10 Slice 1 ausschließlich über `MediatedResourceAccess` | 🟡 **Lifecycle-Seite umgesetzt; weiterhin nur in Tests komponiert, kein produktiver Kompositionspunkt** |
 
-**Zentrale Lücke:** Es fehlt keine Klasse der Kette, sondern die produktive Komposition. `MediatedResourceService` (Chalcotheca-Schalter) und `ResourceLifecycleCoordinator` (Indexing-Skeleton) existieren beide, werden aber ausschließlich von Tests instanziiert (`MediatedHolkasFileSliceTest`, `WalkingSkeletonIntegrationTest`). Zudem fehlt im vermittelten Datenfluss eine Adyton-gestützte Access-Preparation-Station für authentifizierungspflichtige externe Beschaffung. Issue #10 verlangt nun außerdem vor dem Bootstrap-Code eine explizite Entscheidung über dessen neutralen Modulort; `proasteion`-Root und eine ausschließlich Exedra/Swing-gebundene Komposition sind ausgeschlossen. → Nächste Schritte in §5.
+**Zentrale Lücke (Stand Session 0):** Der Lifecycle (`ResourceLifecycleCoordinator`) beschafft seit #10 Slice 1 nur noch über den Chalcotheca-Vertrag `MediatedResourceAccess` (implementiert von `MediatedResourceService`); der frühere `RawResourceProvider`-Direktpfad ist entfernt. Was weiterhin fehlt, ist die produktive Komposition: Schalter und Lifecycle werden ausschließlich von Tests instanziiert (`MediatedHolkasFileSliceTest`, `WalkingSkeletonIntegrationTest`, `MediatedLifecycleCoordinatorTest`), es gibt keine produktive `ResourceAccessPolicy`-Implementierung, und die Adyton-gestützte Access-Preparation-Station für authentifizierungspflichtige Beschaffung existiert nicht (`REQUIRE_AUTH` endet derzeit als `DENIED`). Der Ort des Kompositionspunkts ist in [ADR-0001](../adr/0001-composition-root.md) entschieden (`proasteion:application`, Umsetzung in #10 Slice 2). Offen bleibt außerdem die Konsolidierung der drei invalidierungslosen Service-Caches gegen die #33-Records und die #5-Invalidierung (dokumentiert in `MediatedResourceService` und `astu/acropolis/chalcotheca/README.md`). → Nächste Schritte in §5.
 
 ---
 
@@ -61,7 +63,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | `app/ui/VirtualResource*` (UI+Backend-State vermischt) | ~4 | — | 🚫 do-not-copy | — | astu-inventory |
 | `archive` (CacheRepository, ArchiveRun, Hashing, Snapshots) | 6 | `chalcotheca` (Bronze-Modell, ResourceArchive, MediatedResourceService) | 🟡 teilweise — In-Memory ja; **Resource Records, Versionierung und Lifecycle-State offen** | #33 offen | — *(Inventar fehlt)* |
 | `indexing/model/IndexSource` (scope, patterns, depth, size, changeDetection …) | ~7 | `tamias` | 🟡 teilweise — AccessPolicy + `IndexingRule`/Pattern ja; **ChangeDetectionStrategy, CacheInvalidationPolicy, ResourceScope/Depth/Size fehlen** | #5 neu zugeschnitten | — *(Inventar fehlt)* |
-| `indexing/service/IndexingPipeline`, `IndexRunStatus` | ~7 | `acropolis` (produktive Mediated-Komposition + Run/Plan/Step/Status) | ⬜ offen — Coordinator ist Walking Skeleton; produktive Komposition und Run-Modell fehlen | #10 neu formuliert; Bootstrap-Ort explizit zu entscheiden | [Plan PR 5](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
+| `indexing/service/IndexingPipeline`, `IndexRunStatus` | ~7 | `acropolis` (produktive Mediated-Komposition + Run/Plan/Step/Status) | 🟡 teilweise — Slice 1 erledigt: Coordinator liest nur über `MediatedResourceAccess`, Direktpfad entfernt, ArchUnit-Regel; Bootstrap-Ort in ADR-0001 entschieden; produktive Komposition (Slice 2), Adyton-Station (Slice 3) und Run-Modell (Slice 4) fehlen | #10 | [ADR-0001](../adr/0001-composition-root.md), [Plan PR 5](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
 | `indexing/connector/SourceScanner` (scan → fetch → process) | ~4 | `emporion` (ResourceHarbor, HarborRequest/Result/Inspection) | ✅ migriert (vereinfachte Harbor-Pipeline) | #15 geschlossen | — *(Inventar fehlt)* |
 
 ### 2.3 Connectors (holkas) & Extraktion (deigma)
@@ -122,7 +124,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | PR 2 | `holkas` Connector-SPI (#8) | ✅ erledigt; #8 geschlossen, Rest in #34–#39 |
 | PR 3 | `emporion` Harbor-Pipeline (#15) | ✅ erledigt; #15 geschlossen |
 | PR 4 | `tamias` IndexingPolicy/ChangeDetection/CacheInvalidation (#5) | 🟡 teilweise; #5 auf Restarbeit neu zugeschnitten, abhängig von #33 |
-| PR 5 | `acropolis` Run/Plan/Step/Status (#10) | ⬜ offen; produktive Komposition vor Run-Modell; neutraler Bootstrap-Ort vor Implementierung zu dokumentieren; kein Headless-Fix-Blocker |
+| PR 5 | `acropolis` Run/Plan/Step/Status (#10) | 🟡 Slice 1 (mediated Beschaffung) umgesetzt, Bootstrap-Ort in ADR-0001 dokumentiert; produktive Komposition (Slice 2) vor Run-Modell; kein Headless-Fix-Blocker |
 | PR 6 | FTP/MVS/JES als erster echter Connector | 🔧 FTP/MVS vorhanden; JES separat in #35 |
 | PR 7–9 | `pinakes` / `propylaea` / `katagogion` ports-first (#7/#3/#12) | ⬜ offen |
 
@@ -164,7 +166,7 @@ Auffällig: Ab Juni wechselte der Workflow von Copilot-Issue+PR auf Direkt-Commi
 
 ### Strang A — kritischer Lifecycle-Pfad
 
-1. **#33 und #10 erste Kompositionsslices parallel:** Chalcotheca Resource Records/Persistenz können unabhängig von der Umstellung des `ResourceLifecycleCoordinator` auf `MediatedResourceService`/`AcquisitionPort` beginnen. Vor dem produktiven Bootstrap-Code muss #10 den neutralen Modulort dokumentieren; bevorzugt ein kleines äußeres Application-/Bootstrap-Modul statt `proasteion`-Root oder exklusiver Exedra-Komposition.
+1. **#33 und #10 Slice 2 parallel:** Die Umstellung des `ResourceLifecycleCoordinator` auf `MediatedResourceAccess` (#10 Slice 1) und die Entscheidung über den Bootstrap-Ort ([ADR-0001](../adr/0001-composition-root.md): `proasteion:application`) sind erledigt. Chalcotheca Resource Records/Persistenz (#33) und der produktive Kompositionspunkt (#10 Slice 2) können nun unabhängig voneinander beginnen; Slice 2 muss die erste produktive `ResourceAccessPolicy` explizit wählen und das neue Modul in die ArchUnit-Abdeckung aufnehmen. Die Cache-Konsolidierung des Schalters erfolgt erst gegen den #33-Vertrag.
 2. **`tamias` vervollständigen (#5):** ChangeDetectionStrategy + CacheInvalidationPolicy + Scope/Depth/Size auf Basis der Digests/Versionen aus #33.
 3. **Run-/Outcome-Modell (#10, danach):** Run, Plan, Step, Outcome, Summary und Failure extrahieren; `UNCHANGED`/Tombstone mit #33/#5 integrieren.
 

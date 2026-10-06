@@ -70,31 +70,37 @@ outlook://mailbox/folder/message
 All external access to resources flows through the mediated bronze archive counter:
 
 ```text
-Exedra / Bot / Agent / Plugin / Application Service
-  -> Acropolis / Chalcotheca MediatedResourceService
+Exedra / Bot / Agent / Plugin / Application Service / Acropolis lifecycle
+  -> MediatedResourceAccess contract (Chalcotheca)
+  -> MediatedResourceService (the archive counter)
   -> Tamias ResourceAccessPolicy decision
-  -> Adyton, if credentials or external delegated access are needed
+  -> Adyton, if credentials or external delegated access are needed (planned, #10 Slice 3)
   -> AcquisitionPort (Holkas connector internally)
   -> Chalcotheca stores/updates bronze state
   -> Anagraphai / Pinakes derive indexes
 ```
 
-**Forbidden direction:** `Exedra / Bot / Plugin / Application Service -> Holkas directly`
+**Forbidden direction:** `Exedra / Bot / Plugin / Application Service / Acropolis -> Holkas directly`
 
 This is analogous to the `adyton` rule: Adyton does not hand out passwords; it mediates bounded operations. Likewise, Chalcotheca does not hand out connectors; it mediates bounded resource operations.
+
+Since #10 Slice 1 the Acropolis lifecycle (`ResourceLifecycleCoordinator`) is itself a client of this counter: it reads through the `MediatedResourceAccess` contract and has no direct provider or connector path. ArchUnit enforces this (`ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS`): `acropolis` must not depend on `MediatedResourceService`, `AcquisitionPort` or `holkas`.
+
+**Current state (2026-10-06):** the counter and the lifecycle are composed only in tests. There is no production composition point yet; its location is decided in [ADR-0001](adr/0001-composition-root.md) (`proasteion:application`, to be created in #10 Slice 2). The counter's in-memory bronze caches have no invalidation yet (#33/#5), and `REQUIRE_AUTH` decisions end as `DENIED` until the Adyton station exists (#10 Slice 3).
 
 ### Indexing pipeline (walking skeleton)
 
 A simplified flow for the existing indexing pipeline:
 
 1. `exedra` or another client asks for a resource or search action.
-2. `emporion.holkas` opens the required connection and obtains raw data (internal to Chalcotheca).
-3. `emporion.deigma` parses transport/file-specific structure and creates a usable virtual resource.
-4. `tamias` checks access rules, cache state, whitelists, blacklists and lifecycle policy.
-5. `chalcotheca` stores or updates the archive/cache entry.
-6. `anagraphai` updates the lexical index.
-7. `pinakes` optionally updates semantic vectors and reranking material.
-8. `propylaea` is used when source code requires deeper language-aware parsing.
+2. `acropolis` evaluates the `tamias` indexing rules (scheme, include/exclude patterns) and requests the content through `MediatedResourceAccess`.
+3. `chalcotheca` (`MediatedResourceService`) asks `tamias` for the access decision, serves cached bronze content or acquires it through `AcquisitionPort`, where `emporion.holkas` opens the required connection (internal to Chalcotheca).
+4. `tamias` indexing rules are evaluated again with the actual size.
+5. `emporion.deigma` parses transport/file-specific structure and extracts text (behind the `ContentInspector` port).
+6. `chalcotheca` compares the digest with the lifecycle snapshot and stores or updates the archive entry.
+7. `anagraphai` updates the lexical index.
+8. `pinakes` optionally updates semantic vectors and reranking material.
+9. `propylaea` is used when source code requires deeper language-aware parsing.
 
 ### Key architectural rules
 
@@ -102,6 +108,14 @@ A simplified flow for the existing indexing pipeline:
 - **Indexes (Anagraphai/Pinakes) are derived views**, not the authority source for access control.
 - **Holkas is internal acquisition machinery**, not a client-facing API.
 - **Tamias guards every operation** at the archive counter.
+- **Composition happens outside the inner city.** Concrete adapters are wired in a dedicated outer bootstrap module (ADR-0001), never in `acropolis`, `proasteion` root or exclusively in Exedra.
+
+## Architecture test maintenance
+
+The boundary rules are executable in `architecture-tests` (`CorenthArchitectureRulesTest`). Two lists must be maintained by hand:
+
+- `architectureProjects` in `architecture-tests/build.gradle` names every Gradle project whose classes are scanned. A project missing from the list fails the build configuration, so a new module such as `proasteion:application` must be added deliberately.
+- The secret-containment rules whitelist the vault and the trusted secret adapters by package (`adyton`, `platform.security.keepassrpc`, `platform.network` for `SecretRef`). Every new secret-source adapter from #43 must be added to these whitelists explicitly.
 
 ## Open questions
 

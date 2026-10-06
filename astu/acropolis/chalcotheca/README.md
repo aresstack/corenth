@@ -11,16 +11,21 @@ In ancient Corinth the *chalcotheca* (χαλκοθήκη) was the bronze storeho
 ## Mediated access
 
 ```
-Exedra / Bot / Agent / Plugin / Application Service
+Exedra / Bot / Agent / Plugin / Application Service / Acropolis lifecycle
+  -> MediatedResourceAccess (narrow contract: readContent, listChildren)
   -> MediatedResourceService (the archive counter)
   -> Tamias access decision (ResourceAccessPolicy)
-  -> Adyton, if credentials or external delegated access are needed
+  -> Adyton, if credentials or external delegated access are needed (planned, #10 Slice 3)
   -> AcquisitionPort (Holkas connector internally)
   -> Chalcotheca stores/updates bronze (BronzeContent, BronzeListing, BronzeMetadata)
   -> Anagraphai / Pinakes derive indexes
 ```
 
-**Forbidden direction:** no UI, bot, plugin, or application service should call Holkas directly.
+**Forbidden direction:** no UI, bot, plugin, application service or lifecycle should call Holkas directly.
+
+Clients depend on the `MediatedResourceAccess` contract, not on `MediatedResourceService`; the composition point decides how the counter is assembled. `deleteEntry` is an administrative operation of the concrete service and is deliberately not part of the contract.
+
+**Known limitation (#33/#5):** `MediatedResourceService` keeps three in-memory stores (`listingCache`, `contentCache`, `metadataCache`) without invalidation or TTL, next to the `ResourceArchive` snapshots. Content read once is served from the cache until `deleteEntry` removes it, so a changed source is not re-acquired within the lifetime of a service instance, and there are currently two bronze truths. `metadataCache` is never populated (no `READ_METADATA` operation exists yet). #33 makes the archive the authoritative record and #5 adds change detection and invalidation; the stores are consolidated against those contracts rather than replaced ad hoc.
 
 ## Bronze resource shapes
 
