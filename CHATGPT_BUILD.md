@@ -36,7 +36,7 @@ A normal headless run of the Exedra module alone (`./gradlew :proasteion:exedra:
 48 passed, 2 skipped, 0 failed
 ```
 
-The full `clean build` across all modules reports a larger total (389 tests on the Session 0 branch, 0 failures) with the same 2 skips, which are these Exedra tests.
+The full `clean build` across all modules reports a larger total (394 tests on the Session 0 branch, 0 failures) with the same 2 skips, which are these Exedra tests.
 
 Minimal container images still need working AWT font support. On Debian/Ubuntu-derived systems, install or provide at least:
 

@@ -97,7 +97,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | --- | --- | --- | --- | --- | --- |
 | `ui`-Shell (MainFrame, Drawer, ToolTabRegistry, Settings-Shell), `toolbar-kit`, `event` | ~254 | `exedra` (generisches Shell-Framework) | ✅ migriert — **eingefroren**, Business-Panels bewusst nicht | #28/#29 ✔, #30 geschlossen | exedra/README |
 | Thin-Adapter-Grenze für Business-UI | — | `exedra` bleibt austauschbarer Adapter; `EXEDRA_MUST_STAY_THIN_UI_SHELL` | ✅ dokumentiert und erzwungen | #11 geschlossen | Plan „Korrektur zu #30/#11“ |
-| Exedra Headless-Tests | 50 Testfälle | leichtgewichtige Swing-Tests laufen headless; zwei displaypflichtige Tests besitzen Guards | ✅ verifiziert: 48 pass / 2 skip, durch CI-Lauf 8 auf `main` bestätigt (Skips namentlich in der Summary); PR-Lauf steht aus | #40 (erfüllt bis auf PR-Nachweis); PR #41 redundant, wird nicht gemergt | [Headless-Verifikation](../analysis/exedra-headless-test-verification.md), [CI-Stand](../analysis/ci-build-test-gap.md) |
+| Exedra Headless-Tests | 50 Testfälle | leichtgewichtige Swing-Tests laufen headless; zwei displaypflichtige Tests besitzen Guards | ✅ verifiziert: 48 pass / 2 skip, durch CI-Lauf 8 auf `main` und Lauf 9 auf PR #46 (`pull_request`) bestätigt, Skips namentlich in der Summary | #40 erfüllt; PR #41 redundant, wird nicht gemergt | [Headless-Verifikation](../analysis/exedra-headless-test-verification.md), [CI-Stand](../analysis/ci-build-test-gap.md) |
 | `ui`-Business-Panels, Commands, Editor-Integration | (in obigem) | — | 🚫 vorerst nicht — erst nach stabilen Use-Case-Ports | bei Bedarf neue kleine Issues | — |
 
 ### 2.6 Ohne definiertes Corenth-Ziel — Entscheidung in #44
@@ -179,7 +179,7 @@ Auffällig: Ab Juni wechselte der Workflow von Copilot-Issue+PR auf Direkt-Commi
 ### Parallel / nachrangig
 
 7. **Research-Disposition (#44):** §2.6 vollständig auf `MIGRATE`, `EXTERNAL` oder `DO_NOT_MIGRATE` heben; wd4j-Bezug zu #12 ausdrücklich entscheiden.
-8. **CI als Merge-Gate (#45 / #40):** PR-Lauf des Workflows mit dem nächsten echten PR nachweisen, Required Check `Build and test (Java 8 target)` im Ruleset aktivieren, #41 ohne Merge schließen. Keine zusätzlichen Guards an leichtgewichtigen Swing-Tests. Stand und Begründung: `docs/analysis/ci-build-test-gap.md`.
+8. **CI als Merge-Gate (#45 / #40):** PR-Lauf nachgewiesen (PR #46, Lauf 9: 394 Tests, 0 Fehler, 2 Skips); jetzt Required Check `Build and test (Java 8 target)` im Ruleset aktivieren, #41 ohne Merge schließen, #40 schließen. Keine zusätzlichen Guards an leichtgewichtigen Swing-Tests. Stand und Begründung: `docs/analysis/ci-build-test-gap.md`.
 9. **#7/#3/#12** bleiben bis nach dem tragfähigen Lifecycle und den priorisierten Adapter-Slices ports-first im Backlog.
 
 Branch-Aufräumarbeiten und die Exedra-CI-Verifikation sind unabhängig von #10 und können parallel erfolgen. Der zuvor angenommene Headless-Codefix entfällt als Blocker. Bei Squash-Merges darf die Löschentscheidung nicht allein auf `git branch --merged` beruhen, sondern auf PR-Merge-Status plus inhaltsbasiertem Vergleich gegen `main`.

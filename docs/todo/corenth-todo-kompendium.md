@@ -28,9 +28,9 @@
 # Kapitel 1: CI: Gradle-Build & Architektur-Tests (#45)
 
 
-**Datei:** `.github/workflows/build.yml` · **Auf `main` committet (9d64884, gehärtet 4c745e3) und bei Push grün (Läufe 6–8). Offen vor #33/#10 Slice 2: erster `pull_request`-Lauf und Hinterlegung als verpflichtender Statuscheck — erst dann läuft jede weitere Änderung unter einem CI-Gate.**
+**Datei:** `.github/workflows/build.yml` · **Auf `main` committet (9d64884, gehärtet 4c745e3) und bei Push grün (Läufe 6–8). `pull_request`-Lauf nachgewiesen (PR #46, Lauf 9). Offen vor #33/#10 Slice 2: Hinterlegung als verpflichtender Statuscheck — erst dann läuft jede weitere Änderung unter einem CI-Gate.**
 
-> ⚠️ **Stand Session 0 (2026-10-06):** Dieses Kapitel wurde gegen `main @ b97c607` geschrieben, bevor `build.yml` committet wurde. Die committete Datei weicht von der Skizze unten ab: Workflowname „Build and test“, Job „Build and test (Java 8 target)“, Temurin JDK 21, `./gradlew --no-daemon clean build --stacktrace`, apt-Fontpakete für headless AWT, Python-Summary der JUnit-XML mit namentlicher Skip-Liste. **Maßgeblich ist die Datei im Repository, nicht diese Skizze.** Status: grün auf `main` (Läufe 6–8), noch kein `pull_request`-Lauf, Required Check nicht konfiguriert, CI also noch kein erzwungenes Merge-Gate. Details: `docs/analysis/ci-build-test-gap.md`.
+> ⚠️ **Stand Session 0 (2026-10-06):** Dieses Kapitel wurde gegen `main @ b97c607` geschrieben, bevor `build.yml` committet wurde. Die committete Datei weicht von der Skizze unten ab: Workflowname „Build and test“, Job „Build and test (Java 8 target)“, Temurin JDK 21, `./gradlew --no-daemon clean build --stacktrace`, apt-Fontpakete für headless AWT, Python-Summary der JUnit-XML mit namentlicher Skip-Liste. **Maßgeblich ist die Datei im Repository, nicht diese Skizze.** Status: grün auf `main` (Läufe 6–8) und auf dem `pull_request`-Ereignis (PR #46, Lauf 9: 394 Tests, 0 Fehler, 2 Skips), Required Check nicht konfiguriert, CI also noch kein erzwungenes Merge-Gate. Details: `docs/analysis/ci-build-test-gap.md`.
 
 ### Designentscheidungen
 
@@ -94,16 +94,16 @@ Sollte `./gradlew build` im Repo-Ist-Zustand rot sein (ungetestete Direkt-Commit
 
 ### Akzeptanzkriterien
 
-Workflow läuft bei Push auf `main` (Läufe 6–8 grün, 2026-07-19); `pull_request`-Trigger noch nie ausgelöst (PR #41 ohne Check-Runs) — Nachweis mit dem nächsten echten PR; ArchUnit nachweislich im Lauf enthalten (`:architecture-tests:test` im Log von Lauf 8); Reports-Artefakt `gradle-test-reports` bei Fehlschlag; Branch-Protection noch nicht konfiguriert — Required Check **`Build and test (Java 8 target)`** (nicht „Gradle build“) im Ruleset „main“ aktivieren, Umsetzung liegt beim Repo-Owner; übersprungene Tests erscheinen namentlich in der Actions-Summary (PR #41 damit redundant, wird nicht gemergt; Übergabe an #40).
+Workflow läuft bei Push auf `main` (Läufe 6–8 grün, 2026-07-19); `pull_request`-Trigger nachgewiesen (PR #46, Lauf 9 grün; PR #41 weiterhin ohne Check-Runs); ArchUnit nachweislich im Lauf enthalten (`:architecture-tests:test` im Log von Lauf 8); Reports-Artefakt `gradle-test-reports` bei Fehlschlag; Branch-Protection noch nicht konfiguriert — Required Check **`Build and test (Java 8 target)`** (nicht „Gradle build“) im Ruleset „main“ aktivieren, Umsetzung liegt beim Repo-Owner; übersprungene Tests erscheinen namentlich in der Actions-Summary (PR #41 damit redundant, wird nicht gemergt; Übergabe an #40).
 
 ---
 
 # Kapitel 2: Exedra: Headless-Verifikation in CI (#40)
 
 
-**Modul:** `proasteion:exedra` + CI · **Klein — CI aus #45 vorhanden (`build.yml`, Lauf 8 grün mit namentlicher Skip-Liste); PR #41 redundant, wird nicht gemergt; offen nur der Nachweis auf einem `pull_request`-Lauf**
+**Modul:** `proasteion:exedra` + CI · **Klein — CI aus #45 vorhanden (`build.yml`, Lauf 8 grün mit namentlicher Skip-Liste); PR #41 redundant, wird nicht gemergt; `pull_request`-Nachweis durch PR #46 erbracht**
 
-> ⚠️ **Stand Session 0 (2026-10-06):** CI-Lauf 8 auf `main` bestätigt exedra 48 pass / 0 fail / 2 skip mit namentlicher Skip-Liste in der Actions-Summary (für alle Module, nicht nur exedra). PR #41 (`testLogging { events "skipped" }` nur in exedra) ist damit redundant und wird nicht gemergt; der unten skizzierte `HeadlessSkipBudgetTest` wurde nicht umgesetzt. Offen bleibt nur der Nachweis eines `pull_request`-Laufs. Entscheidung: `docs/analysis/ci-build-test-gap.md`.
+> ⚠️ **Stand Session 0 (2026-10-06):** CI-Lauf 8 auf `main` bestätigt exedra 48 pass / 0 fail / 2 skip mit namentlicher Skip-Liste in der Actions-Summary (für alle Module, nicht nur exedra). PR #41 (`testLogging { events "skipped" }` nur in exedra) ist damit redundant und wird nicht gemergt; der unten skizzierte `HeadlessSkipBudgetTest` wurde nicht umgesetzt. Der `pull_request`-Nachweis liegt seit PR #46 (Lauf 9) vor. Entscheidung: `docs/analysis/ci-build-test-gap.md`.
 
 ### Designentscheidungen
 

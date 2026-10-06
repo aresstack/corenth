@@ -13,7 +13,7 @@ Der erste reale GitHub-Actions-Lauf von `.github/workflows/build.yml` ist verifi
 
 ## Noch offen
 
-- Ein Lauf auf das `pull_request`-Ereignis hat noch nie stattgefunden; PR #41 besitzt keine Check-Runs. Der nächste echte PR gegen `main` liefert diesen Nachweis.
+- ✅ Der `pull_request`-Nachweis liegt vor: PR #46 (Session-0-Branch) löste Lauf 9 aus, Check `Build and test (Java 8 target)` grün, 394 Tests, 0 Fehler, 0 Errors, 2 Skips (die beiden Exedra-Tests, namentlich). PR #41 besitzt weiterhin keine Check-Runs.
 - Der Required Check ist nicht konfiguriert; siehe `docs/todo-ci-branch-protection.md`.
 
 Details und die Entscheidung zu PR #41/#40: `docs/analysis/ci-build-test-gap.md`, Abschnitt „Stand 2026-10-06“.
