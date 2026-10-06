@@ -21,7 +21,7 @@ Der zuvor in einer ChatGPT-Minimal-Sandbox beobachtete Fehlschlag ist nach dem v
 | fontconfig | vorhanden (`libfontconfig` + 299 Fonts) |
 | Testausführung | Produktions- und Testquellen mit `javac` kompiliert; Ausführung über einen minimalen reflektiven JUnit4-Runner (`@Before`/`@Test`/`expected`/`Assume`) |
 
-**Methodische Einschränkung:** Der Lauf ersetzt nicht den Gradle-/JUnit-Originallauf. Für die engere Frage „wirft die verwendete Swing-Nutzung headless?“ ist er aussagekräftig, da alle 55 Testmethoden mit der benötigten Testsemantik ausgeführt wurden. Weitere Lifecycle-Annotationen wie `@After`, `@BeforeClass` oder `@Rule` werden in den Exedra-Tests nicht verwendet.
+**Methodische Einschränkung:** Der Lauf ersetzt nicht den Gradle-/JUnit-Originallauf. Für die engere Frage „wirft die verwendete Swing-Nutzung headless?“ ist er aussagekräftig, da alle 50 Testmethoden mit der benötigten Testsemantik ausgeführt wurden. Weitere Lifecycle-Annotationen wie `@After`, `@BeforeClass` oder `@Rule` werden in den Exedra-Tests nicht verwendet.
 
 ## 2. Befunde im Einzelnen
 

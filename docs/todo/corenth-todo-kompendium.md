@@ -1,6 +1,6 @@
 # Corenth — TODO-Kompendium: Implementierungspläne für alle offenen Issues
 
-*Stand: 2026-07-19 · main @ b97c607+ · Java 8 · Alle Code-Skizzen sind gegen den realen Repo-Bestand verifiziert (Signaturen-Prüfung vom selben Tag); verifizierte Befunde sind in den Kapiteln als **Verifiziert:** markiert, offene Abgleiche explizit benannt.*
+*Stand: 2026-07-19 · main @ b97c607+ · Session-0-Hinweise (2026-10-06) in Kapitel 1, 2, 3, 4, 9 und 13; Kapitel 1 ist durch die committete `build.yml` überholt · Java 8 · Alle Code-Skizzen sind gegen den realen Repo-Bestand verifiziert (Signaturen-Prüfung vom selben Tag); verifizierte Befunde sind in den Kapiteln als **Verifiziert:** markiert, offene Abgleiche explizit benannt.*
 
 ## Inhalt
 
@@ -29,6 +29,8 @@
 
 
 **Datei:** `.github/workflows/build.yml` · **Vor #33/#10 mergen — jede weitere Änderung soll bereits unter CI laufen.**
+
+> ⚠️ **Stand Session 0 (2026-10-06):** Dieses Kapitel wurde gegen `main @ b97c607` geschrieben, bevor `build.yml` committet wurde. Die committete Datei weicht von der Skizze unten ab: Workflowname „Build and test“, Job „Build and test (Java 8 target)“, Temurin JDK 21, `./gradlew --no-daemon clean build --stacktrace`, apt-Fontpakete für headless AWT, Python-Summary der JUnit-XML mit namentlicher Skip-Liste. **Maßgeblich ist die Datei im Repository, nicht diese Skizze.** Status: grün auf `main` (Läufe 6–8), noch kein `pull_request`-Lauf, Required Check nicht konfiguriert, CI also noch kein erzwungenes Merge-Gate. Details: `docs/analysis/ci-build-test-gap.md`.
 
 ### Designentscheidungen
 
@@ -101,6 +103,8 @@ Workflow läuft auf PR + main; ArchUnit nachweislich im Lauf enthalten (Log-Bele
 
 **Modul:** `proasteion:exedra` + CI · **Klein — hängt an #45 (ohne CI kein CI-Lauf) und PR #41**
 
+> ⚠️ **Stand Session 0 (2026-10-06):** CI-Lauf 8 auf `main` bestätigt exedra 48 pass / 0 fail / 2 skip mit namentlicher Skip-Liste in der Actions-Summary (für alle Module, nicht nur exedra). PR #41 (`testLogging { events "skipped" }` nur in exedra) ist damit redundant und wird nicht gemergt; der unten skizzierte `HeadlessSkipBudgetTest` wurde nicht umgesetzt. Offen bleibt nur der Nachweis eines `pull_request`-Laufs. Entscheidung: `docs/analysis/ci-build-test-gap.md`.
+
 ### Designentscheidungen
 
 1. **Die empirische Basis steht bereits:** Die lokale Headless-Verifikation (`docs/analysis/exedra-headless-test-verification.md`) hat 48 pass / 0 fail / 2 skip ergeben — die Guards sitzen exakt an den beiden `JFrame`-Tests, leichte Swing-Komponenten laufen headless. Es gibt **nichts umzubauen**; dieses Issue ist reine Verifikation + Sichtbarkeit.
@@ -162,7 +166,7 @@ CI-Lauf zeigt exedra-Skips explizit; Skip-Anzahl dokumentiert erwartet (2); kein
 
 ### ⚠️ Architektur-Konflikt gefunden
 
-`MediatedResourceService` führt **eigene** unbegrenzte Caches (`listingCache`, `contentCache`, `metadataCache` als `ConcurrentHashMap` ohne TTL/Invalidierung). Sobald #33 den Archiv-State zur Autorität macht und #5 Invalidierung einführt, sind das **zwei konkurrierende Wahrheiten** — strukturell derselbe Fehler wie die zwei Session-Caches in MainframeMate. **Vorschlag:** In diesem Issue nur dokumentieren; in #10-Slice-1 die drei Service-Caches entfernen und Cache-Treffer ausschließlich über `ResourceLifecycleRepository` + tamias-Entscheidung beantworten. Bitte als Kommentar in #10 übernehmen.
+`MediatedResourceService` führt **eigene** unbegrenzte Caches (`listingCache`, `contentCache`, `metadataCache` als `ConcurrentHashMap` ohne TTL/Invalidierung). Sobald #33 den Archiv-State zur Autorität macht und #5 Invalidierung einführt, sind das **zwei konkurrierende Wahrheiten** — strukturell derselbe Fehler wie die zwei Session-Caches in MainframeMate. **Vorschlag:** In diesem Issue nur dokumentieren; die drei Service-Caches gegen `ResourceLifecycleRepository` + tamias-Entscheidung konsolidieren, sobald dieser Vertrag existiert. *Stand Session 0 (2026-10-06): In #10 Slice 1 wurden die Caches bewusst **nicht** entfernt, sondern als bekannte Lücke dokumentiert (Javadoc von `MediatedResourceService`, `astu/acropolis/chalcotheca/README.md`, Charakterisierungstest `knownGap_…` in `WalkingSkeletonIntegrationTest`). Die Konsolidierung ist #10 Slice 5 gegen den #33-Vertrag. Der Kommentar in #10 wurde noch nicht hinterlegt.*
 
 ### Klassen
 
@@ -381,6 +385,8 @@ Java 8; bestehende `ResourceArchive`-Tests unverändert grün; neuer Port vollst
 
 **Modul:** `astu:acropolis` (+ Bootstrap-Modul, s. Entscheidung) · **Java 8** · **Abhängig von:** #33 (Repository-Port), verzahnt mit #5
 
+> ✅ **Stand Session 0 (2026-10-06): Slice 1 und ADR umgesetzt.** `ResourceLifecycleCoordinator` beschafft nur noch über den neuen Chalcotheca-Vertrag `MediatedResourceAccess` (implementiert von `MediatedResourceService`); `RawResourceProvider`/`FetchedResource` sind entfernt; ArchUnit-Regel `ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS`; Bootstrap-Ort in `docs/adr/0001-composition-root.md` entschieden (`proasteion:application`). **Nicht** umgesetzt und gemäß Issue-Text spätere Slices: produktiver Kompositionspunkt und erste produktive `ResourceAccessPolicy` (Slice 2), `AccessPreparation`/Adyton-Station (Slice 3), Run-Modell (Slice 4), Cache-Konsolidierung (Slice 5). Abweichend von Designentscheidung 1 unten gehört der Kompositionspunkt nach Issue-Text zu Slice 2, nicht zu Slice 1. Der `ContentInspector`-Port bleibt; die Harbor-Variante (`emporion.ResourceHarbor`) beschafft außerhalb der Mediation und ist deshalb keine Lifecycle-Eingabe.
+
 ### Designentscheidungen
 
 1. **Reihenfolge ist verbindlich (aus Issue-Text übernommen):** Slice 1 stellt die Beschaffung auf `MediatedResourceService`/`AcquisitionPort` um und schafft den produktiven Kompositionspunkt. Erst Slice 2 extrahiert das Run-Modell. Grund: Ein Run-Modell, das um den `RawResourceProvider`-Direktpfad herum entsteht, zementiert den falschen Zugriffsweg.
@@ -395,7 +401,7 @@ Java 8; bestehende `ResourceArchive`-Tests unverändert grün; neuer Port vollst
 
 ### ⚠️ Konflikte / Probleme gefunden
 
-- **Doppelte Caches:** `MediatedResourceService` hält drei unbegrenzte `ConcurrentHashMap`-Caches. Slice 1 muss sie entfernen oder hinter das #33-Repository legen, sonst existieren zwei Wahrheiten (Detail in `todo-33`). Empfehlung: entfernen; Cache-Nutzen kommt aus `ResourceLifecycleRepository` + tamias-Entscheid.
+- **Doppelte Caches:** `MediatedResourceService` hält drei unbegrenzte `ConcurrentHashMap`-Caches. Sie müssen entfernt oder hinter das #33-Repository gelegt werden, sonst existieren zwei Wahrheiten (Detail in Kapitel 3, „Architektur-Konflikt“). Empfehlung: entfernen; Cache-Nutzen kommt aus `ResourceLifecycleRepository` + tamias-Entscheid. *Stand Session 0: in Slice 1 bewusst belassen und dokumentiert; Konsolidierung erst gegen den #33-Vertrag (Slice 5).*
 - **`ContentInspector` vs. `deigma`:** Der Coordinator nutzt einen eigenen `ContentInspector`-Port, `emporion` nutzt `deigma`. Zwei Extraktionswege. Slice 1 sollte den Coordinator-Input auf das `HarborResult` von `emporion.ResourceHarbor` umstellen (Harbor = Beschaffung + flache Extraktion), statt beide Wege zu pflegen.
 - **`AcquisitionPort` wirft `IOException`,** `MediatedResourceService` fängt sie in `MediatedResult`. Der Coordinator muss `MediatedResult`-Fehler in `ProcessingFailure` überführen — nicht in Exceptions, damit ein Run bei Einzelfehlern weiterläuft.
 - **`ResourceAccessPolicy` existiert nur als Interface + Testimplementierung** (verifiziert): Der produktive Mediated-Pfad war bislang schlicht nicht konfigurierbar. Slice 1 ergänzt eine `PermitAllAccessPolicy` in tamias als ersten Produktiv-Vertreter; die echte Policy-Komposition kommt mit #5. Auch das gehört ins tamias-Inventar, sobald es entsteht.
@@ -573,7 +579,7 @@ Kein Scheduler, keine Parallelisierung, kein Persistieren des Run-Status (Folge-
 
 ### Akzeptanzkriterien
 
-ADR committed; `RawResourceProvider`-Direktpfad entfernt; Service-Caches entfernt oder auf Repository umgestellt; `proasteion:application` existiert und verdrahtet den `file:`-Lifecycle produktiv; alle ArchUnit-Regeln grün; Inventar §1 „Zentrale Lücke" aufgelöst.
+ADR committed ✅ (Session 0); `RawResourceProvider`-Direktpfad entfernt ✅ (Session 0); Service-Caches entfernt oder auf Repository umgestellt (Slice 5, nach #33); `proasteion:application` existiert und verdrahtet den `file:`-Lifecycle produktiv (Slice 2); alle ArchUnit-Regeln grün ✅; Inventar §1 „Zentrale Lücke" aufgelöst (nach Slice 2).
 
 ---
 
@@ -772,7 +778,7 @@ Digest-Strategie: first/changed/unchanged/observed-null; Metadata-Strategie: mti
 
 ### Out of scope / do-not-copy
 
-Kein `scheduleMode`/Timer, kein `securityMode`, keine SourceType-Enums (FTP/NDV/Mail) in tamias, kein Archiv-Zugriff aus tamias heraus, keine Persistenz von Policies (Konfiguration kommt später über `ConfigSnapshot`-Follow-up — siehe „Vergessenes", `todo-forgotten-migrations.md`).
+Kein `scheduleMode`/Timer, kein `securityMode`, keine SourceType-Enums (FTP/NDV/Mail) in tamias, kein Archiv-Zugriff aus tamias heraus, keine Persistenz von Policies (Konfiguration kommt später über `ConfigSnapshot`-Follow-up — siehe „Vergessenes", Kapitel 18).
 
 ### Akzeptanzkriterien
 
@@ -1221,7 +1227,7 @@ final class JesMode {
 }
 ```
 
-*(**Verifiziert:** `FtpClientSession` bietet heute nur `readBytes(MvsLocation, ResourceReadMode)`, `listNames(MvsLocation)` und `close()` — **weder `site(...)` noch eine Store-Methode.** Dieses Issue erweitert das Interface daher additiv um `site(String)` und `storeAndReadReply(String remoteName, byte[] content)`; die bestehende Commons-Net-Implementierung dahinter kann beides trivial bedienen (`sendSiteCommand`, `storeFile` + `getReplyString`). Zu beachten: `readBytes`/`listNames` sind `MvsLocation`-typisiert — das Submit-Ziel ist aber kein Dataset, daher die String-basierte Store-Signatur. Zweite additive Ergänzung: `FtpAccessHandle.withSession(SessionOperation)` als kontrollierter Zugriffspunkt, damit JES-Code die Session nutzen kann, ohne dass das Handle sie als Getter herausgibt.)*
+*(**Verifiziert:** `FtpClientSession` bietet heute nur `readBytes(MvsLocation, ResourceReadMode)`, `listNames(MvsLocation)` und `close()` — **weder `site(...)` noch eine Store-Methode.** Dieses Issue erweitert das Interface daher additiv um `site(String)` und `storeAndReadReply(String remoteName, byte[] content)`; eine Transport-Implementierung dahinter könnte beides trivial bedienen (Commons-Net: `sendSiteCommand`, `storeFile` + `getReplyString`). *Korrektur Session 0 (2026-10-06): Eine solche Implementierung existiert in keinem Corenth-Gradle-Modul. `FtpClientSession`, `FtpClientSessionFactory` und `MvsFtpSessionAuthenticator` haben außerhalb von Tests keine Implementierung, commons-net ist nur in `research/app` deklariert. Dieses Issue hat damit eine unausgesprochene Voraussetzung: einen echten FTP-Transport-Slice, der als eigenes Issue anzulegen ist.* Zu beachten: `readBytes`/`listNames` sind `MvsLocation`-typisiert — das Submit-Ziel ist aber kein Dataset, daher die String-basierte Store-Signatur. Zweite additive Ergänzung: `FtpAccessHandle.withSession(SessionOperation)` als kontrollierter Zugriffspunkt, damit JES-Code die Session nutzen kann, ohne dass das Handle sie als Getter herausgibt.)*
 
 #### `JesJobSubmitter` / `JesSpoolReader`
 
@@ -1582,13 +1588,15 @@ Java 8; Stufen 1+2 vollständig, Stufe 3 injizierbar; Passwort-in-Argv durch Tes
 
 **Module:** `proasteion:platform:security-prompt`, später `security-store`, `security-dpapi` · **Java 8** · **Prompt zuerst (entsperrt #39-Stufe 3); Store/DPAPI danach**
 
+> ⚠️ **Stand Session 0 (2026-10-06):** Der bestehende KeePassRPC-Adapter ist strukturell ein `SecretMaterialProvider`, seine reflektive Lookup-Bindung passt aber nicht zur gebündelten `keepassrpc-java`-API (`getUserName`/`getPassword` statt `findByRef`/`find`/…); er funktioniert nur gegen Test-Stubs (Inventar §2.1). Damit ist der Prompt-Provider dieses Kapitels auch für den ersten authentifizierten #10-Slice relevant, oder die KeePassRPC-Bindung wird vorher in einem kleinen eigenen Slice mit Library-Integrationstest korrigiert. Neue Secret-Adapter müssen ausdrücklich in die ArchUnit-Whitelists (`RAW_SECRET_MATERIAL_…`, `SECRET_MATERIAL_PROVIDERS_…`) aufgenommen werden.
+
 ### Designentscheidungen
 
 1. **Der Prompt ist ein Port, kein Dialog.** `SecretPromptPort` ist ein synchrones Callback-Interface ohne UI-Typen; `exedra` liefert später die Swing-Implementierung, Tests liefern eine programmatische. Damit ist der Provider headless-testbar (Issue-Vorgabe) und die alte MainframeMate-Kopplung (Swing im `KeePassProvider`) strukturell ausgeschlossen — ArchUnit-Core-UI-Regel greift, weil der Provider im `platform`-Modul liegt, das UI-frei bleiben muss (Regel im PR um `platform` erweitern, falls sie das Paket noch nicht abdeckt).
 2. **Cancel ist ein Ergebnis erster Klasse:** Der Port liefert `PromptResult` (SECRET | CANCELLED | UNAVAILABLE), der Provider übersetzt CANCELLED in die checked `AuthCancelledException` — genau die Semantik, die PR #14 etabliert hat. Negative-Caching (kurzes Merken einer Cancellation, damit der Dialog nicht sofort wieder aufpoppt) gehört **nicht** in den Provider, sondern in die bestehende `SecretMaterialCache`/`SecretCachePolicy` — Prüfung im PR, ob die Policy Negative-Caching bereits kann (Auth-Analyse §5 fordert es); falls nein, dort ergänzen, nicht hier duplizieren.
 3. **Provider-SPI wiederverwenden:** Es existieren `CredentialProvider` und `SecretMaterialProvider` (KeePassRPC implementiert Letzteren). Der Prompt-Provider implementiert **`SecretMaterialProvider`** — dieselbe Schnittstelle wie KeePassRPC, damit der Broker Quellen austauschbar kettet: KeePassRPC → Prompt als geordnete Provider-Liste im Kompositionspunkt. Keine neue Chain-Abstraktion in adyton (die #39-Kette ist Strategie-, nicht Quellen-Ebene — bewusst getrennt halten).
 4. **Persistenter Store (Phase 2) = Datei mit AES-GCM,** Master-Key-Bezug hinter `MasterKeyProvider`-Port: Implementierung 1 dateibasiert (portabel, adaptiert `AesCryptoProvider`-Konzept), Implementierung 2 DPAPI via JNA (`security-dpapi`, Windows-only, Phase 3). Format: ein JSON-Objekt `{entryKey: base64(iv+ciphertext)}` — bewusst kein KeePass-kompatibles Format (Nutzer mit KeePass nutzen den RPC-Provider).
-5. **KeePass-PS-Variante (KeePass.exe via PowerShell) wird NICHT umgesetzt** — sie war in MainframeMate der langsame, prozesslistige Notnagel; mit RPC + Prompt + Store existieren drei bessere Wege. Als bewusste Nicht-Migration im Inventar vermerken (siehe `todo-forgotten-migrations.md`).
+5. **KeePass-PS-Variante (KeePass.exe via PowerShell) wird NICHT umgesetzt** — sie war in MainframeMate der langsame, prozesslistige Notnagel; mit RPC + Prompt + Store existieren drei bessere Wege. Als bewusste Nicht-Migration im Inventar vermerken (siehe Kapitel 18).
 
 ### Klassen (Phase 1: Prompt)
 
@@ -1682,7 +1690,7 @@ Store implementiert ebenfalls `SecretMaterialProvider` (lesen) plus eine schmale
 
 ### ⚠️ Hinweis
 
-Provider-Reihenfolge (KeePassRPC vor Prompt vor Store? Store vor Prompt?) ist Nutzerpräferenz → gehört in die Konfiguration des Kompositionspunkts, nicht hart in adyton. Da typisierte Konfiguration noch fehlt (`ConfigSnapshot`-Follow-up, s. `todo-forgotten-migrations.md`), Phase 1 mit fester, dokumentierter Reihenfolge KeePassRPC → Store → Prompt ausliefern.
+Provider-Reihenfolge (KeePassRPC vor Prompt vor Store? Store vor Prompt?) ist Nutzerpräferenz → gehört in die Konfiguration des Kompositionspunkts, nicht hart in adyton. Da typisierte Konfiguration noch fehlt (`ConfigSnapshot`-Follow-up, s. Kapitel 18), Phase 1 mit fester, dokumentierter Reihenfolge KeePassRPC → Store → Prompt ausliefern.
 
 ### Tests
 
@@ -1986,7 +1994,7 @@ Fundstelle: `research/docs/ueberall-suche-issue-backlog.md` — fertig formulier
 
 ### Bewusste Nicht-Migrationen (nur bestätigen, nichts tun)
 
-- **KeePass-PS-Provider** (KeePass.exe via PowerShell): in `todo-43` explizit als nicht-migriert entschieden — mit RPC, Prompt und Store existieren drei bessere Quellen. Im Inventar als „bewusst verworfen" führen, damit die Frage nicht wiederkehrt.
+- **KeePass-PS-Provider** (KeePass.exe via PowerShell): in Kapitel 13 explizit als nicht-migriert entschieden — mit RPC, Prompt und Store existieren drei bessere Quellen. Im Inventar als „bewusst verworfen" führen, damit die Frage nicht wiederkehrt.
 - **UI-Schwergewichte** (`ui/` 237 Dateien, `betaview`, `video`, `dosbox`, Mermaid-Preview): via #44-Matrix bzw. Exedra-Ausbau-Zukunft abgedeckt; keine stille Lücke, sondern vertagte Entscheidungen mit Ort.
 
 ### Rest-Sichtung (niedrig, der Vollständigkeit halber)
