@@ -23,7 +23,6 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PatternResourcePo
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessDecision;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessPolicy;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
-import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
 import com.aresstack.corenth.proasteion.emporion.deigma.DetectedContentType;
 import com.aresstack.corenth.proasteion.emporion.deigma.ExtractedBlock;
 import com.aresstack.corenth.proasteion.emporion.deigma.ExtractionRegistry;
@@ -76,6 +75,7 @@ public class WalkingSkeletonIntegrationTest {
     public TemporaryFolder tempFolder = new TemporaryFolder();
 
     private LuceneLexicalIndex lexicalIndex;
+    private MediatedResourceService counter;
     private ResourceLifecycleCoordinator coordinator;
     private SearchCoordinator searchCoordinator;
 
@@ -108,9 +108,12 @@ public class WalkingSkeletonIntegrationTest {
                 new LuceneTokenCounter(),
                 new LexicalChunkingConfig());
 
+        // Chalcotheca: the archive counter over the real file connector
+        counter = mediatedFileAccess(archive);
+
         // Acropolis: coordinator over the mediated counter, and search
         coordinator = new ResourceLifecycleCoordinator(
-                mediatedFileAccess(archive), LIFECYCLE_ACTOR, inspector, policy, archive, lexicalIndex, chunker);
+                counter, LIFECYCLE_ACTOR, inspector, policy, archive, lexicalIndex, chunker);
         searchCoordinator = new SearchCoordinator(lexicalIndex);
     }
 
@@ -222,8 +225,15 @@ public class WalkingSkeletonIntegrationTest {
         assertFalse("an excluded resource must not be acquired at all", counter.hasCachedContent(ref.uri()));
     }
 
+    /**
+     * Documents a guarantee weakened by #10 Slice 1: before the slice the skeleton denied
+     * oversized files before fetching them (size probe on the direct provider). The mediated
+     * contract has no size probe, so the counter acquires and retains the content and the
+     * lifecycle denies it only afterwards. When a {@code READ_METADATA} operation exists
+     * (#5/#33), this test must be inverted (expect no cached content).
+     */
     @Test
-    public void policyDenies_fileTooLarge_afterAcquisition() throws IOException {
+    public void knownGap_oversizedFile_isAcquiredAndRetainedByCounterBeforeDenial() throws IOException {
         IndexingRule tinyRule = new IndexingRule(
                 "tiny-rule",
                 Arrays.asList("file"),
@@ -234,8 +244,9 @@ public class WalkingSkeletonIntegrationTest {
         PatternResourcePolicy tinyPolicy = new PatternResourcePolicy(Arrays.asList(tinyRule));
 
         InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        MediatedResourceService tinyCounter = mediatedFileAccess(archive);
         ResourceLifecycleCoordinator tinyCoordinator = new ResourceLifecycleCoordinator(
-                mediatedFileAccess(archive), LIFECYCLE_ACTOR, createDeigmaInspector(), tinyPolicy, archive, lexicalIndex);
+                tinyCounter, LIFECYCLE_ACTOR, createDeigmaInspector(), tinyPolicy, archive, lexicalIndex);
 
         File bigFile = tempFolder.newFile("big.txt");
         writeFile(bigFile, "This content is definitely larger than 10 bytes.");
@@ -244,6 +255,8 @@ public class WalkingSkeletonIntegrationTest {
         ProcessingResult result = tinyCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.DENIED, result.status());
         assertTrue(result.message().contains("maxBytes"));
+        assertTrue("size is only known after the counter acquired the content, which it retains",
+                tinyCounter.hasCachedContent(ref.uri()));
     }
 
     @Test
@@ -321,10 +334,12 @@ public class WalkingSkeletonIntegrationTest {
     }
 
     /**
-     * Documents the open cache consolidation (#33/#5): the archive counter caches bronze
-     * content without invalidation, so a changed source is served from the cache within one
-     * service instance and the lifecycle reports {@code UNCHANGED}. When invalidation exists,
-     * this test must be inverted (expect {@code INDEXED} and the new term to be searchable).
+     * Documents a guarantee lost in #10 Slice 1 and tracked by #33/#5: before the slice the
+     * direct provider path re-read the source on every run, so a rewritten file produced a new
+     * digest and was re-indexed. The archive counter caches bronze content without
+     * invalidation, so a changed source is now served from the cache within one service
+     * instance and the lifecycle reports {@code UNCHANGED}. When invalidation exists, this
+     * test must be inverted (expect {@code INDEXED} and the new term to be searchable).
      */
     @Test
     public void knownGap_changedSourceContent_isServedFromCounterCacheUntilInvalidationExists() throws IOException {
@@ -336,6 +351,7 @@ public class WalkingSkeletonIntegrationTest {
         writeFile(txtFile, "replacement mutable content");
         ProcessingResult second = coordinator.process(ref);
         assertEquals(ProcessingResult.Status.UNCHANGED, second.status());
+        assertTrue("the stale bytes come from the counter cache", counter.hasCachedContent(ref.uri()));
         assertTrue("stale bronze cache: new content is not visible yet",
                 searchCoordinator.search("replacement", 10).isEmpty());
     }

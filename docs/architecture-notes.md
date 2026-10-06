@@ -86,7 +86,7 @@ This is analogous to the `adyton` rule: Adyton does not hand out passwords; it m
 
 Since #10 Slice 1 the Acropolis lifecycle (`ResourceLifecycleCoordinator`) is itself a client of this counter: it reads through the `MediatedResourceAccess` contract and has no direct provider or connector path. ArchUnit enforces this (`ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS`): `acropolis` must not depend on `MediatedResourceService`, `AcquisitionPort` or `holkas`.
 
-**Current state (2026-10-06):** the counter and the lifecycle are composed only in tests. There is no production composition point yet; its location is decided in [ADR-0001](adr/0001-composition-root.md) (`proasteion:application`, to be created in #10 Slice 2). The counter's in-memory bronze caches have no invalidation yet (#33/#5), and `REQUIRE_AUTH` decisions end as `DENIED` until the Adyton station exists (#10 Slice 3).
+**Current state (2026-10-06):** the counter and the lifecycle are composed only in tests. There is no production composition point yet; its location is decided in [ADR-0001](adr/0001-composition-root.md) (`proasteion:application`, to be created in #10 Slice 2). The counter's in-memory bronze caches have no invalidation yet (#33/#5): before Slice 1 every lifecycle run re-read the source and re-indexed changed content, now a changed source is served from the cache within one service instance; likewise oversized content is acquired and retained before the size rule denies it, because the contract has no size probe. `REQUIRE_AUTH` decisions end as `DENIED` until the Adyton station exists (#10 Slice 3).
 
 ### Indexing pipeline (walking skeleton)
 

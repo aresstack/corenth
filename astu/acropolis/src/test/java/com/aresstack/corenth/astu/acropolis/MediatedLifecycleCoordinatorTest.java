@@ -15,11 +15,14 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalDocume
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndex;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalQuery;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalSearchResult;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.AccessDecisionType;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.AccessReasonCode;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.AcceptanceDecision;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ActorIdentity;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ActorType;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.IndexingRule;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PatternResourcePolicy;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PolicyReason;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessDecision;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessPolicy;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
@@ -185,6 +188,88 @@ public class MediatedLifecycleCoordinatorTest {
         assertEquals(ProcessingResult.Status.INDEXED, coordinator.process(DOC).status());
         assertEquals(ProcessingResult.Status.UNCHANGED, coordinator.process(DOC).status());
         assertEquals("second read is served from the counter cache", 1, acquisition.fetches);
+    }
+
+    @Test
+    public void allowThenCachedOnlyOnExternalFetch_withoutCache_yieldsDenied_withoutAcquisition() {
+        // READ_CONTENT is allowed, but FETCH_EXTERNAL answers ALLOW_CACHED_ONLY on a cache miss:
+        // the counter withholds the content with an "allowed" decision type. This must still be
+        // DENIED, not an acquisition failure.
+        CountingAcquisitionPort acquisition = new CountingAcquisitionPort();
+        MediatedResourceService counter = new MediatedResourceService(
+                decide(ResourceAccessDecision.allow(), ResourceAccessDecision.cachedOnly("offline mode")),
+                acquisition, new InMemoryResourceArchive());
+
+        ProcessingResult result = coordinator(counter, acceptAll(), new RecordingLexicalIndex()).process(DOC);
+
+        assertEquals(ProcessingResult.Status.DENIED, result.status());
+        assertTrue(result.message(), result.message().contains(AccessReasonCode.CACHE_ONLY_ALLOWED.name()));
+        assertEquals(0, acquisition.fetches);
+    }
+
+    @Test
+    public void requireSourceCheckOnExternalFetch_yieldsDenied_withoutAcquisition() {
+        CountingAcquisitionPort acquisition = new CountingAcquisitionPort();
+        MediatedResourceService counter = new MediatedResourceService(
+                decide(ResourceAccessDecision.allow(), new ResourceAccessDecision(
+                        AccessDecisionType.REQUIRE_SOURCE_CHECK, AccessReasonCode.SOURCE_DENIED, "source must be checked")),
+                acquisition, new InMemoryResourceArchive());
+
+        ProcessingResult result = coordinator(counter, acceptAll(), new RecordingLexicalIndex()).process(DOC);
+
+        assertEquals(ProcessingResult.Status.DENIED, result.status());
+        assertTrue(result.message(), result.message().contains("REQUIRE_SOURCE_CHECK"));
+        assertEquals(0, acquisition.fetches);
+    }
+
+    @Test
+    public void preAcquisitionPolicyEvaluation_receivesSizeUnknown_notZero() {
+        RecordingMediatedAccess access = new RecordingMediatedAccess();
+        access.nextContent = MediatedResult.success(bronze(DOC_URI, "some bytes"), ResourceAccessDecision.allow());
+        final List<Long> seenSizes = new ArrayList<Long>();
+        ResourcePolicy rejectEmpty = new ResourcePolicy() {
+            @Override
+            public PolicyReason evaluate(VirtualResourceRef ref, long sizeBytes) {
+                seenSizes.add(Long.valueOf(sizeBytes));
+                if (sizeBytes == 0L) {
+                    return new PolicyReason(AcceptanceDecision.DENY, "empty resources are skipped");
+                }
+                return new PolicyReason(AcceptanceDecision.ACCEPT, "accepted");
+            }
+        };
+        RecordingLexicalIndex index = new RecordingLexicalIndex();
+
+        ProcessingResult result = coordinator(access, rejectEmpty, index).process(DOC);
+
+        assertEquals(ProcessingResult.Status.INDEXED, result.status());
+        assertEquals("a skip-empty rule must not reject the pre-acquisition evaluation", 1, access.requests.size());
+        assertEquals(Long.valueOf(ResourcePolicy.SIZE_UNKNOWN), seenSizes.get(0));
+        assertEquals(Long.valueOf("some bytes".getBytes(UTF_8).length), seenSizes.get(1));
+        assertTrue(index.indexed.contains(DOC));
+    }
+
+    /**
+     * Documents a gap tracked by #33/#5: resource-level access denials (e.g. a blacklist) do not
+     * withdraw an already indexed resource from the lexical index, because no withdrawal path
+     * exists yet and access denials never delete derived state. When an explicit withdrawal
+     * operation lands, this test must be inverted.
+     */
+    @Test
+    public void knownGap_blacklistedAfterIndexing_staysInTheIndex_untilAWithdrawalPathExists() {
+        RecordingMediatedAccess access = new RecordingMediatedAccess();
+        RecordingLexicalIndex index = new RecordingLexicalIndex();
+        ResourceLifecycleCoordinator coordinator = coordinator(access, acceptAll(), index);
+
+        access.nextContent = MediatedResult.success(bronze(DOC_URI, "indexed before blacklisting"), ResourceAccessDecision.allow());
+        assertEquals(ProcessingResult.Status.INDEXED, coordinator.process(DOC).status());
+
+        access.nextContent = MediatedResult.denied(ResourceAccessDecision.deny(
+                AccessReasonCode.BLACKLISTED, "resource is blacklisted"));
+        ProcessingResult denied = coordinator.process(DOC);
+
+        assertEquals(ProcessingResult.Status.DENIED, denied.status());
+        assertTrue(denied.message(), denied.message().contains("BLACKLISTED"));
+        assertTrue("known gap: blacklisting does not withdraw the index entry yet", index.indexed.contains(DOC));
     }
 
     @Test

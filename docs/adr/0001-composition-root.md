@@ -35,7 +35,7 @@ Ein kleines Gradle-Submodul im Außenring, das ausschließlich komponiert: es ke
 
 ### D. Komposition innerhalb von `acropolis` (verworfen)
 
-- Contra: verletzt die Inner-City-Regel, weil Acropolis dann Holkas-, Deigma- und Platform-Klassen konstruieren müsste; genau dieser Bypass wurde in Slice 1 entfernt.
+- Contra: verletzt die Inner-City-Regel, weil Acropolis dann Holkas-, Deigma- und Platform-Klassen konstruieren müsste. Slice 1 hat den letzten acropolis-eigenen Beschaffungs-Port (`RawResourceProvider`) entfernt, über den Tests die Tamias-Vermittlung umgehen konnten; eine Komposition in `acropolis` würde einen solchen Umweg wieder einführen und zusätzlich die Inner-City-Regel verletzen.
 
 ### E. Dauerhaft nur Testkomposition (verworfen)
 

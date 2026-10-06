@@ -47,29 +47,39 @@ import java.util.List;
  * <p>Outcome semantics for the mediated read:
  * <ul>
  *   <li>allowed, content present (fresh or cached): processing continues;</li>
- *   <li>Tamias withholds the content ({@code DENY}, {@code ALLOW_CACHED_ONLY} without cached
- *       content, {@code REQUIRE_AUTH}, {@code REQUIRE_SOURCE_CHECK}): {@code DENIED} with the
- *       decision in the message. Access decisions are actor-scoped, so they do <em>not</em>
- *       remove global derived state (lexical index, lifecycle snapshot). Removal remains an
- *       explicit archive operation and is integrated with #33/#5; {@code REQUIRE_AUTH} becomes
- *       an Adyton-backed preparation step in #10 Slice 3;</li>
- *   <li>acquisition error: {@code FAILED}.</li>
+ *   <li>Tamias withholds the content, i.e. the result carries a decision but no payload
+ *       ({@code DENY}, {@code ALLOW_CACHED_ONLY} without cached content on either evaluation,
+ *       {@code REQUIRE_AUTH}, {@code REQUIRE_SOURCE_CHECK}): {@code DENIED} with the decision
+ *       in the message. Access denials are never lifecycle decisions: they do <em>not</em>
+ *       remove derived state (lexical index, lifecycle snapshot), not even for resource-level
+ *       reason codes such as {@code BLACKLISTED}. Withdrawing an already indexed resource is
+ *       an explicit archive operation that is integrated with #33/#5; {@code REQUIRE_AUTH}
+ *       becomes an Adyton-backed preparation step in #10 Slice 3;</li>
+ *   <li>acquisition error (no decision): {@code FAILED}.</li>
  * </ul>
  * In contrast, an indexing-policy {@code DENY} is a lifecycle decision for this resource and
  * removes stale index entries and snapshots, as before.
  *
- * <p>Known gaps that are deliberately left to later slices: no pre-acquisition size probe
- * exists on the mediated contract (size limits are enforced after acquisition; a
- * {@code READ_METADATA} operation belongs to #5/#33), and the service's bronze caches have no
- * invalidation yet, so a changed source is served from the cache within one service instance.
+ * <p>Known gaps that are deliberately left to later slices:
+ * <ul>
+ *   <li>No pre-acquisition size probe exists on the mediated contract. Before Slice 1 the
+ *       skeleton denied oversized files before fetching; now the indexing policy is evaluated
+ *       first with {@link ResourcePolicy#SIZE_UNKNOWN} (scheme and patterns only), the counter
+ *       acquires the content, and size limits are enforced afterwards. Oversized content is
+ *       therefore acquired and retained in the counter's cache for the lifetime of the service
+ *       instance; the lifecycle cannot evict it ({@code deleteEntry} is not on the contract).
+ *       A {@code READ_METADATA} operation on the contract and the acquisition port belongs to
+ *       #5/#33.</li>
+ *   <li>The counter's bronze caches have no invalidation. Before Slice 1 every run re-read the
+ *       source and a changed file was re-indexed; through the counter a changed source is
+ *       served from the cache within one service instance and reported as {@code UNCHANGED}
+ *       until #5/#33 add invalidation.</li>
+ * </ul>
  */
 public final class ResourceLifecycleCoordinator {
 
     /** Purpose recorded on every mediated request issued by this lifecycle. */
     public static final String LIFECYCLE_PURPOSE = "acropolis-lifecycle-indexing";
-
-    /** Size passed to the indexing policy before acquisition, when the size is not yet known. */
-    private static final long SIZE_UNKNOWN = 0L;
 
     private final MediatedResourceAccess mediatedAccess;
     private final ActorIdentity actor;
@@ -134,7 +144,7 @@ public final class ResourceLifecycleCoordinator {
 
         // 1. Indexing policy before acquisition (scheme, include/exclude patterns).
         //    The size is unknown at this point; size limits are enforced again after acquisition.
-        PolicyReason preAcquisition = policy.evaluate(ref, SIZE_UNKNOWN);
+        PolicyReason preAcquisition = policy.evaluate(ref, ResourcePolicy.SIZE_UNKNOWN);
         if (preAcquisition.decision() == AcceptanceDecision.DENY) {
             return cleanupAndReturn(ProcessingResult.denied(ref, preAcquisition.reason()));
         }
@@ -151,7 +161,10 @@ public final class ResourceLifecycleCoordinator {
             return ProcessingResult.failed(ref, "Mediated access returned no result");
         }
         if (!access.isSuccess()) {
-            if (access.isDenied()) {
+            // Any withheld result that carries a Tamias decision is a DENIED outcome. This includes
+            // ALLOW_CACHED_ONLY returned for FETCH_EXTERNAL on a cache miss, which the counter wraps
+            // as a withheld result although the decision type itself counts as "allowed".
+            if (access.decision() != null) {
                 return ProcessingResult.denied(ref, describe(access.decision()));
             }
             return ProcessingResult.failed(ref, "Acquisition failed: " + access.errorMessage());

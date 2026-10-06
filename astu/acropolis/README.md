@@ -31,23 +31,28 @@ file: URI
 |-------|---------|
 | `ResourceLifecycleCoordinator` | Orchestrates the full processing pipeline for a single resource; acquires only through `MediatedResourceAccess` |
 | `ProcessingResult` | Outcome of processing (INDEXED, DENIED, UNCHANGED, FAILED) |
-| `ContentInspector` / `InspectionResult` | Inward port for detection and extraction (implemented by a deigma adapter at composition time) |
+| `ContentInspector` / `InspectionResult` | Inward port for detection and extraction; today implemented only by test-local deigma adapters (`createDeigmaInspector()` in the acropolis tests). The production deigma → `ContentInspector` adapter is part of #10 Slice 2 (ADR-0001) |
 | `SearchCoordinator` | Thin search facade over the lexical index |
 
 ### Decision semantics
 
 - A `tamias` indexing-rule `DENY` is a lifecycle decision for the resource: it yields `DENIED` and removes stale index entries and the snapshot.
-- A `tamias` access decision that withholds the content (`DENY`, `ALLOW_CACHED_ONLY` without cached content, `REQUIRE_AUTH`, `REQUIRE_SOURCE_CHECK`) yields `DENIED` with the decision in the message and leaves global derived state untouched, because access decisions are actor-scoped. `REQUIRE_AUTH` becomes an Adyton-backed preparation step in #10 Slice 3.
+- A `tamias` access decision that withholds the content (`DENY`, `ALLOW_CACHED_ONLY` without cached content on either evaluation, `REQUIRE_AUTH`, `REQUIRE_SOURCE_CHECK`) yields `DENIED` with the decision in the message. Access denials are never lifecycle decisions and never delete derived state, including resource-level reason codes such as `BLACKLISTED`; withdrawing an already indexed resource is an explicit archive operation to be integrated in #33/#5 (`knownGap_blacklisted…` test). `REQUIRE_AUTH` becomes an Adyton-backed preparation step in #10 Slice 3.
 - An acquisition error inside the counter yields `FAILED`.
 
 ### Composition
 
-`acropolis` does not construct connectors, extractors, policies or the counter. ArchUnit forbids any dependency of this package on `MediatedResourceService`, `AcquisitionPort` and `holkas`. Today the counter and the lifecycle are composed only in tests (`WalkingSkeletonIntegrationTest`, `MediatedAccessWalkingSkeletonTest`); the production composition point is decided in [ADR-0001](../../docs/adr/0001-composition-root.md) and created in #10 Slice 2.
+`acropolis` does not construct connectors, extractors, policies or the counter. ArchUnit forbids any dependency of this module (outside `chalcotheca`) on `MediatedResourceService`, `AcquisitionPort` and `holkas`, and whitelists `ContentInspector` as the only inward port declared in the root package. The production composition point is decided in [ADR-0001](../../docs/adr/0001-composition-root.md) and created in #10 Slice 2. Until then:
+
+- **Contract:** `MediatedResourceAccess` (chalcotheca), implemented by `MediatedResourceService`.
+- **Test composition with real adapters:** `WalkingSkeletonIntegrationTest` and `MediatedAccessWalkingSkeletonTest` wire `HolkasAcquisitionPort` over `FileSystemResourceConnector` behind an anonymous permit-all `ResourceAccessPolicy`; the first also builds the `ContentInspector` from real deigma extractors.
+- **Fakes only:** `MediatedLifecycleCoordinatorTest` (`RecordingMediatedAccess`, `CountingAcquisitionPort`, recording index) proves the contract shape and the decision mapping, not any integration.
+- **Production composition, production `ResourceAccessPolicy`, production `ContentInspector` adapter:** none yet.
 
 ### Known gaps (left to later slices)
 
-- No pre-acquisition size probe: the mediated contract offers no metadata operation yet, so size limits are enforced after the counter has acquired the content (`READ_METADATA`, #5/#33).
-- The counter's bronze caches have no invalidation: a changed source is served from the cache within one `MediatedResourceService` instance (`knownGap_…` test in `WalkingSkeletonIntegrationTest`; #33/#5).
+- No pre-acquisition size probe: before Slice 1 the skeleton denied oversized files before fetching them. The mediated contract offers no metadata operation yet, so the indexing policy is evaluated first with `ResourcePolicy.SIZE_UNKNOWN` (scheme and patterns only), the counter acquires the content, and size limits are enforced afterwards. Oversized content is therefore acquired and retained in `MediatedResourceService.contentCache` for the lifetime of the service instance; the lifecycle cannot evict it (`knownGap_oversizedFile…` test). Restoring the pre-acquisition check needs a `READ_METADATA` operation on `MediatedResourceAccess` and `AcquisitionPort` (#5/#33).
+- The counter's bronze caches have no invalidation: before Slice 1 every run re-read the source and a changed file was re-indexed; now a changed source is served from the cache within one `MediatedResourceService` instance and reported as `UNCHANGED` (`knownGap_changedSourceContent…` test in `WalkingSkeletonIntegrationTest`; #33/#5).
 - Bronze content carries no name yet; the filename hint for extraction is derived from the last path segment of the `BookmarkUri` (#33 resource records).
 
 ### Running the walking skeleton

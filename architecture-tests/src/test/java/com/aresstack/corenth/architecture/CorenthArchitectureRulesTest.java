@@ -19,6 +19,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+import static com.tngtech.archunit.base.DescribedPredicate.not;
+import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAPackage;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAnyPackage;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
@@ -41,6 +43,12 @@ import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.sli
  *   <li>A future outer bootstrap module may depend on every adapter and on the inner city, but it
  *       must stay free of UI technology and must not be depended upon by the inner city; extend
  *       {@link #CORE_MUST_NOT_DEPEND_ON_UI_TECHNOLOGY}-style rules when it is introduced.</li>
+ *   <li>{@link #ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS} covers every package of
+ *       the {@code astu:acropolis} module except the nested {@code chalcotheca} registers, so new
+ *       acropolis sub-packages (e.g. a run model) are covered automatically.
+ *       {@link #ACROPOLIS_ROOT_PORTS_ARE_AN_EXPLICIT_WHITELIST} lists the inward ports the acropolis
+ *       root package may declare; a new port there is a deliberate whitelist change, never an
+ *       accidental second acquisition path.</li>
  * </ul>
  */
 public class CorenthArchitectureRulesTest {
@@ -64,6 +72,7 @@ public class CorenthArchitectureRulesTest {
     private static final String PLATFORM_SECURITY_KEEPASSRPC = "com.aresstack.corenth.proasteion.platform.security.keepassrpc..";
     private static final String MEDIATED_RESOURCE_SERVICE = "com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceService";
     private static final String ACQUISITION_PORT = "com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort";
+    private static final String CONTENT_INSPECTOR = "com.aresstack.corenth.astu.acropolis.ContentInspector";
 
     private static JavaClasses corenthClasses;
 
@@ -92,12 +101,18 @@ public class CorenthArchitectureRulesTest {
             .because("client-facing adapters must not make access-policy decisions directly");
 
     private static final ArchRule ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS = noClasses()
-            .that().resideInAPackage(ACROPOLIS_ROOT)
+            .that(resideInAPackage(ACROPOLIS_ROOT + "..").and(not(resideInAPackage(CHALCOTHECA_ROOT + ".."))))
             .should().dependOnClassesThat(
                     haveFullyQualifiedNames(MEDIATED_RESOURCE_SERVICE, ACQUISITION_PORT)
                             .or(resideInAnyPackage(HOLKAS)))
             .because("the Acropolis lifecycle obtains resources only through the MediatedResourceAccess contract; "
                     + "the concrete archive counter, the acquisition port and Holkas are wired at the composition point (ADR-0001)");
+
+    private static final ArchRule ACROPOLIS_ROOT_PORTS_ARE_AN_EXPLICIT_WHITELIST = classes()
+            .that().resideInAPackage(ACROPOLIS_ROOT).and().areInterfaces()
+            .should().haveFullyQualifiedName(CONTENT_INSPECTOR)
+            .because("the lifecycle's only inward port besides MediatedResourceAccess (chalcotheca) is ContentInspector; "
+                    + "a new acquisition-shaped port in acropolis is a deliberate whitelist change, not a second fetch path");
 
     private static final ArchRule HOLKAS_MUST_STAY_RAW_AND_UI_FREE = noClasses()
             .that().resideInAnyPackage(HOLKAS)
@@ -228,6 +243,11 @@ public class CorenthArchitectureRulesTest {
     @Test
     public void acropolisLifecycleMustAcquireThroughMediatedAccess() {
         ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS.check(corenthClasses);
+    }
+
+    @Test
+    public void acropolisRootPortsAreAnExplicitWhitelist() {
+        ACROPOLIS_ROOT_PORTS_ARE_AN_EXPLICIT_WHITELIST.check(corenthClasses);
     }
 
     @Test
