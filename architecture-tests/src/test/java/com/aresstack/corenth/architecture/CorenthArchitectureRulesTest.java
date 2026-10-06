@@ -19,17 +19,37 @@ import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAnyPackage;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noMethods;
 import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices;
 
+/**
+ * Executable boundary rules for the Corenth city model.
+ *
+ * <p>Maintenance notes:
+ * <ul>
+ *   <li>The production classes under test come from the explicit {@code architectureProjects}
+ *       list in {@code architecture-tests/build.gradle}. A Gradle project missing from that list
+ *       fails the build configuration, so new modules (for example the bootstrap module decided
+ *       in {@code docs/adr/0001-composition-root.md}) must be added there deliberately.</li>
+ *   <li>The secret-containment rules whitelist the vault and the trusted secret adapters by
+ *       package ({@link #PLATFORM_SECURITY_KEEPASSRPC}, {@link #PLATFORM_NETWORK}). Every new
+ *       secret-source adapter from #43 (prompt, encrypted store, DPAPI) must be added to these
+ *       whitelists explicitly; otherwise its use of {@code SecretMaterial} fails these rules.</li>
+ *   <li>A future outer bootstrap module may depend on every adapter and on the inner city, but it
+ *       must stay free of UI technology and must not be depended upon by the inner city; extend
+ *       {@link #CORE_MUST_NOT_DEPEND_ON_UI_TECHNOLOGY}-style rules when it is introduced.</li>
+ * </ul>
+ */
 public class CorenthArchitectureRulesTest {
 
     private static final String ARCHITECTURE_CLASSPATH_PROPERTY = "corenth.architecture.classpath";
 
     private static final String ADYTON = "com.aresstack.corenth.adyton..";
     private static final String ASTU = "com.aresstack.corenth.astu..";
+    private static final String ACROPOLIS_ROOT = "com.aresstack.corenth.astu.acropolis";
     private static final String PROASTEION = "com.aresstack.corenth.proasteion..";
     private static final String EXEDRA = "com.aresstack.corenth.proasteion.exedra..";
     private static final String KATAGOGION = "com.aresstack.corenth.proasteion.katagogion..";
@@ -42,6 +62,8 @@ public class CorenthArchitectureRulesTest {
     private static final String PROPYLAEA = "com.aresstack.corenth.astu.propylaea..";
     private static final String PLATFORM_NETWORK = "com.aresstack.corenth.proasteion.platform.network..";
     private static final String PLATFORM_SECURITY_KEEPASSRPC = "com.aresstack.corenth.proasteion.platform.security.keepassrpc..";
+    private static final String MEDIATED_RESOURCE_SERVICE = "com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceService";
+    private static final String ACQUISITION_PORT = "com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort";
 
     private static JavaClasses corenthClasses;
 
@@ -68,6 +90,14 @@ public class CorenthArchitectureRulesTest {
             .that().resideInAnyPackage(EXEDRA, KATAGOGION)
             .should().dependOnClassesThat().resideInAnyPackage(TAMIAS)
             .because("client-facing adapters must not make access-policy decisions directly");
+
+    private static final ArchRule ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS = noClasses()
+            .that().resideInAPackage(ACROPOLIS_ROOT)
+            .should().dependOnClassesThat(
+                    haveFullyQualifiedNames(MEDIATED_RESOURCE_SERVICE, ACQUISITION_PORT)
+                            .or(resideInAnyPackage(HOLKAS)))
+            .because("the Acropolis lifecycle obtains resources only through the MediatedResourceAccess contract; "
+                    + "the concrete archive counter, the acquisition port and Holkas are wired at the composition point (ADR-0001)");
 
     private static final ArchRule HOLKAS_MUST_STAY_RAW_AND_UI_FREE = noClasses()
             .that().resideInAnyPackage(HOLKAS)
@@ -193,6 +223,11 @@ public class CorenthArchitectureRulesTest {
     @Test
     public void clientAdaptersMustNotBypassResourcePolicy() {
         CLIENT_ADAPTERS_MUST_NOT_BYPASS_RESOURCE_POLICY.check(corenthClasses);
+    }
+
+    @Test
+    public void acropolisLifecycleMustAcquireThroughMediatedAccess() {
+        ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS.check(corenthClasses);
     }
 
     @Test

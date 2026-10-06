@@ -28,8 +28,20 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>Acquisition is a separate controlled decision: when a cache miss occurs,
  * the service issues a second {@link ResourceOperation#FETCH_EXTERNAL} request
  * to Tamias before invoking the internal {@link AcquisitionPort}.
+ *
+ * <p>Lifecycle use cases depend on the {@link MediatedResourceAccess} contract that this
+ * service implements, not on this class, so that the composition point decides how the
+ * counter is assembled.
+ *
+ * <p><strong>Known limitation (tracked by #33 and #5):</strong> the three in-memory stores
+ * below have no invalidation and no TTL. Content or listings read once are served from the
+ * cache until {@link #deleteEntry(ResourceAccessRequest)} removes them, so a changed source
+ * is not re-acquired within the lifetime of a service instance. They also exist next to the
+ * {@link ResourceArchive} snapshots, i.e. there are currently two bronze truths. #33 makes
+ * the archive the authoritative record and #5 adds change detection and invalidation; the
+ * stores are consolidated against those contracts, not replaced ad hoc here.
  */
-public final class MediatedResourceService {
+public final class MediatedResourceService implements MediatedResourceAccess {
 
     private final ResourceAccessPolicy accessPolicy;
     private final AcquisitionPort acquisitionPort;
@@ -61,6 +73,7 @@ public final class MediatedResourceService {
      * @param request the access request (operation must be LIST_CHILDREN)
      * @return the result of the mediated listing operation
      */
+    @Override
     public MediatedResult<BronzeListing> listChildren(ResourceAccessRequest request) {
         if (request == null) {
             return MediatedResult.error("request must not be null");
@@ -126,6 +139,7 @@ public final class MediatedResourceService {
      * @param request the access request (operation must be READ_CONTENT)
      * @return the result of the mediated content read
      */
+    @Override
     public MediatedResult<BronzeContent> readContent(ResourceAccessRequest request) {
         if (request == null) {
             return MediatedResult.error("request must not be null");

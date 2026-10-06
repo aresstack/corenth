@@ -1,7 +1,10 @@
 package com.aresstack.corenth.astu.acropolis;
 
+import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceRef;
-import com.aresstack.corenth.astu.acropolis.chalcotheca.ContentHasher;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeContent;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceAccess;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResult;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceDigest;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceSnapshot;
@@ -10,67 +13,107 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalDocume
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndex;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.LexicalChunker;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.AcceptanceDecision;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ActorIdentity;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PolicyReason;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessDecision;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceOperation;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
 
 import java.io.IOException;
+import java.net.URI;
 import java.util.List;
 
 /**
- * Orchestrates the walking skeleton pipeline for resource lifecycle processing.
+ * Orchestrates the resource lifecycle pipeline for a single resource.
  *
- * <p>Depends only on inward-facing ports ({@link RawResourceProvider},
- * {@link ContentInspector}) and core inner modules. Outer adapter implementations
- * (holkas, deigma) are wired at the composition layer, not compiled against here.
+ * <p>Resources are obtained exclusively through the mediated bronze archive counter
+ * ({@link MediatedResourceAccess}, implemented by Chalcotheca's {@code MediatedResourceService}).
+ * The coordinator never sees connectors, the acquisition port or secrets; Tamias decides for
+ * every read whether the lifecycle actor may receive the content and whether external
+ * acquisition is permitted. There is no direct provider or connector path (#10 Slice 1).
  *
- * <p>Connects:
+ * <p>Pipeline:
  * <ol>
- *   <li>{@link RawResourceProvider} — fetch raw content</li>
+ *   <li>{@code tamias} {@link ResourcePolicy} — indexing rules before acquisition (size unknown)</li>
+ *   <li>{@link MediatedResourceAccess} — mediated read: Tamias access decision, cached or
+ *       acquired bronze content</li>
+ *   <li>{@code tamias} {@link ResourcePolicy} — indexing rules with the actual size</li>
  *   <li>{@link ContentInspector} — detect and extract</li>
- *   <li>{@code tamias} — policy decision</li>
- *   <li>{@code chalcotheca} — snapshot/cache</li>
  *   <li>{@code anagraphai} — lexical indexing</li>
+ *   <li>{@code chalcotheca} — snapshot for change detection</li>
  * </ol>
+ *
+ * <p>Outcome semantics for the mediated read:
+ * <ul>
+ *   <li>allowed, content present (fresh or cached): processing continues;</li>
+ *   <li>Tamias withholds the content ({@code DENY}, {@code ALLOW_CACHED_ONLY} without cached
+ *       content, {@code REQUIRE_AUTH}, {@code REQUIRE_SOURCE_CHECK}): {@code DENIED} with the
+ *       decision in the message. Access decisions are actor-scoped, so they do <em>not</em>
+ *       remove global derived state (lexical index, lifecycle snapshot). Removal remains an
+ *       explicit archive operation and is integrated with #33/#5; {@code REQUIRE_AUTH} becomes
+ *       an Adyton-backed preparation step in #10 Slice 3;</li>
+ *   <li>acquisition error: {@code FAILED}.</li>
+ * </ul>
+ * In contrast, an indexing-policy {@code DENY} is a lifecycle decision for this resource and
+ * removes stale index entries and snapshots, as before.
+ *
+ * <p>Known gaps that are deliberately left to later slices: no pre-acquisition size probe
+ * exists on the mediated contract (size limits are enforced after acquisition; a
+ * {@code READ_METADATA} operation belongs to #5/#33), and the service's bronze caches have no
+ * invalidation yet, so a changed source is served from the cache within one service instance.
  */
 public final class ResourceLifecycleCoordinator {
 
-    private final RawResourceProvider resourceProvider;
+    /** Purpose recorded on every mediated request issued by this lifecycle. */
+    public static final String LIFECYCLE_PURPOSE = "acropolis-lifecycle-indexing";
+
+    /** Size passed to the indexing policy before acquisition, when the size is not yet known. */
+    private static final long SIZE_UNKNOWN = 0L;
+
+    private final MediatedResourceAccess mediatedAccess;
+    private final ActorIdentity actor;
     private final ContentInspector contentInspector;
     private final ResourcePolicy policy;
     private final ResourceArchive archive;
     private final LexicalIndex lexicalIndex;
     private final LexicalChunker lexicalChunker;
 
-    public ResourceLifecycleCoordinator(RawResourceProvider resourceProvider,
+    public ResourceLifecycleCoordinator(MediatedResourceAccess mediatedAccess,
+                                         ActorIdentity actor,
                                          ContentInspector contentInspector,
                                          ResourcePolicy policy,
                                          ResourceArchive archive,
                                          LexicalIndex lexicalIndex) {
-        this(resourceProvider, contentInspector, policy, archive, lexicalIndex, null);
+        this(mediatedAccess, actor, contentInspector, policy, archive, lexicalIndex, null);
     }
 
     /**
      * Creates a coordinator with optional lexical chunking support.
      *
-     * @param resourceProvider resource provider port
+     * @param mediatedAccess the mediated bronze access contract (archive counter)
+     * @param actor the identity under which this lifecycle requests resources
      * @param contentInspector content inspector port
-     * @param policy resource policy
-     * @param archive resource archive
+     * @param policy indexing policy
+     * @param archive lifecycle snapshot archive
      * @param lexicalIndex lexical index
      * @param lexicalChunker optional chunker; if non-null, text blocks are chunked before indexing
      */
-    public ResourceLifecycleCoordinator(RawResourceProvider resourceProvider,
+    public ResourceLifecycleCoordinator(MediatedResourceAccess mediatedAccess,
+                                         ActorIdentity actor,
                                          ContentInspector contentInspector,
                                          ResourcePolicy policy,
                                          ResourceArchive archive,
                                          LexicalIndex lexicalIndex,
                                          LexicalChunker lexicalChunker) {
-        if (resourceProvider == null) throw new IllegalArgumentException("resourceProvider must not be null");
+        if (mediatedAccess == null) throw new IllegalArgumentException("mediatedAccess must not be null");
+        if (actor == null) throw new IllegalArgumentException("actor must not be null");
         if (contentInspector == null) throw new IllegalArgumentException("contentInspector must not be null");
         if (policy == null) throw new IllegalArgumentException("policy must not be null");
         if (archive == null) throw new IllegalArgumentException("archive must not be null");
         if (lexicalIndex == null) throw new IllegalArgumentException("lexicalIndex must not be null");
-        this.resourceProvider = resourceProvider;
+        this.mediatedAccess = mediatedAccess;
+        this.actor = actor;
         this.contentInspector = contentInspector;
         this.policy = policy;
         this.archive = archive;
@@ -89,57 +132,57 @@ public final class ResourceLifecycleCoordinator {
             return ProcessingResult.failed(null, "Resource reference must not be null");
         }
 
-        Long sizeHint = null;
-        try {
-            sizeHint = resourceProvider.probeSizeBytes(ref);
-        } catch (IOException ignored) {
-            // Best-effort preflight only; continue with normal fetch path.
-        } catch (IllegalArgumentException e) {
-            return ProcessingResult.failed(ref, "Invalid resource reference: " + e.getMessage());
+        // 1. Indexing policy before acquisition (scheme, include/exclude patterns).
+        //    The size is unknown at this point; size limits are enforced again after acquisition.
+        PolicyReason preAcquisition = policy.evaluate(ref, SIZE_UNKNOWN);
+        if (preAcquisition.decision() == AcceptanceDecision.DENY) {
+            return cleanupAndReturn(ProcessingResult.denied(ref, preAcquisition.reason()));
         }
-        if (sizeHint != null) {
-            PolicyReason preFetchPolicyResult = policy.evaluate(ref, sizeHint.longValue());
-            if (preFetchPolicyResult.decision() == AcceptanceDecision.DENY) {
-                return cleanupAndReturn(ProcessingResult.denied(ref, preFetchPolicyResult.reason()));
+
+        // 2. Mediated acquisition through the archive counter (Tamias decides, Holkas stays hidden)
+        MediatedResult<BronzeContent> access;
+        try {
+            access = mediatedAccess.readContent(new ResourceAccessRequest(
+                    actor, ref.uri(), ResourceOperation.READ_CONTENT, LIFECYCLE_PURPOSE));
+        } catch (RuntimeException e) {
+            return ProcessingResult.failed(ref, "Mediated access failed: " + e.getMessage());
+        }
+        if (access == null) {
+            return ProcessingResult.failed(ref, "Mediated access returned no result");
+        }
+        if (!access.isSuccess()) {
+            if (access.isDenied()) {
+                return ProcessingResult.denied(ref, describe(access.decision()));
             }
+            return ProcessingResult.failed(ref, "Acquisition failed: " + access.errorMessage());
+        }
+        BronzeContent bronze = access.value();
+        if (bronze == null) {
+            return ProcessingResult.failed(ref, "Mediated access returned no content");
         }
 
-        // 1. Fetch raw content
-        FetchedResource raw;
-        try {
-            raw = resourceProvider.fetch(ref);
-        } catch (IOException e) {
-            return ProcessingResult.failed(ref, "Failed to fetch resource: " + e.getMessage());
-        } catch (IllegalArgumentException e) {
-            return ProcessingResult.failed(ref, "Invalid resource reference: " + e.getMessage());
-        }
+        byte[] bytes = bronze.content();
 
-        if (raw == null) {
-            return ProcessingResult.failed(ref, "Resource provider returned null content");
-        }
-
-        long sizeBytes = raw.sizeBytes();
-
-        // 2. Policy check via tamias
-        PolicyReason policyResult = policy.evaluate(ref, sizeBytes);
+        // 3. Indexing policy with the actual size (tamias)
+        PolicyReason policyResult = policy.evaluate(ref, bytes.length);
         if (policyResult.decision() == AcceptanceDecision.DENY) {
             return cleanupAndReturn(ProcessingResult.denied(ref, policyResult.reason()));
         }
 
-        // 3. Compute digest (chalcotheca)
-        byte[] bytes = raw.bytes();
-        ResourceDigest digest = ContentHasher.digest(bytes);
-        
-        // 4. Detect and extract content
-        InspectionResult inspection = contentInspector.inspect(ref, bytes, raw.filename());
+        // 4. The digest travels with the bronze content (chalcotheca)
+        ResourceDigest digest = bronze.digest();
+        String filenameHint = filenameHint(ref.uri());
+
+        // 5. Detect and extract content
+        InspectionResult inspection = contentInspector.inspect(ref, bytes, filenameHint);
         if (!inspection.isSuccess()) {
             return ProcessingResult.failed(ref, inspection.errorMessage());
         }
 
-        // 5. Index via anagraphai — skip blocks with null/empty text
+        // 6. Index via anagraphai — skip blocks with null/empty text
         List<String> textBlocks = inspection.textBlocks();
         LexicalDocument.Builder docBuilder = LexicalDocument.builder(ref)
-                .title(raw.filename())
+                .title(filenameHint)
                 .contentType(inspection.mimeType());
 
         int chunkIndex = 0;
@@ -164,8 +207,8 @@ public final class ResourceLifecycleCoordinator {
             return cleanupAndReturn(
                     ProcessingResult.failed(ref, "No indexable text content after extraction"));
         }
-        
-        // 6. Check archive for unchanged content
+
+        // 7. Check archive for unchanged content
         if (!archive.hasChanged(ref, digest)) {
             return ProcessingResult.unchanged(ref);
         }
@@ -177,7 +220,7 @@ public final class ResourceLifecycleCoordinator {
             return ProcessingResult.failed(ref, "Indexing failed: " + e.getMessage());
         }
 
-        // 7. Record snapshot in archive
+        // 8. Record snapshot in archive
         archive.store(new ResourceSnapshot(ref, digest, System.currentTimeMillis()));
 
         return ProcessingResult.indexed(ref);
@@ -193,5 +236,49 @@ public final class ResourceLifecycleCoordinator {
             return ProcessingResult.failed(result.ref(),
                     "Index cleanup failed: " + e.getMessage());
         }
+    }
+
+    private static String describe(ResourceAccessDecision decision) {
+        if (decision == null) {
+            return "access withheld without decision";
+        }
+        StringBuilder text = new StringBuilder("access ")
+                .append(decision.type())
+                .append(" (")
+                .append(decision.reasonCode())
+                .append(")");
+        if (decision.explanation() != null) {
+            text.append(": ").append(decision.explanation());
+        }
+        return text.toString();
+    }
+
+    /**
+     * Derives a filename hint from the last path segment of the resource address.
+     *
+     * <p>Bronze content carries no name yet (#33 introduces resource records with metadata);
+     * until then the address is the only name source available to the lifecycle.
+     *
+     * @param uri the resource address
+     * @return the last path segment, or {@code null} if none can be derived
+     */
+    static String filenameHint(BookmarkUri uri) {
+        if (uri == null) {
+            return null;
+        }
+        URI standard = uri.toURI();
+        String path = standard != null && standard.getPath() != null
+                ? standard.getPath()
+                : uri.schemeSpecificPart();
+        if (path == null) {
+            return null;
+        }
+        int end = path.length();
+        while (end > 0 && path.charAt(end - 1) == '/') {
+            end--;
+        }
+        int start = path.lastIndexOf('/', end - 1) + 1;
+        String name = path.substring(start, end);
+        return name.isEmpty() ? null : name;
     }
 }
