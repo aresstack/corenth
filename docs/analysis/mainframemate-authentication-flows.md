@@ -332,12 +332,12 @@ PR #14 should **not** attempt the following — each is a separate issue:
 
 | Deferred work | Why |
 | --- | --- |
-| Real KeePassRPC client | `research/.../KeePassRpcClient.java` is ~1000 lines including AES key-exchange, pairing dialog, JSON-RPC. Belongs in `adyton-keepass-rpc` adapter module. |
+| Real KeePassRPC client | `research/.../KeePassRpcClient.java` is ~1000 lines including AES key-exchange, pairing dialog, JSON-RPC. Belongs in `adyton-keepass-rpc` adapter module. *(Status 2026-10: provided by the external `keepassrpc-java` library; the adapter module is `proasteion:platform:security-keepassrpc` (no `adyton-keepass-rpc` module exists), and its lookup is not yet bound to that library's `KeePassRpcCredentialClient`.)* |
 | Real PowerShell / `KeePass.exe` client | Windows-only, subprocess-heavy, requires its own integration tests. Belongs in `adyton-keepass-ps` adapter module. |
 | DPAPI provider (JNA) | Platform-specific native binding. `adyton-dpapi-jna` adapter. |
 | PowerShell DPAPI provider | Same, subprocess-based. `adyton-dpapi-ps` adapter. |
 | AES file-key provider | Portable. `adyton-aes` adapter. |
-| FTP `AuthenticationStrategy` + `FtpAccessHandle` | Lives next to the FTP connector module; needs commons-net on its classpath. |
+| FTP `AuthenticationStrategy` + `FtpAccessHandle` | Lives next to the FTP connector module; needs commons-net on its classpath. *(Status 2026-06/10: implemented as `FtpAccessHandle` in `proasteion:emporion:holkas` and `MvsFtpAuthenticationStrategy` in `proasteion:platform:security-keepassrpc`; neither pulls in commons-net — the FTP transport sits behind the `MvsFtpSessionAuthenticator` SPI, which has no production implementation yet.)* |
 | NDV `AuthenticationStrategy` + `NdvAccessHandle` | Lives next to NDV; must hide `sysFile.getPassword()` from any non-strategy code. |
 | MediaWiki `AuthenticationStrategy` + `WikiAccessHandle` | Lives next to the wiki module; wraps `MediaWikiBot`. |
 | Confluence Basic Auth strategy + `HttpAuthHandle` | Belongs in confluence module. |

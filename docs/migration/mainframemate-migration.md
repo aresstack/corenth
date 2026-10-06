@@ -2,8 +2,8 @@
 
 Ich habe den hochgeladenen MainframeMate-Stand gegen den aktuellen Corenth-Stand geprüft. Wichtig: Die Java-Quellen aus dem Upload sind bereits hashgleich im aktuellen Corenth-Zip unter `research/` enthalten. Das heißt, wir können `research/` als Referenzbestand nutzen, aber die eigentliche Implementierung muss weiter in den neuen Corenth-Modulen entstehen.
 
-Download der ausführlichen Backend-Reimplementierungsplanung:
-[corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md](sandbox:/mnt/data/corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md)
+Ausführliche Backend-Reimplementierungsplanung:
+[corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md)
 
 ## Meine aktualisierte Einschätzung
 
@@ -75,6 +75,8 @@ Ich würde **nicht** mit Pinakes, Propylaea oder allen Connectoren gleichzeitig 
 5. #10 acropolis lifecycle/run model
 6. danach FTP/MVS/JES als erster echter externer Connector
 ```
+
+*Stand 2026-10-06 (Session 0): Punkte 1–3 sind erledigt, #10 Slice 1 (Beschaffung über `MediatedResourceAccess`) ist umgesetzt. Die Reihenfolge für #33/#10/#5 ist durch [migration-inventory.md §5](migration-inventory.md) ersetzt: #33 und #10 Slice 2 (Kompositionspunkt `proasteion:application`, ADR-0001) parallel, dann #5, dann #10 Run-Modell (Slice 4/5). FTP/MVS/JES setzt einen noch nicht vorhandenen produktiven FTP-Transport voraus.*
 
 ## Konkrete Umsetzungsidee
 
@@ -152,7 +154,7 @@ Jede Entscheidung sollte einen maschinenlesbaren Grund haben.
 
 ### 5. `acropolis` zerlegen
 
-Der vorhandene `ResourceLifecycleCoordinator` ist als Walking Skeleton gut. Aber er sollte nicht weiter anwachsen. Aus MainframeMate können wir das Run-/Status-Denken übernehmen:
+Der vorhandene `ResourceLifecycleCoordinator` ist als Walking Skeleton gut. Aber er sollte nicht weiter anwachsen. *(Aktualisierung 2026-10-06: #10 wurde neu geschnitten — zuerst Beschaffung über den Vertrag `MediatedResourceAccess` statt `RawResourceProvider` (Slice 1, umgesetzt), dann ADR-0001 + äußerer Kompositionspunkt `proasteion:application` (Slice 2), dann Adyton-Station (Slice 3); erst danach ein kleines Run-/Outcome-Modell (Slice 4/5). Die folgende Klassenliste ist Erfahrungsquelle, nicht Zielbild.)* Aus MainframeMate können wir das Run-/Status-Denken übernehmen:
 
 ```text
 IndexingRun
@@ -204,8 +206,8 @@ Raw secret material darf nur innerhalb einer konkreten `AuthenticationStrategy` 
 | `#13` | Jetzt als nächstes umsetzen.                                        |
 |  `#8` | Danach Holkas-SPI, noch nicht alle Connectoren.                     |
 | `#15` | Danach Emporion als Harbor-Pipeline.                                |
-|  `#5` | Danach Tamias Policy/Cache/ChangeDetection.                         |
-| `#10` | Danach Acropolis Run-/Step-/Status-Modell.                          |
+|  `#5` | Nach #33 und #10 Slice 2: Tamias ChangeDetection/Invalidation/Scope (Reihenfolge siehe Inventar §5). |
+| `#10` | Zuerst Mediated-Komposition (Slice 1 Beschaffung — umgesetzt; Slice 2 Kompositionspunkt `proasteion:application` parallel zu #33; Slice 3 Adyton-Station), danach Run-/Outcome-Modell (Slice 4/5). |
 |  `#7` | Ports-first, keine AI-Runtime im ersten PR.                         |
 |  `#3` | Model-first, Parser danach.                                         |
 | `#12` | Plugin-/Tool-Ports, noch keine große Runtime.                       |

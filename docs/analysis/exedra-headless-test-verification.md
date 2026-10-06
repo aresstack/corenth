@@ -1,6 +1,6 @@
 # Exedra Headless-Test-Verifikation — Befund und Restaufgabe
 
-**Stand:** 2026-07-19, geprüft gegen `main` @ `3561932`
+**Stand:** 2026-07-19, geprüft gegen `main` @ `3561932` · **Nachtrag 2026-10-06 (Session 0):** §4 Aufgaben 1–3 sind erledigt — CI-Lauf 8 auf `main` meldet exedra 48/0/2 mit namentlicher Skip-Liste in der Actions-Summary, `CHATGPT_BUILD.md` dokumentiert die Minimal-Sandbox-Anforderungen; offen bleibt nur der Nachweis eines `pull_request`-Laufs (PR #41 wird nicht gemergt, s. `docs/analysis/ci-build-test-gap.md`).
 
 ## Kernaussage (Korrektur der bisherigen Planung)
 
@@ -10,7 +10,7 @@ Die bisherige Annahme — „Headless-Fix für die Exedra-Swing-Tests als Slice 
 48 Tests bestanden, 0 fehlgeschlagen, 2 übersprungen (per vorhandenem Guard)
 ```
 
-Der zuvor in einer ChatGPT-Minimal-Sandbox beobachtete Fehlschlag ist nach dem vorliegenden Befund ein Umgebungsproblem, kein nachgewiesener Code-Defekt. Es gibt daher keinen blockierenden Fix-Slice. Übrig bleibt eine kleine CI-Verifikations- und Dokumentationsaufgabe.
+Der zuvor in einer ChatGPT-Minimal-Sandbox beobachtete Fehlschlag ist nach dem vorliegenden Befund ein Umgebungsproblem, kein nachgewiesener Code-Defekt. Es gibt daher keinen blockierenden Fix-Slice. Die verbleibende CI-Verifikations- und Dokumentationsaufgabe (§4) ist seit `.github/workflows/build.yml` auf `main` erledigt; offen ist nur noch der Nachweis auf einem `pull_request`-Lauf.
 
 ## 1. Verifikationsaufbau
 
@@ -69,13 +69,13 @@ Vor Codeänderungen ist zu prüfen, ob der Fehler während der Testausführung o
 
 ### Goal
 
-Bestätigen, dass die Exedra-Suite in der tatsächlichen CI-Umgebung grün läuft, und die Umgebungsanforderungen für Minimal-Sandboxes dokumentieren — ohne vorsorgliche Änderungen an Test- oder Produktionscode.
+Bestätigen, dass die Exedra-Suite in der tatsächlichen CI-Umgebung grün läuft, und die Umgebungsanforderungen für Minimal-Sandboxes dokumentieren — ohne vorsorgliche Änderungen an Test- oder Produktionscode. *(Erledigt für `main`, Stand 2026-10-06: `build.yml` Läufe 6–8 ohne Xvfb, nur `fontconfig`/`libfreetype6`/`fonts-dejavu-core`; Test- und Produktionscode blieben unverändert. Offen: Bestätigung auf einem `pull_request`-Lauf.)*
 
 ### Tasks
 
-1. `:proasteion:exedra:test` auf dem Standard-Linux-CI-Runner ausführen. Erwartung: 48 bestanden, 2 übersprungen.
-2. Übersprungene Tests im Gradle-Report sichtbar machen, damit displaypflichtige Tests nicht unbemerkt verschwinden.
-3. `CHATGPT_BUILD.md` um die Paketanforderungen und Diagnosehinweise für headless Minimal-Sandboxes ergänzen.
+1. ✅ erledigt: `./gradlew --no-daemon clean build --stacktrace` (inkl. `:proasteion:exedra:test`) lief in `build.yml` Lauf 8 auf `ubuntu-latest` grün — exedra 48 bestanden, 2 übersprungen. Noch ausstehend: ein Lauf auf einem `pull_request`-Event.
+2. ✅ erledigt in der GitHub-Actions-Zusammenfassung: `build.yml` wertet die JUnit-XML aller Module aus und listet übersprungene Tests namentlich. Die Gradle-Konsolenlog-Variante aus PR #41 (`testLogging { events "skipped" }`, nur Exedra) ist damit redundant und wird nicht gemergt.
+3. ✅ erledigt: `CHATGPT_BUILD.md`, Abschnitt „Headless Swing test environment“.
 4. Bei einem unerwarteten CI-Fehlschlag zuerst den Stacktrace gegen §3 abgleichen.
 
 ### Out of scope / do not
@@ -87,8 +87,8 @@ Bestätigen, dass die Exedra-Suite in der tatsächlichen CI-Umgebung grün läuf
 
 ### Acceptance criteria
 
-- CI-Lauf ist grün und zeigt die erwarteten Skips sichtbar an.
-- `CHATGPT_BUILD.md` dokumentiert die Minimal-Sandbox-Anforderungen.
+- CI-Lauf auf `main` ist grün und weist die erwarteten Skips in der Actions-Zusammenfassung aus (erfüllt: `build.yml` Läufe 6–8). Offen: grüner Lauf auf einem `pull_request`-Event; `Build and test (Java 8 target)` ist noch kein verpflichtender Statuscheck.
+- `CHATGPT_BUILD.md` dokumentiert die Minimal-Sandbox-Anforderungen (erfüllt).
 - Test- oder Produktionscode bleibt unverändert, sofern kein reproduzierbarer Defekt gefunden wird.
 
 ## 5. Konsequenz für die Planung

@@ -25,7 +25,7 @@ MainframeMate and Corenth have fundamentally different credential access models:
 | **Secret visibility** | Raw `String` passwords flow through `CredentialStore.resolve()`, `Credentials.getPassword()` | Secrets stay inside the vault; strategies consume them; connectors/modules receive handles/leases |
 | **Lifetime** | Session cache holds credentials until application exit (no expiration) | Leases/grants expire and are rejected after their stated lifetime; cache governed by `SecretCachePolicy` |
 | **Scope binding** | None — credentials grant full access once resolved | Leases/grants bound to target, principal, purpose, scope, method and TTL |
-| **Adapter coupling** | KeePass, DPAPI, PowerShell directly invoked in `CredentialStore` | Adapters implement `CredentialProvider` SPI; strategies implement `AuthenticationStrategy` |
+| **Adapter coupling** | KeePass, DPAPI, PowerShell directly invoked in `CredentialStore` | Secret-source adapters implement the `SecretMaterialProvider` SPI consumed by `ProviderBackedAccessBroker` (e.g. `KeePassRpcSecretMaterialProvider`); the lease-based `CredentialProvider` SPI exists but has no implementation yet; strategies implement `AuthenticationStrategy` |
 | **RAM cache** | Two caches with different keys/lifecycles (caused bugs) | Single `SecretMaterialCache` with `SecretCachePolicy` (TTL, idle timeout, shutdown clear) |
 
 ## Source files inspected
@@ -43,8 +43,8 @@ All files listed in the issue were reviewed from the `research/` directory.
 | `app/.../util/CredentialStore.java` | adapt | `adyton:SessionCredentialCache`, `adyton:SecretMaterialCache`, `adyton:AccessBroker` | Session cache concept extracted. Two-cache bug fixed via unified `SecretMaterialCache` with `SecretCachePolicy`. Global singleton removed. Broker pattern replaces direct resolution. |
 | `app/.../util/SessionCipher.java` | adapt | `adyton:SecretMaterialCache` | The in-memory encryption concept is replaced by policy-driven caching with TTL/idle timeout. Per-JVM key concept preserved in cache's RAM-only constraint. |
 | `app/.../util/KeePassNotAvailableException.java` | adapt | `adyton:SecretUnavailableException` | Folded into unified exception hierarchy (`AccessException` → `SecretUnavailableException`). German UI message removed. |
-| `app/.../util/KeePassProvider.java` | adapter-candidate | _(future adapter module)_ | 871-line class tightly coupled to PowerShell, Settings, Swing. Would implement `CredentialProvider` adapter. |
-| `app/.../util/KeePassRpcClient.java` | adapter-candidate | _(future adapter module)_ | WebSocket/SRP protocol client. Would implement both `CredentialProvider` and potentially a `DelegatedAccessProvider`. |
+| `app/.../util/KeePassProvider.java` | adapter-candidate | `proasteion:platform:security-keepassrpc` (RPC part) | 871-line class tightly coupled to PowerShell, Settings, Swing. RPC part: realised as `KeePassRpcSecretMaterialProvider` implementing `SecretMaterialProvider`; binding to the real `keepassrpc-java` client still open (stub-tested only). PowerShell/KeePass.exe part: deliberately not migrated (#43, compendium chapter 13). |
+| `app/.../util/KeePassRpcClient.java` | adapter-candidate | external library `com.aresstack:keepassrpc-java` | WebSocket/SRP protocol client. Not reimplemented in Corenth; consumed as the external library (declared in `proasteion:platform:security-keepassrpc`, not yet wired: `ReflectiveKeePassRpcSecretLookup` does not match `KeePassRpcCredentialClient`'s `getUserName`/`getPassword` API). The adapter implements `SecretMaterialProvider`; no `CredentialProvider`/`DelegatedAccessProvider` implementation exists. |
 | `app/.../util/KeePassRpcPairingDialog.java` | do-not-copy | — | Swing UI dialog. UI has no place in the vault boundary. |
 | `app/.../util/AesCryptoProvider.java` | adapter-candidate | _(future adapter module)_ | Pure-Java AES-256-GCM with file-based master key. Would implement `CredentialProvider`. |
 | `app/.../util/DpapiCryptoProvider.java` | adapter-candidate | _(future adapter module)_ | Windows DPAPI via JNA. Platform-specific; optional adapter behind `CredentialProvider`. |
@@ -114,12 +114,12 @@ Vault SPI   →  CredentialProvider.acquire()             →  CredentialLease
 
 | Deferred work | Why |
 | --- | --- |
-| KeePassRPC client adapter | ~1000 lines including AES key-exchange, pairing. Separate `adyton-keepass-rpc` module. |
+| KeePassRPC client adapter | Protocol client (AES key-exchange, pairing) comes from the external `keepassrpc-java` library; adapter module `proasteion:platform:security-keepassrpc` exists (`KeePassRpcSecretMaterialProvider` implementing `SecretMaterialProvider`), but its lookup is not yet bound to the real `KeePassRpcCredentialClient` (stub-tested only). |
 | PowerShell KeePass adapter | Windows-only, subprocess-heavy. Separate `adyton-keepass-ps` module. |
 | DPAPI provider (JNA) | Platform-specific native binding. `adyton-dpapi-jna` module. |
 | PowerShell DPAPI provider | Same, subprocess-based. `adyton-dpapi-ps` module. |
 | AES file-key provider | Portable. `adyton-aes` module. |
-| FTP `AuthenticationStrategy` | Lives next to the FTP connector; needs commons-net. |
+| FTP `AuthenticationStrategy` | Done (2026-06-17) as `MvsFtpAuthenticationStrategy` in `proasteion:platform:security-keepassrpc`, not next to the connector. It does not need commons-net: it hands the vault material to the `MvsFtpSessionAuthenticator` SPI, which opens the session; that SPI still has no production implementation and no module declares commons-net. |
 | NDV `AuthenticationStrategy` | Lives next to NDV; hides `getPassword()` from non-strategy code. |
 | MediaWiki `AuthenticationStrategy` | Lives next to the wiki module; wraps `MediaWikiBot`. |
 | Confluence Basic Auth strategy | Belongs in confluence module. |

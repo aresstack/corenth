@@ -23,7 +23,9 @@ package com.aresstack.corenth.adyton;
  * <ul>
  *   <li>{@code LoginManagerCredentialsProvider} — non-interactive cached lookup</li>
  *   <li>{@code InteractiveCredentialsProvider} — interactive (UI) password prompt</li>
- *   <li>{@code KeePassProvider} — KeePass database via PowerShell or RPC</li>
+ *   <li>{@code KeePassProvider} — KeePass database via RPC (in Corenth realised as
+ *       {@code KeePassRpcSecretMaterialProvider} implementing {@link SecretMaterialProvider},
+ *       not this port; the PowerShell variant is deliberately not migrated)</li>
  *   <li>{@code WindowsCryptoUtil} — facade over DPAPI/AES/PowerShell crypto</li>
  * </ul>
  */

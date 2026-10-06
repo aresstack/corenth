@@ -125,7 +125,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | PR 3 | `emporion` Harbor-Pipeline (#15) | ✅ erledigt; #15 geschlossen |
 | PR 4 | `tamias` IndexingPolicy/ChangeDetection/CacheInvalidation (#5) | 🟡 teilweise; #5 auf Restarbeit neu zugeschnitten, abhängig von #33 |
 | PR 5 | `acropolis` Run/Plan/Step/Status (#10) | 🟡 Slice 1 (mediated Beschaffung) umgesetzt, Bootstrap-Ort in ADR-0001 dokumentiert; produktive Komposition (Slice 2) vor Run-Modell; kein Headless-Fix-Blocker |
-| PR 6 | FTP/MVS/JES als erster echter Connector | 🔧 FTP/MVS vorhanden; JES separat in #35 |
+| PR 6 | FTP/MVS/JES als erster echter Connector | 🟡 FTP/MVS nur als Ports, `FtpAccessHandle` und Test-Fakes modelliert, kein produktiver FTP-Transport (s. §2.3); JES separat in #35, setzt den Transport-Slice voraus |
 | PR 7–9 | `pinakes` / `propylaea` / `katagogion` ports-first (#7/#3/#12) | ⬜ offen |
 
 ---
@@ -135,7 +135,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | Issue | Befund | Ausgeführte Aktion |
 | ---: | --- | --- |
 | #20, #27, #30 | zeichengleiche Duplikate von #18, #24, #28; Deliverables in `main` | als Duplikate geschlossen |
-| #8 | Connector-SPI sowie local/FTP/MVS vorhanden; Rest war zu breit gebündelt | geschlossen; ersetzt durch #34–#39 |
+| #8 | Connector-SPI und `file:`-Connector vorhanden; FTP/MVS nur als Ports plus Test-Fakes ohne produktiven Transport (§2.3); Rest war zu breit gebündelt | geschlossen; ersetzt durch #34–#39 — der FTP-Transport-Slice ist dabei durch kein Issue abgedeckt und muss separat angelegt werden |
 | #11 | Thin-Adapter-Regel implementiert, dokumentiert und per ArchUnit erzwungen | geschlossen |
 | #15 | Harbor-Boundary implementiert | geschlossen |
 | #5 | teilweise erledigt, alte Beschreibung zu breit | auf ChangeDetection/Invalidation/Scope/Depth/Size neu zugeschnitten |

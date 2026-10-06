@@ -21,8 +21,10 @@ package com.aresstack.corenth.adyton;
  * <b>Migration note:</b> This is a new Corenth API without a direct
  * MainframeMate equivalent. MainframeMate's {@code KeePassRpcClient} performs
  * authenticated operations against KeePass via WebSocket/SRP, which is the
- * closest precedent for delegated secret operations. A future KeePassRPC
- * adapter would implement this port.
+ * closest precedent for delegated secret operations. The existing KeePassRPC
+ * adapter ({@code proasteion:platform:security-keepassrpc}) implements
+ * {@link SecretMaterialProvider}, not this port; a delegated-operation adapter
+ * on top of KeePassRPC remains future work.
  */
 public interface DelegatedAccessProvider {
 

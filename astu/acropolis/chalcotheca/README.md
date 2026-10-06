@@ -60,7 +60,7 @@ PENDING → ACQUIRED → CACHED → INDEXED
 
 ## Role in Corenth
 
-Chalcotheca sits between resource acquisition (`holkas`/`deigma`) and indexing (`anagraphai`/`pinakes`). It provides:
+Chalcotheca is the archive counter in front of acquisition (`holkas`, used internally through the `AcquisitionPort`) and the bronze source for extraction and indexing (`deigma`, `anagraphai`/`pinakes`). It provides:
 
 - **Change detection** — content hashing via `ContentHasher` determines whether a resource needs reprocessing.
 - **Lifecycle tracking** — `ArchivedResource` and `ResourceLifecycleState` record each resource's journey from discovery to indexing or deletion.

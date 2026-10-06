@@ -47,7 +47,8 @@ public final class MediatedResourceService implements MediatedResourceAccess {
     private final AcquisitionPort acquisitionPort;
     private final ResourceArchive archive;
 
-    // In-memory bronze state stores (simple for the walking skeleton)
+    // In-memory bronze state stores without TTL or invalidation; see the known-limitation note
+    // in the class Javadoc (consolidated against the #33 record/version contract and #5 invalidation).
     private final Map<BookmarkUri, BronzeListing> listingCache = new ConcurrentHashMap<BookmarkUri, BronzeListing>();
     private final Map<BookmarkUri, BronzeContent> contentCache = new ConcurrentHashMap<BookmarkUri, BronzeContent>();
     private final Map<BookmarkUri, BronzeMetadata> metadataCache = new ConcurrentHashMap<BookmarkUri, BronzeMetadata>();

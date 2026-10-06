@@ -28,7 +28,7 @@
 # Kapitel 1: CI: Gradle-Build & Architektur-Tests (#45)
 
 
-**Datei:** `.github/workflows/build.yml` · **Vor #33/#10 mergen — jede weitere Änderung soll bereits unter CI laufen.**
+**Datei:** `.github/workflows/build.yml` · **Auf `main` committet (9d64884, gehärtet 4c745e3) und bei Push grün (Läufe 6–8). Offen vor #33/#10 Slice 2: erster `pull_request`-Lauf und Hinterlegung als verpflichtender Statuscheck — erst dann läuft jede weitere Änderung unter einem CI-Gate.**
 
 > ⚠️ **Stand Session 0 (2026-10-06):** Dieses Kapitel wurde gegen `main @ b97c607` geschrieben, bevor `build.yml` committet wurde. Die committete Datei weicht von der Skizze unten ab: Workflowname „Build and test“, Job „Build and test (Java 8 target)“, Temurin JDK 21, `./gradlew --no-daemon clean build --stacktrace`, apt-Fontpakete für headless AWT, Python-Summary der JUnit-XML mit namentlicher Skip-Liste. **Maßgeblich ist die Datei im Repository, nicht diese Skizze.** Status: grün auf `main` (Läufe 6–8), noch kein `pull_request`-Lauf, Required Check nicht konfiguriert, CI also noch kein erzwungenes Merge-Gate. Details: `docs/analysis/ci-build-test-gap.md`.
 
@@ -94,14 +94,14 @@ Sollte `./gradlew build` im Repo-Ist-Zustand rot sein (ungetestete Direkt-Commit
 
 ### Akzeptanzkriterien
 
-Workflow läuft auf PR + main; ArchUnit nachweislich im Lauf enthalten (Log-Beleg im Issue); Reports-Artefakt bei Fehlschlag; Branch-Protection-Empfehlung im Issue notiert (Required Check „Gradle build"), Umsetzung liegt beim Repo-Owner; PR #41-Skip-Zeilen nach Merge sichtbar (Übergabe an #40).
+Workflow läuft bei Push auf `main` (Läufe 6–8 grün, 2026-07-19); `pull_request`-Trigger noch nie ausgelöst (PR #41 ohne Check-Runs) — Nachweis mit dem nächsten echten PR; ArchUnit nachweislich im Lauf enthalten (`:architecture-tests:test` im Log von Lauf 8); Reports-Artefakt `gradle-test-reports` bei Fehlschlag; Branch-Protection noch nicht konfiguriert — Required Check **`Build and test (Java 8 target)`** (nicht „Gradle build“) im Ruleset „main“ aktivieren, Umsetzung liegt beim Repo-Owner; übersprungene Tests erscheinen namentlich in der Actions-Summary (PR #41 damit redundant, wird nicht gemergt; Übergabe an #40).
 
 ---
 
 # Kapitel 2: Exedra: Headless-Verifikation in CI (#40)
 
 
-**Modul:** `proasteion:exedra` + CI · **Klein — hängt an #45 (ohne CI kein CI-Lauf) und PR #41**
+**Modul:** `proasteion:exedra` + CI · **Klein — CI aus #45 vorhanden (`build.yml`, Lauf 8 grün mit namentlicher Skip-Liste); PR #41 redundant, wird nicht gemergt; offen nur der Nachweis auf einem `pull_request`-Lauf**
 
 > ⚠️ **Stand Session 0 (2026-10-06):** CI-Lauf 8 auf `main` bestätigt exedra 48 pass / 0 fail / 2 skip mit namentlicher Skip-Liste in der Actions-Summary (für alle Module, nicht nur exedra). PR #41 (`testLogging { events "skipped" }` nur in exedra) ist damit redundant und wird nicht gemergt; der unten skizzierte `HeadlessSkipBudgetTest` wurde nicht umgesetzt. Offen bleibt nur der Nachweis eines `pull_request`-Laufs. Entscheidung: `docs/analysis/ci-build-test-gap.md`.
 
@@ -113,7 +113,7 @@ Workflow läuft auf PR + main; ArchUnit nachweislich im Lauf enthalten (Log-Bele
 
 ### Umsetzung
 
-1. PR #41 reviewen/mergen (Review-Checkliste: nur `testLogging`-Änderung, keine Guard-Änderungen, keine neuen Skips).
+1. PR #41 ohne Merge schließen (redundant zur JUnit-XML-Zusammenfassung in `build.yml`, auf Exedra beschränkt; Entscheidung in `docs/analysis/ci-build-test-gap.md`).
 2. Nach #45-Merge: CI-Lauf prüfen — erwartet: exedra 48/0/2, Skip-Zeilen im Log sichtbar.
 3. Skip-Budget als Test verankern (leichtgewichtig, ohne Gradle-Plugin):
 
@@ -301,7 +301,7 @@ public interface ResourceLifecycleRepository {
 
 #### `InMemoryResourceLifecycleRepository`
 
-Referenzimplementierung. Implementiert **auch** `ResourceArchive`, indem sie das bestehende `InMemoryResourceArchive`-Verhalten delegierend übernimmt (Komposition, nicht Vererbung) — so kann #10-Slice-1 eine einzige Instanz an `MediatedResourceService` **und** an das neue Run-Modell geben. `hasChanged` wird konsistent auf `recordAcquisition`-Wahrheit abgebildet.
+Referenzimplementierung. Implementiert **auch** `ResourceArchive`, indem sie das bestehende `InMemoryResourceArchive`-Verhalten delegierend übernimmt (Komposition, nicht Vererbung) — so kann der #10-Kompositionspunkt (Slice 2) bzw. Slice 5 eine einzige Instanz an `MediatedResourceService` **und** an den Coordinator/das Run-Modell geben; Slice 1 ist bereits mit dem bestehenden `ResourceArchive` umgesetzt. `hasChanged` wird konsistent auf `recordAcquisition`-Wahrheit abgebildet.
 
 ```java
 package com.aresstack.corenth.astu.acropolis.chalcotheca;
@@ -383,15 +383,15 @@ Java 8; bestehende `ResourceArchive`-Tests unverändert grün; neuer Port vollst
 # Kapitel 4: Acropolis: Mediated Lifecycle & Run-Modell (#10)
 
 
-**Modul:** `astu:acropolis` (+ Bootstrap-Modul, s. Entscheidung) · **Java 8** · **Abhängig von:** #33 (Repository-Port), verzahnt mit #5
+**Modul:** `astu:acropolis` (+ Bootstrap-Modul `proasteion:application`, s. ADR-0001) · **Java 8** · **Abhängigkeiten:** Slice 1–3 unabhängig von #33 und #5 (Slice 1 erledigt; Slice 2 parallel zu #33 startbar, vgl. Inventar §5); das Run-Modell (Slice 4) folgt nach #5, erst Slice 5 integriert den #33-Repository-Port (`UNCHANGED`/Tombstone) und die #5-Entscheidungen
 
 > ✅ **Stand Session 0 (2026-10-06): Slice 1 und ADR umgesetzt.** `ResourceLifecycleCoordinator` beschafft nur noch über den neuen Chalcotheca-Vertrag `MediatedResourceAccess` (implementiert von `MediatedResourceService`); `RawResourceProvider`/`FetchedResource` sind entfernt; ArchUnit-Regel `ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS`; Bootstrap-Ort in `docs/adr/0001-composition-root.md` entschieden (`proasteion:application`). **Nicht** umgesetzt und gemäß Issue-Text spätere Slices: produktiver Kompositionspunkt und erste produktive `ResourceAccessPolicy` (Slice 2), `AccessPreparation`/Adyton-Station (Slice 3), Run-Modell (Slice 4), Cache-Konsolidierung (Slice 5). Abweichend von Designentscheidung 1 unten gehört der Kompositionspunkt nach Issue-Text zu Slice 2, nicht zu Slice 1. Der `ContentInspector`-Port bleibt; die Harbor-Variante (`emporion.ResourceHarbor`) beschafft außerhalb der Mediation und ist deshalb keine Lifecycle-Eingabe.
 
 ### Designentscheidungen
 
-1. **Reihenfolge ist verbindlich (aus Issue-Text übernommen):** Slice 1 stellt die Beschaffung auf `MediatedResourceService`/`AcquisitionPort` um und schafft den produktiven Kompositionspunkt. Erst Slice 2 extrahiert das Run-Modell. Grund: Ein Run-Modell, das um den `RawResourceProvider`-Direktpfad herum entsteht, zementiert den falschen Zugriffsweg.
+1. **Reihenfolge ist verbindlich (aus Issue-Text übernommen):** Slice 1 (umgesetzt, Session 0) stellt ausschließlich die Beschaffung des `ResourceLifecycleCoordinator` auf den Chalcotheca-Vertrag `MediatedResourceAccess` um — nicht auf `MediatedResourceService`/`AcquisitionPort`, von denen Acropolis per ArchUnit (`ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS`) nicht abhängen darf. Vor Slice 2 ist der Ort des Kompositionspunkts per ADR entschieden (ADR-0001); Slice 2 schafft den produktiven äußeren Kompositionspunkt; Slice 3 ergänzt die Adyton-Station. Erst Slice 4 extrahiert das Run-Modell, Slice 5 integriert #33/#5. Grund: Ein Run-Modell, das um den `RawResourceProvider`-Direktpfad herum entsteht, zementiert den falschen Zugriffsweg.
 2. **Der Coordinator wird nicht ersetzt, sondern intern umgehängt.** Öffentliche Signatur bleibt vorerst; nur die Beschaffung wechselt. Der bestehende `WalkingSkeletonIntegrationTest` bleibt das Regressionsnetz und wird lediglich auf die neue Verdrahtung umgestellt.
-3. **Adyton-Station als optionale Vorbereitung, nicht als Pflichtdurchlauf.** `file:`-Ressourcen brauchen keine Credentials. Die Station ist ein Port `AccessPreparation`, den authentifizierungspflichtige Connectors (FTP/MVS heute, NDV/Wiki später) nutzen; die Default-Implementierung ist ein No-Op. Es fließen ausschließlich `AccessRequest`/Grant-Konzepte — niemals `SecretMaterial` — durch Acropolis (ArchUnit-Secret-Regeln decken das bereits ab).
+3. **Adyton-Station (Slice 3) als optionale Vorbereitung, nicht als Pflichtdurchlauf.** `file:`-Ressourcen brauchen keine Credentials. Die Station ist ein Port `AccessPreparation`, den authentifizierungspflichtige Connectors nutzen werden (FTP/MVS, sobald ein produktiver FTP-Transport existiert — heute nur Ports und Test-Fakes; NDV/Wiki später); die Default-Implementierung ist ein No-Op. Slice 1 kommt ohne diesen Port aus. Es fließen ausschließlich `AccessRequest`/Grant-Konzepte — niemals `SecretMaterial` — durch Acropolis (ArchUnit-Secret-Regeln decken das bereits ab).
 4. **Run-Modell klein schneiden:** `ResourceProcessingRun`, `StepOutcome`, `RunSummary`, `ProcessingFailure`. Kein `Plan`, kein `StepType`-Katalog, kein `Context`-Objekt im ersten Wurf — die tauchen erst auf, wenn ein zweiter Ablauftyp existiert (YAGNI, konsistent zur #13-Entscheidung). Das weicht bewusst vom älteren Juni-Plan ab und ist mit dem neuen #10-Text vereinbar („Run-/Plan/Step-Modell extrahieren" ≠ alles auf einmal).
 5. **`UNCHANGED` kommt aus #33, nicht aus eigener Logik:** Der Coordinator ruft `ResourceLifecycleRepository.recordAcquisition(...)` und mappt `RecordOutcome` → `StepOutcome`. Keine zweite Digest-Vergleichslogik.
 
@@ -404,11 +404,11 @@ Java 8; bestehende `ResourceArchive`-Tests unverändert grün; neuer Port vollst
 - **Doppelte Caches:** `MediatedResourceService` hält drei unbegrenzte `ConcurrentHashMap`-Caches. Sie müssen entfernt oder hinter das #33-Repository gelegt werden, sonst existieren zwei Wahrheiten (Detail in Kapitel 3, „Architektur-Konflikt“). Empfehlung: entfernen; Cache-Nutzen kommt aus `ResourceLifecycleRepository` + tamias-Entscheid. *Stand Session 0: in Slice 1 bewusst belassen und dokumentiert; Konsolidierung erst gegen den #33-Vertrag (Slice 5).*
 - **`ContentInspector` vs. `deigma`:** Der Coordinator nutzt einen eigenen `ContentInspector`-Port, `emporion` nutzt `deigma`. Zwei Extraktionswege. Slice 1 sollte den Coordinator-Input auf das `HarborResult` von `emporion.ResourceHarbor` umstellen (Harbor = Beschaffung + flache Extraktion), statt beide Wege zu pflegen.
 - **`AcquisitionPort` wirft `IOException`,** `MediatedResourceService` fängt sie in `MediatedResult`. Der Coordinator muss `MediatedResult`-Fehler in `ProcessingFailure` überführen — nicht in Exceptions, damit ein Run bei Einzelfehlern weiterläuft.
-- **`ResourceAccessPolicy` existiert nur als Interface + Testimplementierung** (verifiziert): Der produktive Mediated-Pfad war bislang schlicht nicht konfigurierbar. Slice 1 ergänzt eine `PermitAllAccessPolicy` in tamias als ersten Produktiv-Vertreter; die echte Policy-Komposition kommt mit #5. Auch das gehört ins tamias-Inventar, sobald es entsteht.
+- **`ResourceAccessPolicy` existiert nur als Interface + Testimplementierung** (verifiziert): Der produktive Mediated-Pfad war bislang schlicht nicht konfigurierbar. Slice 2 (Kompositionspunkt) muss die erste produktive `ResourceAccessPolicy` explizit wählen und dokumentieren — eine „erlaube alles“-Policy nur als bewusst benannter Platzhalter (ADR-0001, Leitplanke 5); in Slice 1 wurde keine `PermitAllAccessPolicy` ergänzt. Die echte Policy-Komposition kommt mit #5. Auch das gehört ins tamias-Inventar, sobald es entsteht.
 
-### Slice 1 — Mediated-Komposition
+### Slice 1 — Mediated Acquisition (umgesetzt in Session 0) und Slice 3 — Adyton-Station (offen)
 
-#### `AccessPreparation` (Port, `astu:acropolis`)
+#### `AccessPreparation` (Port, `astu:acropolis`) — Slice 3, noch nicht vorhanden
 
 Erklärt: die adyton-Station. Sie liefert dem Lifecycle nichts außer der Zusicherung „Zugang ist vorbereitet" (oder eine Failure). Rückgabetyp bewusst `void` + Exception statt Grant-Durchreichung — der Coordinator soll Grants weder halten noch weitergeben können.
 
@@ -438,17 +438,21 @@ public class AccessPreparationException extends Exception {
 
 #### Umbau `ResourceLifecycleCoordinator` (Kernänderung, Auszug)
 
-Erklärt: Beschaffung läuft über `MediatedResourceService.fetchContent(...)`; `RawResourceProvider` wird aus dem Konstruktor entfernt (Breaking Change nur für Tests — akzeptiert, da kein Produktivnutzer existiert). Der `ResourceAccessRequest` wird mit `ActorIdentity` „lifecycle" gebildet, damit tamias Lifecycle-Zugriffe von UI-Zugriffen unterscheiden kann.
+Erklärt: Beschaffung läuft über den schmalen Vertrag `MediatedResourceAccess.readContent(ResourceAccessRequest)` (implementiert von `MediatedResourceService`; `fetchContent` ist die interne `AcquisitionPort`-Methode und bleibt für den Coordinator unsichtbar); `RawResourceProvider` wird aus dem Konstruktor entfernt (Breaking Change nur für Tests — akzeptiert, da kein Produktivnutzer existiert). Der `ResourceAccessRequest` wird mit `ActorIdentity` „lifecycle" gebildet, damit tamias Lifecycle-Zugriffe von UI-Zugriffen unterscheiden kann.
 
 ```java
-// Konstruktor neu:
-public ResourceLifecycleCoordinator(MediatedResourceService mediatedAccess,
-                                    AccessPreparation accessPreparation,
-                                    ResourceLifecycleRepository lifecycleRepository,
-                                    ResourceHarborInspection inspection, // Adapter auf emporion, s.u.
+// Konstruktor (Slice 1, umgesetzt in Session 0 — tatsächliche Signatur):
+public ResourceLifecycleCoordinator(MediatedResourceAccess mediatedAccess,   // Vertrag, implementiert von MediatedResourceService
+                                    ActorIdentity actor,                     // Lifecycle-Akteur für ResourceAccessRequest
+                                    ContentInspector contentInspector,       // Port bleibt; Deigma-Adapter am Kompositionspunkt
                                     ResourcePolicy policy,
+                                    ResourceArchive archive,                 // bestehender Port; #33-Repository erst in Slice 5
                                     LexicalIndex lexicalIndex,
                                     LexicalChunker lexicalChunker) { ... }
+// AccessPreparation (Slice 3), ResourceLifecycleRepository (#33/Slice 5) und eine
+// Harbor-Inspektion sind bewusst NICHT Teil der Signatur; die ursprüngliche Skizze
+// (MediatedResourceService + AccessPreparation + ResourceLifecycleRepository +
+// ResourceHarborInspection) gilt nicht mehr.
 
 // Beschaffungspfad neu (statt resourceProvider.fetch(...)):
 accessPreparation.prepare(uri);
@@ -485,9 +489,9 @@ public interface ResourceHarborInspection {
 }
 ```
 
-#### Kompositionspunkt `proasteion:application`
+#### Kompositionspunkt `proasteion:application` — Slice 2 (nach ADR-0001; offen)
 
-Erklärt: der erste produktive Bootstrap. Bewusst eine einzige Klasse ohne Framework; DI-Container erst bei Bedarf.
+Erklärt: der erste produktive Bootstrap. Bewusst eine einzige Klasse ohne Framework; DI-Container erst bei Bedarf. Verdrahtet werden die in Slice 1 eingeführten Verträge (`MediatedResourceAccess` ← `MediatedResourceService`, `AcquisitionPort` ← `HolkasAcquisitionPort`, `ContentInspector` ← Deigma-Adapter, bestehendes `ResourceArchive`); die erste produktive `ResourceAccessPolicy` muss hier explizit gewählt werden (ADR-0001, Leitplanke 5). `PermitAllAccessPolicy`, `InMemoryResourceLifecycleRepository` und `DeigmaHarborInspection` in der Skizze unten existieren noch nicht, und der skizzierte Coordinator-Aufruf entspricht nicht der umgesetzten Signatur.
 
 ```java
 package com.aresstack.corenth.proasteion.application;
@@ -513,7 +517,7 @@ public final class CorenthBackend {
 }
 ```
 
-### Slice 2 — Run-Modell (nach grünem Slice 1)
+### Slice 4 — Run-Modell (nach Slice 2/3 und nach #5; `UNCHANGED`/Tombstone mit #33/#5 in Slice 5)
 
 #### `StepOutcome` / `RunSummary` / `ResourceProcessingRun`
 
@@ -571,7 +575,7 @@ public final class ResourceProcessingRun {
 
 ### Tests
 
-Slice 1: Walking-Skeleton-Integrationstest auf neue Verdrahtung umgestellt und grün; DENY der AccessPolicy erzeugt `DENIED` statt Exception; ArchUnit unverändert grün; kein Import von `RawResourceProvider` mehr im Produktionscode; `AccessPreparation.NONE` für `file:`. Slice 2: Summary zählt INDEXED/UNCHANGED/DENIED/FAILED korrekt (UNCHANGED via zweitem Lauf über #33-Repo); Einzelfehler bricht Run nicht ab; RunId eindeutig.
+Slice 1 (✅ Session 0): Walking-Skeleton-Integrationstest auf neue Verdrahtung (`MediatedResourceAccess` ← `MediatedResourceService` ← `HolkasAcquisitionPort`) umgestellt und grün; DENY der AccessPolicy erzeugt `DENIED` statt Exception; ArchUnit-Regel `ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS` grün; kein `RawResourceProvider`/`FetchedResource` mehr im Produktionscode. Slice 2: Kompositionspunkt verdrahtet den `file:`-Lifecycle ohne Testcode. Slice 3: `AccessPreparation.NONE` für `file:`, REQUIRE_AUTH-Pfad mit Fake-Strategie. Slice 4: Summary zählt INDEXED/UNCHANGED/DENIED/FAILED korrekt; Einzelfehler bricht Run nicht ab; RunId eindeutig. Slice 5: UNCHANGED via zweitem Lauf über #33-Repo.
 
 ### Out of scope
 
@@ -598,7 +602,7 @@ ADR committed ✅ (Session 0); `RawResourceProvider`-Direktpfad entfernt ✅ (Se
 
 ### ⚠️ Problem gefunden
 
-`ResourcePolicy.evaluate(VirtualResourceRef, long sizeBytes)` (bestehend) und die neuen Policies überlappen bei `maxFileSizeBytes`. **Entscheidung:** Größe wandert in `ResourceScopePolicy`; das bestehende `ResourcePolicy` bleibt unverändert (Walking Skeleton), wird aber im #10-Umbau durch die Scope-Policy ersetzt und danach deprecated. Im PR dokumentieren, nicht doppelt prüfen.
+`ResourcePolicy.evaluate(VirtualResourceRef, long sizeBytes)` (bestehend) und die neuen Policies überlappen bei `maxFileSizeBytes`. **Entscheidung:** Größe wandert in `ResourceScopePolicy`; das bestehende `ResourcePolicy` bleibt in #10 Slice 1 unverändert (dort zweimal ausgewertet: vor der Beschaffung ohne Größe, danach mit realer Größe), wird in #10 Slice 5 (nach #5) durch die Scope-Policy ersetzt und danach deprecated. Im PR dokumentieren, nicht doppelt prüfen.
 
 ### Klassen
 
@@ -1154,7 +1158,7 @@ Java 8; vorhandene Konstanten `AuthenticationMethod.NDV_PASSWORD` und `ResourceS
 # Kapitel 9: Holkas/FTP: JES Submit & Spool (#35)
 
 
-**Modul:** `proasteion:emporion:holkas` (Paket `ftp.jes`, kein neues Submodul) · **Java 8** · **Nach #34 begonnen werden kann parallel — einzige harte Abhängigkeit ist der bestehende FTP-Slice**
+**Modul:** `proasteion:emporion:holkas` (Paket `ftp.jes`, kein neues Submodul) · **Java 8** · **Nach #34 begonnen werden kann parallel — harte Abhängigkeiten: der bestehende FTP/MVS-Slice (`FtpAccessHandle`, `FtpClientSession`-SPI) *und* ein noch nicht vorhandener produktiver FTP-Transport (Implementierung von `FtpClientSession`/`MvsFtpSessionAuthenticator`, eigener Slice — siehe Korrektur Session 0 unten); gegen Fakes lässt sich der JES-Code vorab schreiben, lauffähig gegen einen Host wird er erst mit dem Transport**
 
 ### Designentscheidungen
 
@@ -1596,7 +1600,7 @@ Java 8; Stufen 1+2 vollständig, Stufe 3 injizierbar; Passwort-in-Argv durch Tes
 2. **Cancel ist ein Ergebnis erster Klasse:** Der Port liefert `PromptResult` (SECRET | CANCELLED | UNAVAILABLE), der Provider übersetzt CANCELLED in die checked `AuthCancelledException` — genau die Semantik, die PR #14 etabliert hat. Negative-Caching (kurzes Merken einer Cancellation, damit der Dialog nicht sofort wieder aufpoppt) gehört **nicht** in den Provider, sondern in die bestehende `SecretMaterialCache`/`SecretCachePolicy` — Prüfung im PR, ob die Policy Negative-Caching bereits kann (Auth-Analyse §5 fordert es); falls nein, dort ergänzen, nicht hier duplizieren.
 3. **Provider-SPI wiederverwenden:** Es existieren `CredentialProvider` und `SecretMaterialProvider` (KeePassRPC implementiert Letzteren). Der Prompt-Provider implementiert **`SecretMaterialProvider`** — dieselbe Schnittstelle wie KeePassRPC, damit der Broker Quellen austauschbar kettet: KeePassRPC → Prompt als geordnete Provider-Liste im Kompositionspunkt. Keine neue Chain-Abstraktion in adyton (die #39-Kette ist Strategie-, nicht Quellen-Ebene — bewusst getrennt halten).
 4. **Persistenter Store (Phase 2) = Datei mit AES-GCM,** Master-Key-Bezug hinter `MasterKeyProvider`-Port: Implementierung 1 dateibasiert (portabel, adaptiert `AesCryptoProvider`-Konzept), Implementierung 2 DPAPI via JNA (`security-dpapi`, Windows-only, Phase 3). Format: ein JSON-Objekt `{entryKey: base64(iv+ciphertext)}` — bewusst kein KeePass-kompatibles Format (Nutzer mit KeePass nutzen den RPC-Provider).
-5. **KeePass-PS-Variante (KeePass.exe via PowerShell) wird NICHT umgesetzt** — sie war in MainframeMate der langsame, prozesslistige Notnagel; mit RPC + Prompt + Store existieren drei bessere Wege. Als bewusste Nicht-Migration im Inventar vermerken (siehe Kapitel 18).
+5. **KeePass-PS-Variante (KeePass.exe via PowerShell) wird NICHT umgesetzt** — sie war in MainframeMate der langsame, prozesslistige Notnagel; mit RPC (Adapter vorhanden, Anbindung an den realen `keepassrpc-java`-Client offen), Prompt und Store sind drei bessere Wege vorgesehen. Als bewusste Nicht-Migration im Inventar vermerken (siehe Kapitel 18).
 
 ### Klassen (Phase 1: Prompt)
 
@@ -1952,7 +1956,7 @@ Disposition-Dokument committed; Inventar aktualisiert; #12-Issue-Text um wd4j-En
 # Kapitel 18: Vergessene Migrationen aus MainframeMate
 
 
-**Prüfmethode:** Alle Top-Level-Pakete von `research/app` (nach Dateizahl) gegen Migrations-Inventar, offene Issues (#3–#45) und die soeben erstellten TODO-Dokumente abgeglichen. Ergebnis: **5 echte Lücken**, 2 bewusste Nicht-Migrationen (bestätigen), 1 Rest-Sichtung.
+**Prüfmethode:** Alle Top-Level-Pakete von `research/app` (nach Dateizahl) gegen Migrations-Inventar, offene Issues (#3–#45) und die Kapitel 1–17 dieses Kompendiums abgeglichen. Ergebnis: **5 echte Lücken**, 2 bewusste Nicht-Migrationen (bestätigen), 1 Rest-Sichtung.
 
 ### 1. LLM-Provider-Anbindung und Chat-/RAG-Orchestrierung — **größte Lücke, kein Issue, kein Zielmodul**
 
@@ -1994,7 +1998,7 @@ Fundstelle: `research/docs/ueberall-suche-issue-backlog.md` — fertig formulier
 
 ### Bewusste Nicht-Migrationen (nur bestätigen, nichts tun)
 
-- **KeePass-PS-Provider** (KeePass.exe via PowerShell): in Kapitel 13 explizit als nicht-migriert entschieden — mit RPC, Prompt und Store existieren drei bessere Quellen. Im Inventar als „bewusst verworfen" führen, damit die Frage nicht wiederkehrt.
+- **KeePass-PS-Provider** (KeePass.exe via PowerShell): in Kapitel 13 explizit als nicht-migriert entschieden — mit RPC (Adapter vorhanden, reale Client-Anbindung noch offen, s. Kapitel 13), Prompt und Store sind drei bessere Quellen vorgesehen. Im Inventar als „bewusst verworfen" führen, damit die Frage nicht wiederkehrt.
 - **UI-Schwergewichte** (`ui/` 237 Dateien, `betaview`, `video`, `dosbox`, Mermaid-Preview): via #44-Matrix bzw. Exedra-Ausbau-Zukunft abgedeckt; keine stille Lücke, sondern vertagte Entscheidungen mit Ort.
 
 ### Rest-Sichtung (niedrig, der Vollständigkeit halber)
