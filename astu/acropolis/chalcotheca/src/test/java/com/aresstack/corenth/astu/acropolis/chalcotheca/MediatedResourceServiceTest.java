@@ -449,21 +449,23 @@ public class MediatedResourceServiceTest {
         assertTrue(service.hasCachedContent(FILE_URI));
     }
 
-    // ── Acceptance criterion 4: Blacklist/tombstone removes archive state ──
+    // ── Acceptance criterion 4: deleteEntry clears the payload cache and tombstones the record ──
 
     @Test
-    public void blacklistTombstone_removesArchiveState() {
+    public void deleteEntry_clearsPayloadCache_andTombstonesRecord_keepingHistoryAndIndexedFact() {
         ResourceAccessPolicy allowAll = allowAllPolicy();
 
         acquisitionPort.setContent(FILE_URI, "Content to be tombstoned".getBytes());
 
         MediatedResourceService service = new MediatedResourceService(allowAll, acquisitionPort, archive);
 
-        // First, populate
+        // First, populate the payload cache and record an indexed version
         ResourceAccessRequest readReq = new ResourceAccessRequest(
                 HUMAN_ACTOR, FILE_URI, ResourceOperation.READ_CONTENT);
-        service.readContent(readReq);
+        MediatedResult<BronzeContent> read = service.readContent(readReq);
         assertTrue(service.hasCachedContent(FILE_URI));
+        VirtualResourceRef fileRef = new VirtualResourceRef(FILE_URI, VirtualResourceKind.FILE);
+        archive.store(new ResourceSnapshot(fileRef, read.value().digest(), System.currentTimeMillis()));
 
         // Now explicitly delete (tombstone) — this is the blacklist/tombstone path
         ResourceAccessRequest deleteReq = new ResourceAccessRequest(
@@ -471,8 +473,13 @@ public class MediatedResourceServiceTest {
         MediatedResult<Void> deleteResult = service.deleteEntry(deleteReq);
         assertTrue(deleteResult.isSuccess());
 
-        // Archive state is removed
+        // The transient payload cache is cleared; the record is only tombstoned (#33): history
+        // and indexed-version fact stay until #5 decides and #10 executes a withdrawal
         assertFalse(service.hasCachedContent(FILE_URI));
+        ArchivedResource record = archive.records().findByRef(fileRef);
+        assertTrue(record.isRemovedAtSource());
+        assertEquals(1, record.versions().size());
+        assertTrue(record.isIndexed());
     }
 
     // ── Acceptance criterion 5: Unknown URI triggers acquisition when allowed ──
@@ -550,7 +557,7 @@ public class MediatedResourceServiceTest {
     // ── Fix 5: Delete is type-agnostic (uses URI not hardcoded FILE kind) ──
 
     @Test
-    public void deleteEntry_removesArchiveState_forDirectoryResource() {
+    public void deleteEntry_tombstonesArchiveRecord_forDirectoryResource_keepingHistoryAndIndexedFact() {
         ResourceAccessPolicy allowAll = allowAllPolicy();
 
         // Store a directory-type snapshot in archive
@@ -567,8 +574,13 @@ public class MediatedResourceServiceTest {
         MediatedResult<Void> result = service.deleteEntry(deleteReq);
         assertTrue(result.isSuccess());
 
-        // Archive state removed by URI regardless of kind
-        assertNull(archive.findByUri(DIR_URI));
+        // The record is tombstoned by URI regardless of kind (#33): the history is kept and the
+        // indexed-version fact stays, because deleteEntry does not touch derived indexes.
+        ArchivedResource record = archive.records().findByRef(dirRef);
+        assertTrue(record.isRemovedAtSource());
+        assertEquals(1, record.versions().size());
+        assertTrue(record.isIndexed());
+        assertNotNull(archive.findByUri(DIR_URI));
     }
 
     @Test

@@ -37,7 +37,7 @@ file: URI
 ### Decision semantics
 
 - A `tamias` indexing-rule `DENY` is a lifecycle decision for the resource: it yields `DENIED` and removes stale index entries and the snapshot.
-- A `tamias` access decision that withholds the content (`DENY`, `ALLOW_CACHED_ONLY` without cached content on either evaluation, `REQUIRE_AUTH`, `REQUIRE_SOURCE_CHECK`) yields `DENIED` with the decision in the message. Access denials are never lifecycle decisions and never delete derived state, including resource-level reason codes such as `BLACKLISTED`; withdrawing an already indexed resource is an explicit archive operation to be integrated in #33/#5 (`knownGap_blacklisted…` test). `REQUIRE_AUTH` becomes an Adyton-backed preparation step in #10 Slice 3.
+- A `tamias` access decision that withholds the content (`DENY`, `ALLOW_CACHED_ONLY` without cached content on either evaluation, `REQUIRE_AUTH`, `REQUIRE_SOURCE_CHECK`) yields `DENIED` with the decision in the message. Access denials are never lifecycle decisions and never delete derived state, including resource-level reason codes such as `BLACKLISTED`; withdrawing an already indexed resource is decided by Tamias (#5) and executed by the lifecycle (#10) on top of the #33 resource records (`knownGap_blacklisted…` test). `REQUIRE_AUTH` becomes an Adyton-backed preparation step in #10 Slice 3.
 - An acquisition error inside the counter yields `FAILED`.
 
 ### Composition
@@ -51,9 +51,9 @@ file: URI
 
 ### Known gaps (left to later slices)
 
-- No pre-acquisition size probe: before Slice 1 the skeleton denied oversized files before fetching them. The mediated contract offers no metadata operation yet, so the indexing policy is evaluated first with `ResourcePolicy.SIZE_UNKNOWN` (scheme and patterns only), the counter acquires the content, and size limits are enforced afterwards. Oversized content is therefore acquired and retained in `MediatedResourceService.contentCache` for the lifetime of the service instance; the lifecycle cannot evict it (`knownGap_oversizedFile…` test). Restoring the pre-acquisition check needs a `READ_METADATA` operation on `MediatedResourceAccess` and `AcquisitionPort` (#5/#33).
-- The counter's bronze caches have no invalidation: before Slice 1 every run re-read the source and a changed file was re-indexed; now a changed source is served from the cache within one `MediatedResourceService` instance and reported as `UNCHANGED` (`knownGap_changedSourceContent…` test in `WalkingSkeletonIntegrationTest`; #33/#5).
-- Bronze content carries no name yet; the filename hint for extraction is derived from the last path segment of the `BookmarkUri` (#33 resource records).
+- No pre-acquisition size probe: before Slice 1 the skeleton denied oversized files before fetching them. The mediated contract offers no metadata operation yet, so the indexing policy is evaluated first with `ResourcePolicy.SIZE_UNKNOWN` (scheme and patterns only), the counter acquires the content, and size limits are enforced afterwards. Oversized content is therefore acquired and retained in `MediatedResourceService.contentCache` for the lifetime of the service instance; the lifecycle cannot evict it (`knownGap_oversizedFile…` test). Restoring the pre-acquisition check needs a `READ_METADATA` operation on `MediatedResourceAccess` and `AcquisitionPort` (#5/#10).
+- The counter's bronze caches have no invalidation: before Slice 1 every run re-read the source and a changed file was re-indexed; now a changed source is served from the cache within one `MediatedResourceService` instance and reported as `UNCHANGED` (`knownGap_changedSourceContent…` test in `WalkingSkeletonIntegrationTest`). #33 records the facts (observed versions, indexed version); deciding invalidation is #5 and executing it is #10.
+- Bronze content carries no name yet; the filename hint for extraction is derived from the last path segment of the `BookmarkUri`. The #33 resource records deliberately carry no name metadata yet; stable resource metadata is a follow-up.
 
 ### Running the walking skeleton
 

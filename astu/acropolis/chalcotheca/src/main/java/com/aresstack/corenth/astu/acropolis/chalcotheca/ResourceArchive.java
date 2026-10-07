@@ -4,64 +4,73 @@ import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 
 /**
- * Port for storing and retrieving resource snapshots.
+ * Snapshot-level compatibility facade over the authoritative resource records (#33).
  *
- * <p>The archive tracks which resources have been processed and their
- * digest at the time of processing, allowing the system to detect changes
- * and avoid unnecessary reindexing.
+ * <p>The truth lives in {@link ArchivedResource} records behind the
+ * {@link ResourceArchiveRepository}; a {@link ResourceSnapshot} is only a view of a record's
+ * indexed-version fact and is never stored separately ({@link RecordBackedResourceArchive}).
+ * The facade stays until the lifecycle moves onto the record port (#10 Slice 5). It answers
+ * fact queries only: whether to reacquire, reindex or withdraw is decided by Tamias (#5) and
+ * executed by Acropolis (#10).
  */
 public interface ResourceArchive {
 
     /**
-     * Stores or updates a snapshot for the given resource.
+     * Records the snapshot's digest as an observed version (a new version only if the digest
+     * differs from the latest observed one) and marks that version as indexed at the snapshot's
+     * {@code indexedAtMillis}.
      *
      * @param snapshot the snapshot to store
      */
     void store(ResourceSnapshot snapshot);
 
     /**
-     * Retrieves the most recent snapshot for the given resource, or {@code null}
-     * if the resource has not been seen before.
+     * Returns the version recorded as indexed for the given resource, or {@code null} if no
+     * version is recorded as indexed. Never falls back to the latest observed version.
      *
      * @param ref the resource reference
-     * @return the stored snapshot, or {@code null}
+     * @return the indexed snapshot, or {@code null}
      */
     ResourceSnapshot find(VirtualResourceRef ref);
 
     /**
-     * Returns {@code true} if the resource content has changed since the last snapshot.
+     * Fact query: returns {@code true} if no version is recorded as indexed, or if the digest
+     * differs from the indexed version's digest. This is not a policy decision.
      *
      * @param ref    the resource reference
      * @param digest the current digest
-     * @return {@code true} if reindexing is needed
+     * @return {@code true} if the digest differs from the indexed version (or none is indexed)
      */
     boolean hasChanged(VirtualResourceRef ref, ResourceDigest digest);
 
     /**
-     * Removes the snapshot for the given resource.
+     * Withdraws the indexed-version fact for the given resource. The record and its version
+     * history are kept; afterwards {@link #find} returns {@code null} and {@link #hasChanged}
+     * returns {@code true}.
      *
-     * <p>Used when a resource is tombstoned or permanently deleted.
-     *
-     * @param ref the resource reference to remove
-     * @return {@code true} if a snapshot was removed, {@code false} if not found
+     * @param ref the resource reference
+     * @return {@code true} if a version was recorded as indexed, {@code false} otherwise
      */
     boolean remove(VirtualResourceRef ref);
 
     /**
-     * Removes all snapshots matching the given bookmark URI, regardless of resource kind.
+     * Records that every resource with the given bookmark URI was removed at its source
+     * (tombstone), regardless of resource kind.
      *
-     * <p>Used by the mediated resource service when the resource kind is not known.
+     * <p>Histories are kept and an indexed-version fact is <em>not</em> withdrawn: a resource
+     * can be removed at the source and still be indexed until a withdrawal is decided (#5) and
+     * executed (#10). Used by the mediated resource service when the kind is not known.
      *
-     * @param uri the bookmark URI to remove
-     * @return {@code true} if at least one snapshot was removed
+     * @param uri the bookmark URI
+     * @return {@code true} if at least one record exists for the URI
      */
     boolean removeByUri(BookmarkUri uri);
 
     /**
-     * Finds a snapshot by bookmark URI, regardless of resource kind.
+     * Finds an indexed snapshot by bookmark URI, regardless of resource kind.
      *
      * @param uri the bookmark URI
-     * @return the stored snapshot, or {@code null}
+     * @return the indexed snapshot, or {@code null} if no record with this URI is indexed
      */
     ResourceSnapshot findByUri(BookmarkUri uri);
 }

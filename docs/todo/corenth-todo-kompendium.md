@@ -1,6 +1,6 @@
 # Corenth — TODO-Kompendium: Implementierungspläne für alle offenen Issues
 
-*Stand: 2026-07-19 · main @ b97c607+ · Session-0-Hinweise (2026-10-06) in Kapitel 1, 2, 3, 4, 9 und 13; Kapitel 1 ist durch die committete `build.yml` überholt · Java 8 · Alle Code-Skizzen sind gegen den realen Repo-Bestand verifiziert (Signaturen-Prüfung vom selben Tag); verifizierte Befunde sind in den Kapiteln als **Verifiziert:** markiert, offene Abgleiche explizit benannt.*
+*Stand: 2026-07-19 · main @ b97c607+ · Session-0-Hinweise (2026-10-06) in Kapitel 1, 2, 3, 4, 9 und 13; Kapitel 3 in Session 1 (2026-10-07, #33) neu gefasst; Kapitel 1 ist durch die committete `build.yml` überholt · Java 8 · Alle Code-Skizzen sind gegen den realen Repo-Bestand verifiziert (Signaturen-Prüfung vom selben Tag); verifizierte Befunde sind in den Kapiteln als **Verifiziert:** markiert, offene Abgleiche explizit benannt.*
 
 ## Inhalt
 
@@ -154,229 +154,67 @@ CI-Lauf zeigt exedra-Skips explizit; Skip-Anzahl dokumentiert erwartet (2); kein
 # Kapitel 3: Chalcotheca: Records, Historie, Lifecycle-Persistenz (#33)
 
 
-**Modul:** `astu:acropolis:chalcotheca` · **Java 8** · **Abhängigkeiten:** keine neuen (In-Memory-Referenz zuerst, H2 später als äußerer Adapter)
+**Modul:** `astu:acropolis:chalcotheca` · **Java 8** · **Abhängigkeiten:** keine neuen (In-Memory-Referenz, H2 später als äußerer Adapter hinter demselben Port)
 
-### Designentscheidungen
+> ✅ **Stand Session 1 (2026-10-07): umgesetzt (lokaler Branch, noch nicht gemergt).** Die ursprüngliche Skizze dieses Kapitels (`BronzeResourceRecord`, zusätzlicher Port `ResourceLifecycleRepository` mit `RecordOutcome`, Enum `ACTIVE/STALE/TOMBSTONED`, `markStale`/`purge`) ist **verworfen**. Sie hätte eine dritte Modellwelt neben `ArchivedResource`/`ResourceArchiveRepository` und `ResourceArchive`/`ResourceSnapshot` erzeugt und mit `STALE` eine Tamias-Entscheidung als Ressourcenzustand persistiert. Umgesetzt wurde stattdessen die Konsolidierung der vorhandenen Typen.
 
-1. **Kein Ersatz, sondern Erweiterung von `ResourceArchive`.** Das bestehende Interface (`store/find/hasChanged/remove`) bleibt unangetastet — der Walking Skeleton und `MediatedResourceService` hängen daran. Die neuen Fähigkeiten (Records, Historie, Lifecycle-State) kommen als **eigener Port** `ResourceLifecycleRepository`, den die In-Memory-Implementierung *zusätzlich* zu `ResourceArchive` implementiert. So bleibt jeder bestehende Test grün, und #10 kann später gegen den reicheren Port migrieren.
-2. **`BronzeResourceRecord` ist der Aggregatzustand einer Ressource, nicht ein Snapshot.** Der bestehende `ResourceSnapshot` ist ein Zeitpunktwert; der Record hält Identität + aktuellen Lifecycle-State + Verweis auf die aktuelle Version. Historie ist eine geordnete Liste von `ResourceVersion`-Einträgen (Digest, Zeitstempel, Größe) — bewusst **ohne** Content-Bytes, damit die Historie klein bleibt; Inhalte adressiert weiterhin `ResourceContentRef`.
-3. **Digest-Vergabe bleibt beim Aufrufer.** Chalcotheca berechnet keine Hashes; es speichert, was `BronzeContent.digest()` liefert. Damit bleibt die ChangeDetection-Semantik in tamias (#5) frei entscheidbar (Digest vs. mtime vs. size), ohne Chalcotheca zu ändern.
-4. **Lifecycle-State als geschlossenes Enum mit Tombstone.** `ACTIVE / STALE / TOMBSTONED` deckt den in #10 geplanten Delete/Tombstone-Pfad ab. `TOMBSTONED` behält den Record (für Index-Bereinigung nachvollziehbar), `remove` löscht endgültig.
-5. **Threadsicherheit wie im Bestand:** `ConcurrentHashMap` + unveränderliche Werttypen; Historie als `CopyOnWrite`-Semantik über defensive Kopien.
+### Abgrenzung
 
-### ⚠️ Architektur-Konflikt gefunden
+- **Chalcotheca #33 = Fakten und Historie:** Welche Ressource kennen wir, welche Bronze-Versionen wurden mit welchem `ResourceDigest` wann beobachtet, welche Version ist seit wann als indexiert vermerkt, wurde die Ressource an der Quelle als entfernt beobachtet.
+- **Tamias #5 = Entscheidungen aus diesen Fakten:** neu beschaffen, Cache gültig/ungültig, neu indexieren, Withdrawal. Nichts davon wird im Record gespeichert.
+- **Acropolis #10 = Ablauf und Ausführung dieser Entscheidungen** (Run-Modell, Cache-Konsolidierung in Slice 5).
 
-`MediatedResourceService` führt **eigene** unbegrenzte Caches (`listingCache`, `contentCache`, `metadataCache` als `ConcurrentHashMap` ohne TTL/Invalidierung). Sobald #33 den Archiv-State zur Autorität macht und #5 Invalidierung einführt, sind das **zwei konkurrierende Wahrheiten** — strukturell derselbe Fehler wie die zwei Session-Caches in MainframeMate. **Vorschlag:** In diesem Issue nur dokumentieren; die drei Service-Caches gegen `ResourceLifecycleRepository` + tamias-Entscheidung konsolidieren, sobald dieser Vertrag existiert. *Stand Session 0 (2026-10-06): In #10 Slice 1 wurden die Caches bewusst **nicht** entfernt, sondern als bekannte Lücke dokumentiert (Javadoc von `MediatedResourceService`, `astu/acropolis/chalcotheca/README.md`, Charakterisierungstest `knownGap_…` in `WalkingSkeletonIntegrationTest`). Die Konsolidierung ist #10 Slice 5 gegen den #33-Vertrag. Der Kommentar in #10 wurde noch nicht hinterlegt.*
+### Modell: orthogonale Fakten statt linearer State Machine
 
-### Klassen
+Das frühere lineare `ResourceLifecycleState` (`PENDING → ACQUIRED → CACHED → INDEXED → STALE → TOMBSTONED`) ist **entfernt**. Es mischte Quellzustand, Cache-Präsenz, Indexierungsfakt und Policy-Urteil (`STALE`) in einer Dimension. Eine Ressource kann legitim gleichzeitig an der Quelle entfernt sein, Version 7 als zuletzt beobachtete und als indexierte Version haben und keinen Payload mehr im Cache besitzen.
 
-#### `ResourceLifecycleState`
+| Typ | Rolle |
+| --- | --- |
+| `ArchivedResource` | Immutable Record je `VirtualResourceRef`: geordnete Versionshistorie (nie leer, Sequenzen `1..n` lückenlos, letzte = latest observed), optional `IndexedVersion`, optional `SourceRemoval`. Übergänge (`observe`, `markIndexed`, `withdrawIndexedVersion`, `markRemovedAtSource`) liefern neue Instanzen. Öffentlicher Konstruktor dient der Rekonstitution durch Persistenzadapter und prüft die Invarianten. |
+| `ResourceVersion` | Immutable: monotone `sequence` (vom Record vergeben, unabhängig von Zeitstempeln), bestehender `ResourceDigest`, `observedAtMillis`. Keine Bytes. |
+| `IndexedVersion` | Fakt „diese Version ist indexiert, seit …". Muss Teil der Historie sein. |
+| `SourceRemoval` | Tombstone-Beobachtung mit Zeitpunkt. Unabhängig vom Indexierungsfakt. |
 
-Bewusst minimal; weitere Zustände (z. B. `QUARANTINED`) erst bei nachgewiesenem Bedarf (YAGNI, analog #13-Entscheidung).
+Digest-Semantik: Gleichheit bleibt über `ResourceDigest` (`ResourceFingerprint`/SHA-256 + `sizeBytes`) definiert; der Bronze-Beschaffer erzeugt den Digest, Chalcotheca vergleicht nur. Identischer Digest zur zuletzt beobachteten Version erzeugt keine neue Version; ein geänderter Digest erzeugt Version `n + 1` (auch bei Rückkehr zu einem früheren Inhalt). Eine erneute Beobachtung nach einem Tombstone hebt die Entfernung auf (die Ressource ist wieder an der Quelle), ohne bei gleichem Digest eine Version zu erzeugen.
 
-```java
-package com.aresstack.corenth.astu.acropolis.chalcotheca;
+**Nicht persistiert:** Cache-Präsenz (`CACHED`), `STALE`, `DENIED`, `FAILED`, `BLACKLISTED`, `REQUIRE_AUTH`, `REQUIRE_SOURCE_CHECK`, `ALLOW_CACHED_ONLY`, `shouldReindex`/`shouldReacquire` und andere request- oder actor-bezogene Entscheidungen. Access-Denials hängen vom Akteur ab, die Indexing-Rule-Verweigerung von der momentanen Policy-Konfiguration; `FAILED` kann später im #10-Run-/Diagnosemodell sinnvoll werden.
 
-public enum ResourceLifecycleState {
-    /** Resource is current and served from bronze state. */
-    ACTIVE,
-    /** A newer upstream version is known or suspected; re-acquisition advised. */
-    STALE,
-    /** Resource was removed upstream; record kept for derived-index cleanup. */
-    TOMBSTONED
-}
-```
+### Port
 
-#### `ResourceVersion`
+`ResourceArchiveRepository` ist der **einzige** Persistence-Port für Records/Historien: `save(ArchivedResource)`, `findByRef(VirtualResourceRef)`, `findByUri(BookmarkUri)` (alle Kinds, Reihenfolge des ersten Speicherns). Kein Hard-Delete, kein `findByState`. `InMemoryResourceArchiveRepository` ist die deterministische Referenz (`LinkedHashMap`, synchronisiert). `ResourceArchiveRepositoryContractTest` beschreibt den Vertrag, den auch ein späterer H2-Adapter erfüllen muss.
 
-Ein Historieneintrag. Enthält absichtlich keinen Content — nur das, was ChangeDetection und Audit brauchen. `versionNumber` ist monoton pro Record, vergeben vom Repository (nicht vom Aufrufer), damit konkurrierende Writer keine Duplikate erzeugen.
+### `ResourceArchive` als temporäre Kompatibilitätsfassade
 
-```java
-package com.aresstack.corenth.astu.acropolis.chalcotheca;
+`RecordBackedResourceArchive` implementiert `ResourceArchive` über dem Repository; `InMemoryResourceArchive` komponiert sie mit dem In-Memory-Repository und legt die Records über `records()` offen. `ResourceSnapshot` bleibt als Wert-/Sichtobjekt der Fassade und wird **nicht** separat gespeichert. Coordinator und `MediatedResourceService` sind nicht umverdrahtet (das ist #10 Slice 5).
 
-public final class ResourceVersion {
-    private final int versionNumber;
-    private final ResourceDigest digest;
-    private final long sizeBytes;
-    private final long recordedAtMillis;
+| Operation | Semantik |
+| --- | --- |
+| `store(snapshot)` | Digest beobachten (neue Version nur bei Änderung), diese Version als indexiert markieren; `indexedAtMillis` ist Indexierungszeit und, bei neuer Version, Beobachtungszeit. |
+| `hasChanged(ref, digest)` | Reine Faktenabfrage: ohne Indexierungsfakt `true`, sonst Digest-Vergleich mit der indexierten (nicht der zuletzt beobachteten) Version. |
+| `remove(ref)` | Nimmt nur den Indexierungsfakt zurück; Record und Historie bleiben. Danach `find == null`, `hasChanged == true`. |
+| `removeByUri(uri)` | Kind-agnostisch: Tombstone für alle Records der URI; Historie und Indexierungsfakt bleiben. `true`, wenn mindestens ein Record existiert. Zeitpunkt aus injizierter `java.time.Clock`. |
+| `find(ref)` / `findByUri(uri)` | Nur indexierte Sicht; nie Rückfall auf die zuletzt beobachtete Version. |
 
-    public ResourceVersion(int versionNumber, ResourceDigest digest,
-                           long sizeBytes, long recordedAtMillis) {
-        if (versionNumber < 1) throw new IllegalArgumentException("versionNumber must be >= 1");
-        if (digest == null) throw new IllegalArgumentException("digest must not be null");
-        this.versionNumber = versionNumber;
-        this.digest = digest;
-        this.sizeBytes = sizeBytes;
-        this.recordedAtMillis = recordedAtMillis;
-    }
+Konsequenz für `MediatedResourceService.deleteEntry`: es entfernt die Payload-Caches und setzt den Tombstone, nimmt aber den Indexierungsfakt nicht zurück (der Lexical-Index wird dort ohnehin nicht angefasst). `MediatedResourceServiceTest.deleteEntry_tombstonesArchiveRecord_forDirectoryResource_keepingHistoryAndIndexedFact` hält das fest (vorher: `findByUri == null`).
 
-    public int versionNumber() { return versionNumber; }
-    public ResourceDigest digest() { return digest; }
-    public long sizeBytes() { return sizeBytes; }
-    public long recordedAtMillis() { return recordedAtMillis; }
-}
-```
+### Payload-Caches
 
-#### `BronzeResourceRecord`
+Unverändert. `BronzeContent` ist Payload, der Record ist ein Fakt über den Payload; eine History ohne Bytes ersetzt keinen Content-Cache, und Cache-Präsenz gehört nicht in den Record. Invalidierung entscheidet #5, die Konsolidierung der drei Service-Caches führt #10 Slice 5 aus.
 
-Der Aggregatzustand. Unveränderlich; Zustandsübergänge erzeugen neue Instanzen (`withState`, `withNewVersion`) — das hält die Repository-Implementierung trivial korrekt unter Nebenläufigkeit (CAS-freundlich) und macht Tests deterministisch.
+### Übergabetests
 
-```java
-package com.aresstack.corenth.astu.acropolis.chalcotheca;
+- `knownGap_changedSourceContent_isServedFromCounterCacheUntilInvalidationExists`, `knownGap_oversizedFile_isAcquiredAndRetainedByCounterBeforeDenial`, `knownGap_blacklistedAfterIndexing_staysInTheIndex_untilAWithdrawalPathExists`: unverändert Known Gaps (#5/#10).
+- `deniedThenReaccepted_unchangedContent_reindexes` und `noTextThenReprocessed_unchangedContent_reindexes`: grün aus dem fachlichen Grund (nur Indexierungsfakt zurückgenommen, Historie erhalten, daher `hasChanged == true`); beide prüfen das jetzt explizit.
 
-import com.aresstack.corenth.astu.VirtualResourceRef;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+### Offen für #5 / #10 und vor dem H2-Adapter
 
-public final class BronzeResourceRecord {
-    private final VirtualResourceRef ref;
-    private final ResourceLifecycleState state;
-    private final List<ResourceVersion> versions; // ascending, last = current
-
-    public BronzeResourceRecord(VirtualResourceRef ref, ResourceLifecycleState state,
-                                List<ResourceVersion> versions) {
-        if (ref == null) throw new IllegalArgumentException("ref must not be null");
-        if (state == null) throw new IllegalArgumentException("state must not be null");
-        if (versions == null || versions.isEmpty())
-            throw new IllegalArgumentException("versions must not be empty");
-        this.ref = ref;
-        this.state = state;
-        this.versions = Collections.unmodifiableList(new ArrayList<ResourceVersion>(versions));
-    }
-
-    public VirtualResourceRef ref() { return ref; }
-    public ResourceLifecycleState state() { return state; }
-    public List<ResourceVersion> versions() { return versions; }
-    public ResourceVersion currentVersion() { return versions.get(versions.size() - 1); }
-
-    public BronzeResourceRecord withState(ResourceLifecycleState newState) {
-        return new BronzeResourceRecord(ref, newState, versions);
-    }
-
-    public BronzeResourceRecord withNewVersion(ResourceVersion v) {
-        if (v.versionNumber() != currentVersion().versionNumber() + 1)
-            throw new IllegalArgumentException("non-monotonic version number");
-        List<ResourceVersion> next = new ArrayList<ResourceVersion>(versions);
-        next.add(v);
-        return new BronzeResourceRecord(ref, ResourceLifecycleState.ACTIVE, next);
-    }
-}
-```
-
-#### `ResourceLifecycleRepository` (Port)
-
-Der neue Port. `recordAcquisition` ist die einzige Schreiboperation für Inhalte: Sie entscheidet intern „neue Version vs. unverändert" anhand des Digests und liefert das Ergebnis als `RecordOutcome` zurück — genau die Information, die #10 später als `UNCHANGED`-Step-Outcome braucht, und die #5 als ChangeDetection-Input konsumiert. Damit gibt es **eine** Stelle, die Versionswahrheit produziert.
-
-```java
-package com.aresstack.corenth.astu.acropolis.chalcotheca;
-
-import com.aresstack.corenth.astu.VirtualResourceRef;
-import java.util.List;
-
-public interface ResourceLifecycleRepository {
-
-    enum RecordOutcome { CREATED, NEW_VERSION, UNCHANGED }
-
-    /** Records an acquisition; creates the record or appends a version if the digest differs. */
-    RecordOutcome recordAcquisition(VirtualResourceRef ref, ResourceDigest digest, long sizeBytes,
-                                    long acquiredAtMillis);
-
-    /** @return the record, or null if unknown. */
-    BronzeResourceRecord findRecord(VirtualResourceRef ref);
-
-    /** Marks the resource stale (upstream change suspected). No-op if unknown. */
-    void markStale(VirtualResourceRef ref);
-
-    /** Tombstones the resource (upstream removal). Record is retained. */
-    void tombstone(VirtualResourceRef ref);
-
-    /** Permanently removes record and history. @return true if a record existed. */
-    boolean purge(VirtualResourceRef ref);
-
-    /** All records currently in the given state (for index cleanup sweeps). */
-    List<BronzeResourceRecord> findByState(ResourceLifecycleState state);
-}
-```
-
-#### `InMemoryResourceLifecycleRepository`
-
-Referenzimplementierung. Implementiert **auch** `ResourceArchive`, indem sie das bestehende `InMemoryResourceArchive`-Verhalten delegierend übernimmt (Komposition, nicht Vererbung) — so kann der #10-Kompositionspunkt (Slice 2) bzw. Slice 5 eine einzige Instanz an `MediatedResourceService` **und** an den Coordinator/das Run-Modell geben; Slice 1 ist bereits mit dem bestehenden `ResourceArchive` umgesetzt. `hasChanged` wird konsistent auf `recordAcquisition`-Wahrheit abgebildet.
-
-```java
-package com.aresstack.corenth.astu.acropolis.chalcotheca;
-
-import com.aresstack.corenth.astu.VirtualResourceRef;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
-public final class InMemoryResourceLifecycleRepository implements ResourceLifecycleRepository {
-
-    private final Map<VirtualResourceRef, BronzeResourceRecord> records =
-            new ConcurrentHashMap<VirtualResourceRef, BronzeResourceRecord>();
-
-    @Override
-    public synchronized RecordOutcome recordAcquisition(VirtualResourceRef ref, ResourceDigest digest,
-                                                        long sizeBytes, long acquiredAtMillis) {
-        if (ref == null || digest == null) throw new IllegalArgumentException("ref/digest required");
-        BronzeResourceRecord existing = records.get(ref);
-        if (existing == null) {
-            ResourceVersion v1 = new ResourceVersion(1, digest, sizeBytes, acquiredAtMillis);
-            records.put(ref, new BronzeResourceRecord(ref, ResourceLifecycleState.ACTIVE,
-                    Collections.singletonList(v1)));
-            return RecordOutcome.CREATED;
-        }
-        if (existing.currentVersion().digest().equals(digest)
-                && existing.state() == ResourceLifecycleState.ACTIVE) {
-            return RecordOutcome.UNCHANGED;
-        }
-        ResourceVersion next = new ResourceVersion(
-                existing.currentVersion().versionNumber() + 1, digest, sizeBytes, acquiredAtMillis);
-        records.put(ref, existing.withNewVersion(next));
-        return RecordOutcome.NEW_VERSION;
-    }
-
-    @Override public BronzeResourceRecord findRecord(VirtualResourceRef ref) { return records.get(ref); }
-
-    @Override public synchronized void markStale(VirtualResourceRef ref) {
-        BronzeResourceRecord r = records.get(ref);
-        if (r != null && r.state() == ResourceLifecycleState.ACTIVE)
-            records.put(ref, r.withState(ResourceLifecycleState.STALE));
-    }
-
-    @Override public synchronized void tombstone(VirtualResourceRef ref) {
-        BronzeResourceRecord r = records.get(ref);
-        if (r != null) records.put(ref, r.withState(ResourceLifecycleState.TOMBSTONED));
-    }
-
-    @Override public boolean purge(VirtualResourceRef ref) { return records.remove(ref) != null; }
-
-    @Override public List<BronzeResourceRecord> findByState(ResourceLifecycleState state) {
-        List<BronzeResourceRecord> out = new ArrayList<BronzeResourceRecord>();
-        for (BronzeResourceRecord r : records.values()) if (r.state() == state) out.add(r);
-        return out;
-    }
-}
-```
-
-### Tests
-
-- CREATED beim ersten `recordAcquisition`; UNCHANGED bei identischem Digest; NEW_VERSION bei geändertem Digest mit monotoner Versionsnummer.
-- Reacquisition nach `markStale` mit identischem Digest → NEW_VERSION? **Nein**: Entscheidung dokumentieren — hier gewählt: STALE + gleicher Digest → NEW_VERSION *nicht* nötig; Implementierung oben liefert NEW_VERSION nur bei Digest-Änderung ODER nicht-ACTIVE. Test fixiert dieses Verhalten explizit.
-- `tombstone` erhält Historie; `findByState(TOMBSTONED)` liefert den Record; `purge` entfernt vollständig.
-- Nebenläufigkeit: paralleles `recordAcquisition` derselben Ref erzeugt keine Versionslücken (synchronized-Block-Test mit Executor).
-- `withNewVersion` mit falscher Nummer wirft.
+- #5: Change-Detection/Invalidation/Withdrawal-Entscheidungen auf Basis von `latestObservedVersion`, `indexedVersion` und `sourceRemoval`; Tombstone + indexiert ist ein Withdrawal-Kandidat.
+- #10 Slice 5: Coordinator/Run-Modell direkt gegen `ResourceArchiveRepository` (Beobachtung bei Beschaffung statt erst bei Indexierung, `UNCHANGED` aus dem Record), Service-Caches konsolidieren, `ResourceArchive`/`ResourceSnapshot` danach entfernen.
+- Vor H2: Transaktions-/Optimistic-Locking-Grenze für Read-Modify-Write (heute `synchronized` je Fassade); Zeitstempelquelle vereinheitlichen (Snapshot-Zeit vs. `Clock`, `BronzeContent.acquiredAt`); Retention/Purge-Regel für Historien (heute kein Löschpfad); ob Tombstone-Historie (mehrfaches Entfernen/Wiederauftauchen) statt nur der aktuellen Beobachtung benötigt wird; Tabellenschlüssel `(uri, kind)` plus Sequenz.
 
 ### Out of scope / do-not-copy
 
-Kein H2/JDBC in diesem PR (Folge-Issue „chalcotheca-h2 adapter" nach stabilem Port). Keine Content-Bytes in der Historie. Kein Kopieren von MainframeMates `CacheRepository`-SQL oder `ArchiveRun`-Swing-Progress. Kein Eingriff in `MediatedResourceService` (das ist #10).
-
-### Akzeptanzkriterien
-
-Java 8; bestehende `ResourceArchive`-Tests unverändert grün; neuer Port vollständig getestet; ArchUnit-Regeln grün; Migrations-Inventar §2.2-Zeile „archive" auf 🔧/✅ aktualisiert; Konflikt-Hinweis (Service-Caches) als Kommentar in #10 hinterlegt.
+Kein H2/JDBC, keine Tamias-Policy, keine Cache-Invalidierung, kein Umbau von `MediatedResourceService`, keine Content-Bytes in der Historie. Kein Kopieren von MainframeMates `CacheRepository`-SQL oder `ArchiveRun`-Swing-Progress.
 
 ---
 
@@ -393,7 +231,7 @@ Java 8; bestehende `ResourceArchive`-Tests unverändert grün; neuer Port vollst
 2. **Der Coordinator wird nicht ersetzt, sondern intern umgehängt.** Öffentliche Signatur bleibt vorerst; nur die Beschaffung wechselt. Der bestehende `WalkingSkeletonIntegrationTest` bleibt das Regressionsnetz und wird lediglich auf die neue Verdrahtung umgestellt.
 3. **Adyton-Station (Slice 3) als optionale Vorbereitung, nicht als Pflichtdurchlauf.** `file:`-Ressourcen brauchen keine Credentials. Die Station ist ein Port `AccessPreparation`, den authentifizierungspflichtige Connectors nutzen werden (FTP/MVS, sobald ein produktiver FTP-Transport existiert — heute nur Ports und Test-Fakes; NDV/Wiki später); die Default-Implementierung ist ein No-Op. Slice 1 kommt ohne diesen Port aus. Es fließen ausschließlich `AccessRequest`/Grant-Konzepte — niemals `SecretMaterial` — durch Acropolis (ArchUnit-Secret-Regeln decken das bereits ab).
 4. **Run-Modell klein schneiden:** `ResourceProcessingRun`, `StepOutcome`, `RunSummary`, `ProcessingFailure`. Kein `Plan`, kein `StepType`-Katalog, kein `Context`-Objekt im ersten Wurf — die tauchen erst auf, wenn ein zweiter Ablauftyp existiert (YAGNI, konsistent zur #13-Entscheidung). Das weicht bewusst vom älteren Juni-Plan ab und ist mit dem neuen #10-Text vereinbar („Run-/Plan/Step-Modell extrahieren" ≠ alles auf einmal).
-5. **`UNCHANGED` kommt aus #33, nicht aus eigener Logik:** Der Coordinator ruft `ResourceLifecycleRepository.recordAcquisition(...)` und mappt `RecordOutcome` → `StepOutcome`. Keine zweite Digest-Vergleichslogik.
+5. **`UNCHANGED` kommt aus den #33-Fakten, nicht aus eigener Logik:** Grundlage sind die `ArchivedResource`-Records hinter `ResourceArchiveRepository` (bis Slice 5 über die Fassade `ResourceArchive.hasChanged`). Ob neu indexiert wird, entscheidet #5; keine zweite Digest-Vergleichslogik im Coordinator. *Stand Session 1: Der früher skizzierte `ResourceLifecycleRepository`/`RecordOutcome` existiert nicht und ist verworfen (Kapitel 3).*
 
 ### Bootstrap-Entscheidung (ADR-Pflicht aus dem Issue)
 
@@ -401,7 +239,7 @@ Java 8; bestehende `ResourceArchive`-Tests unverändert grün; neuer Port vollst
 
 ### ⚠️ Konflikte / Probleme gefunden
 
-- **Doppelte Caches:** `MediatedResourceService` hält drei unbegrenzte `ConcurrentHashMap`-Caches. Sie müssen entfernt oder hinter das #33-Repository gelegt werden, sonst existieren zwei Wahrheiten (Detail in Kapitel 3, „Architektur-Konflikt“). Empfehlung: entfernen; Cache-Nutzen kommt aus `ResourceLifecycleRepository` + tamias-Entscheid. *Stand Session 0: in Slice 1 bewusst belassen und dokumentiert; Konsolidierung erst gegen den #33-Vertrag (Slice 5).*
+- **Doppelte Caches:** `MediatedResourceService` hält drei unbegrenzte `ConcurrentHashMap`-Caches. Sie müssen entfernt oder gegen die #33-Records (`ResourceArchiveRepository`) und die #5-Invalidierung konsolidiert werden, sonst existieren zwei Wahrheiten (Detail in Kapitel 3, „Architektur-Konflikt“). Empfehlung: entfernen; Cache-Nutzen kommt aus `ResourceLifecycleRepository` + tamias-Entscheid. *Stand Session 0: in Slice 1 bewusst belassen und dokumentiert; Konsolidierung erst gegen den #33-Vertrag (Slice 5).*
 - **`ContentInspector` vs. `deigma`:** Der Coordinator nutzt einen eigenen `ContentInspector`-Port, `emporion` nutzt `deigma`. Zwei Extraktionswege. Slice 1 sollte den Coordinator-Input auf das `HarborResult` von `emporion.ResourceHarbor` umstellen (Harbor = Beschaffung + flache Extraktion), statt beide Wege zu pflegen.
 - **`AcquisitionPort` wirft `IOException`,** `MediatedResourceService` fängt sie in `MediatedResult`. Der Coordinator muss `MediatedResult`-Fehler in `ProcessingFailure` überführen — nicht in Exceptions, damit ein Run bei Einzelfehlern weiterläuft.
 - **`ResourceAccessPolicy` existiert nur als Interface + Testimplementierung** (verifiziert): Der produktive Mediated-Pfad war bislang schlicht nicht konfigurierbar. Slice 2 (Kompositionspunkt) muss die erste produktive `ResourceAccessPolicy` explizit wählen und dokumentieren — eine „erlaube alles“-Policy nur als bewusst benannter Platzhalter (ADR-0001, Leitplanke 5); in Slice 1 wurde keine `PermitAllAccessPolicy` ergänzt. Die echte Policy-Komposition kommt mit #5. Auch das gehört ins tamias-Inventar, sobald es entsteht.
@@ -449,7 +287,7 @@ public ResourceLifecycleCoordinator(MediatedResourceAccess mediatedAccess,   // 
                                     ResourceArchive archive,                 // bestehender Port; #33-Repository erst in Slice 5
                                     LexicalIndex lexicalIndex,
                                     LexicalChunker lexicalChunker) { ... }
-// AccessPreparation (Slice 3), ResourceLifecycleRepository (#33/Slice 5) und eine
+// AccessPreparation (Slice 3), ResourceArchiveRepository (#33-Port, direkt erst in Slice 5) und eine
 // Harbor-Inspektion sind bewusst NICHT Teil der Signatur; die ursprüngliche Skizze
 // (MediatedResourceService + AccessPreparation + ResourceLifecycleRepository +
 // ResourceHarborInspection) gilt nicht mehr.
@@ -461,9 +299,9 @@ accessPreparation.prepare(uri);
 MediatedResult<BronzeContent> fetched = mediatedAccess.readContent(
         new ResourceAccessRequest(lifecycleActor, uri, ResourceOperation.READ_CONTENT));
 if (!fetched.isSuccess()) { return StepOutcome.denied(fetched.decision()); }
-RecordOutcome rec = lifecycleRepository.recordAcquisition(ref,
-        fetched.value().digest(), fetched.value().content().length, nowMillis);
-if (rec == RecordOutcome.UNCHANGED) { return StepOutcome.unchanged(); }
+// Stand Session 1: kein recordAcquisition/RecordOutcome. Slice 5 beobachtet die Version am
+// ArchivedResource (observe) und speichert sie über ResourceArchiveRepository; ob UNCHANGED
+// gilt, ergibt sich aus indexedVersion vs. Digest (Entscheidung #5).
 ```
 
 *(`ResourceHarborInspection` ist ein schmaler Acropolis-Port, den `proasteion:application` mit `emporion.DefaultResourceHarbor` adaptiert — Acropolis darf `proasteion` nicht importieren; die Richtung bleibt proasteion → astu.)*
@@ -491,7 +329,7 @@ public interface ResourceHarborInspection {
 
 #### Kompositionspunkt `proasteion:application` — Slice 2 (nach ADR-0001; offen)
 
-Erklärt: der erste produktive Bootstrap. Bewusst eine einzige Klasse ohne Framework; DI-Container erst bei Bedarf. Verdrahtet werden die in Slice 1 eingeführten Verträge (`MediatedResourceAccess` ← `MediatedResourceService`, `AcquisitionPort` ← `HolkasAcquisitionPort`, `ContentInspector` ← Deigma-Adapter, bestehendes `ResourceArchive`); die erste produktive `ResourceAccessPolicy` muss hier explizit gewählt werden (ADR-0001, Leitplanke 5). `PermitAllAccessPolicy`, `InMemoryResourceLifecycleRepository` und `DeigmaHarborInspection` in der Skizze unten existieren noch nicht, und der skizzierte Coordinator-Aufruf entspricht nicht der umgesetzten Signatur.
+Erklärt: der erste produktive Bootstrap. Bewusst eine einzige Klasse ohne Framework; DI-Container erst bei Bedarf. Verdrahtet werden die in Slice 1 eingeführten Verträge (`MediatedResourceAccess` ← `MediatedResourceService`, `AcquisitionPort` ← `HolkasAcquisitionPort`, `ContentInspector` ← Deigma-Adapter, bestehendes `ResourceArchive`); die erste produktive `ResourceAccessPolicy` muss hier explizit gewählt werden (ADR-0001, Leitplanke 5). `PermitAllAccessPolicy` und `DeigmaHarborInspection` in der Skizze unten existieren noch nicht, `InMemoryResourceLifecycleRepository` ist verworfen (heute: `InMemoryResourceArchive` über `InMemoryResourceArchiveRepository`, Kapitel 3), und der skizzierte Coordinator-Aufruf entspricht nicht der umgesetzten Signatur.
 
 ```java
 package com.aresstack.corenth.proasteion.application;

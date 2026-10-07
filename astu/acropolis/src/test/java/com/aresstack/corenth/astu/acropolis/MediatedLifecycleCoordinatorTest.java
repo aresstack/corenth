@@ -249,7 +249,7 @@ public class MediatedLifecycleCoordinatorTest {
     }
 
     /**
-     * Documents a gap tracked by #33/#5: resource-level access denials (e.g. a blacklist) do not
+     * Documents a gap tracked by #5/#10: resource-level access denials (e.g. a blacklist) do not
      * withdraw an already indexed resource from the lexical index, because no withdrawal path
      * exists yet and access denials never delete derived state. When an explicit withdrawal
      * operation lands, this test must be inverted.
