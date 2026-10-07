@@ -477,27 +477,59 @@ public class WalkingSkeletonIntegrationTest {
         assertTrue(searchCoordinator.search("stale", 10).isEmpty());
     }
 
+    /**
+     * A changed source whose new content yields no indexable text: the new digest is a new observed
+     * version (#33), independent of the indexing outcome, and the indexed fact is withdrawn.
+     */
     @Test
-    public void noTextThenReprocessed_unchangedContent_reindexes() throws IOException {
+    public void changedToNoText_observesNewVersion_andWithdrawsIndexedFact() throws IOException {
+        NoTextScenario scenario = indexThenChangeToNoText("notext-observed.txt");
+
+        assertEquals(ProcessingResult.Status.FAILED, scenario.noText.status());
+        assertTrue(searchCoordinator.search("notext", 10).isEmpty());
+        assertNull(scenario.archive.find(scenario.ref));
+        ArchivedResource record = scenario.archive.records().findByRef(scenario.ref);
+        assertEquals("#33: the changed digest is the next observed version", 2, record.versions().size());
+        assertFalse(record.versions().get(0).digest().equals(record.versions().get(1).digest()));
+        assertFalse("#33: cleanup withdraws the indexed fact", record.isIndexed());
+    }
+
+    /**
+     * Re-processing the unchanged no-text version: the digest is already observed, so no further
+     * version is created; without an indexed fact Tamias decides INDEXED_FACT_MISSING and the known
+     * version is indexed.
+     */
+    @Test
+    public void unchangedAfterNoText_reindexesKnownVersion_withoutCreatingAnotherVersion() throws IOException {
+        NoTextScenario scenario = indexThenChangeToNoText("notext-reindex.txt");
+        ArchivedResource beforeReindex = scenario.archive.records().findByRef(scenario.ref);
+
+        ProcessingResult reindexed = scenario.normalCoordinator.process(scenario.ref);
+
+        assertEquals(ProcessingResult.Status.INDEXED, reindexed.status());
+        assertFalse(searchCoordinator.search("notext", 10).isEmpty());
+        ArchivedResource record = scenario.archive.records().findByRef(scenario.ref);
+        assertEquals("#33: an identical digest creates no new version",
+                beforeReindex.versions(), record.versions());
+        assertTrue(record.isIndexed());
+        assertEquals(record.latestObservedVersion(), record.indexedVersion().version());
+    }
+
+    /** Index a file, then change it to content whose extraction yields no indexable text. */
+    private NoTextScenario indexThenChangeToNoText(String fileName) throws IOException {
         InMemoryResourceArchive sharedArchive = new InMemoryResourceArchive();
         PatternResourcePolicy acceptPolicy = allowAllFiles();
-
-        // Step 1: Index with normal inspector
         ResourceLifecycleCoordinator normalCoordinator = new ResourceLifecycleCoordinator(
                 mediatedFileAccess(sharedArchive), LIFECYCLE_ACTOR, createDeigmaInspector(),
                 acceptPolicy, sharedArchive, lexicalIndex);
 
-        File txtFile = tempFolder.newFile("notext-reindex.txt");
+        File txtFile = tempFolder.newFile(fileName);
         writeFile(txtFile, "notext reindex unique content");
         VirtualResourceRef ref = fileRef(txtFile);
-
-        ProcessingResult first = normalCoordinator.process(ref);
-        assertEquals(ProcessingResult.Status.INDEXED, first.status());
+        assertEquals(ProcessingResult.Status.INDEXED, normalCoordinator.process(ref).status());
         assertFalse(searchCoordinator.search("notext", 10).isEmpty());
 
-        // Step 2: A new source version yields no indexable text, which triggers cleanup. Since #10
-        // Slice 4 an unchanged indexed version is not extracted again, so the no-text run needs a
-        // version that is not yet indexed; that version stays unchanged in step 3.
+        // Change the content: an unchanged indexed version would not be extracted again (#10 Slice 4)
         writeFile(txtFile, "notext reindex unique content, second version");
         ContentInspector emptyInspector = new ContentInspector() {
             @Override
@@ -508,20 +540,23 @@ public class WalkingSkeletonIntegrationTest {
         ResourceLifecycleCoordinator emptyCoordinator = new ResourceLifecycleCoordinator(
                 mediatedFileAccess(sharedArchive), LIFECYCLE_ACTOR, emptyInspector,
                 acceptPolicy, sharedArchive, lexicalIndex);
-
         ProcessingResult noText = emptyCoordinator.process(ref);
-        assertEquals(ProcessingResult.Status.FAILED, noText.status());
-        assertTrue(searchCoordinator.search("notext", 10).isEmpty());
-        assertNull(sharedArchive.find(ref));
-        assertEquals("#33: cleanup withdraws the indexed fact but keeps both observed versions",
-                2, sharedArchive.records().findByRef(ref).versions().size());
+        return new NoTextScenario(sharedArchive, normalCoordinator, ref, noText);
+    }
 
-        // Step 3: Re-process the same, unchanged file with the normal inspector — the indexed fact
-        // was withdrawn during cleanup, so Tamias decides INDEXED_FACT_MISSING and the file is
-        // re-indexed
-        ProcessingResult reindexed = normalCoordinator.process(ref);
-        assertEquals(ProcessingResult.Status.INDEXED, reindexed.status());
-        assertFalse(searchCoordinator.search("notext", 10).isEmpty());
+    private static final class NoTextScenario {
+        final InMemoryResourceArchive archive;
+        final ResourceLifecycleCoordinator normalCoordinator;
+        final VirtualResourceRef ref;
+        final ProcessingResult noText;
+
+        NoTextScenario(InMemoryResourceArchive archive, ResourceLifecycleCoordinator normalCoordinator,
+                       VirtualResourceRef ref, ProcessingResult noText) {
+            this.archive = archive;
+            this.normalCoordinator = normalCoordinator;
+            this.ref = ref;
+            this.noText = noText;
+        }
     }
 
     @Test
