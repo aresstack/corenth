@@ -150,6 +150,13 @@ public class HtmlDocumentExtractorTest {
     }
 
     @Test
+    public void emptyLeadingCellsKeepTheirColumn() {
+        ExtractedDocument document = extract(
+                "<table><tr><th>A</th><th>B</th></tr><tr><td></td><td>nur B</td></tr></table>");
+        assertEquals("A\tB\n\tnur B", visible(document).get(0).text());
+    }
+
+    @Test
     public void inlineTextBetweenBlocksBecomesTextBlocks() {
         ExtractedDocument document = extract("<div>vorher<p>mitte</p>nachher</div>");
         assertEquals(Arrays.asList("TEXT|vorher|{}", "TEXT|mitte|{}", "TEXT|nachher|{}"),

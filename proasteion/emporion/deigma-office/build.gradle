@@ -1,0 +1,8 @@
+description = 'Deigma Office extractors — Apache POI-backed DOCX and XLSX implementation adapters for the Deigma extraction contracts.'
+
+dependencies {
+    api project(':proasteion:emporion:deigma')
+    // Implementation detail only: no POI type appears in a public signature of this module.
+    implementation 'org.apache.poi:poi-ooxml:5.2.5'
+    testImplementation 'junit:junit:4.13.2'
+}

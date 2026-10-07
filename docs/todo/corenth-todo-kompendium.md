@@ -647,6 +647,12 @@ Java 8; jede Policy einzeln getestet; ReasonCodes maschinenlesbar; ArchUnit „T
 3. **Fehler sind Ergebnisse, keine Exceptions:** korruptes PDF → `ExtractionResult`-Failure mit Warnung, konsistent zum bestehenden deigma-Muster („Explicit success/failure result", deigma-Inventar). Ein kaputtes Dokument darf nie einen Run abbrechen.
 4. **Kein Tika im ersten PR.** Tika zieht einen großen transitiven Baum und überlappt mit `SimpleContentDetector`. Erst wenn reale Inhalte an den vier Extraktoren vorbeilaufen, als eigenes `deigma-tika`-Fallback-Modul nachrüsten (Registry-Priorität: spezifisch vor Fallback — Registrierungsreihenfolge nutzt das bestehende Prioritätsverhalten).
 5. **`RecordStructureCodec` gehört hierher, nicht in holkas:** Fixe Satzlängen/Record-Formate sind Content-Struktur, nicht Transport (MVS-Transfer liefert Bytes; deren *Deutung* ist deigma). Das präzisiert die im deigma-Inventar offene Zuordnungsfrage.
+   **Entscheidung 2026-10-07 (Structured Records, präzisiert Punkt 5):**
+   - **Format A** (`FF01`/`FF02`-Satzrahmung, `STRU R`): nicht deigma. Das ist Record-Framing des MVS-/FTP-Transports und gehört an die Codec-Grenze des MVS-/FTP-Connectors. **Follow-up** für den MVS-/FTP-Connector vorgemerkt.
+   - **Format B** (LRECL/feste Satzlängen): zurückgestellt, solange weder Code noch belastbare Fixtures existieren.
+   - **Format C** (`sentence`-Satzarten/Feldlayouts): der vorgesehene #42 Slice 4 (`StructuredRecordExtractor`).
+   - **Parameterweg:** Ressourcenpfad → Profilzuordnung im äußeren Composition-/Konfigurations-Layer → aufgelöstes Satzarten-/Layoutprofil → `StructuredRecordExtractor` → Deigma-Dokument. Deigma kennt keine fachlichen Pfadregeln; keine neuen öffentlichen Verträge für hypothetische Metadaten, solange die Composition das auflöst.
+   - **Status #42 Slice 4: BLOCKED**, bis 2–3 echte, anonymisierte Satzarten als Fixtures vorliegen. Keine künstlichen Formate.
 
 ### ⚠️ Problem gefunden
 

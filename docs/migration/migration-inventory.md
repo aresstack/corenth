@@ -80,7 +80,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | `confluence` | Teil von ~28 | `holkas` Confluence + Basic-/mTLS-Strategien | ⬜ offen | #38 | Auth-Analyse §2/§4/§8 |
 | `sharepoint` | Teil von ~28 | `holkas` SharePoint + SSO-Kaskade/kontrollierter Fallback | ⬜ offen | #39 | Auth-Analyse §2/§4/§8 |
 | `ingestion` (Detector, Registry, Document/Block, PlainText/Markdown) | 11 | `deigma` | ✅ migriert (Kern) | #9/#22 ✔ | [deigma-inventory](mainframemate-deigma-inventory.md) |
-| `ingestion`-Schwer-Extraktoren (PDF/DOCX/XLSX/HTML/Tika), `RecordStructureCodec` | ~7 | isolierte `deigma`-Implementierungsadapter | ⬜ offen — für reale Dokumente und #36-Attachments erforderlich | #42 | deigma-inventory |
+| `ingestion`-Schwer-Extraktoren (PDF/DOCX/XLSX/HTML/Tika), `RecordStructureCodec` | ~7 | isolierte `deigma`-Implementierungsadapter | 🟡 teilweise — HTML (JSoup), PDF (PDFBox), DOCX/XLSX (POI) als isolierte `deigma-*`-Module, im Composition Root registriert und bis in die lexikalische Suche getestet (lokal integriert); strukturierte Records/`RecordStructureCodec` offen | #42 | deigma-inventory |
 
 ### 2.4 Indizes & Analyse
 
