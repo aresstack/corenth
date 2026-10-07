@@ -54,8 +54,9 @@ Extractors that need a third-party library live in their own Gradle module next 
 | Module | Class | Library | Status |
 |--------|-------|---------|--------|
 | `proasteion:emporion:deigma-html` | `HtmlDocumentExtractor` | JSoup 1.17.2 (no transitive dependencies) | #42 Slice 1 |
+| `proasteion:emporion:deigma-pdf` | `PdfDocumentExtractor` | PDFBox 2.0.37 (+ fontbox, commons-logging) | #42 Slice 2 |
 
-PDF, DOCX, XLSX, structured-record and Tika-based extractors are intentionally deferred (#42 Slices 2–4) and follow the same module pattern.
+DOCX, XLSX, structured-record and Tika-based extractors are intentionally deferred (#42 Slices 3–4) and follow the same module pattern.
 
 ### HTML mapping (`HtmlDocumentExtractor`)
 
@@ -71,6 +72,16 @@ PDF, DOCX, XLSX, structured-record and Tika-based extractors are intentionally d
 | `script`, `style`, `noscript`, `template`, `nav`, `iframe`, `object`, `embed`, `svg`, `canvas`, `[hidden]`, comments | dropped |
 
 Blocks follow document order; metadata blocks come first. Encoding: byte order mark → `charset` parameter of the content-type hint → `<meta>` declaration → UTF-8. Malformed markup is repaired the way browsers do (HTML5 tree building), never rejected. Outcomes: empty or invisible-only documents succeed with no visible blocks and a `NO_VISIBLE_TEXT` warning; an unusable charset hint adds `UNSUPPORTED_CHARSET_HINT`; failures start with `UNSUPPORTED_CONTENT_TYPE`, `CONTENT_TOO_LARGE` (above 64 MiB) or `HTML_PARSE_FAILED`. Links are not resolved and nothing is rendered.
+
+### PDF mapping (`PdfDocumentExtractor`)
+
+| PDF | Deigma |
+|-----|--------|
+| information-dictionary title | `ExtractedDocument.title()` |
+| author, subject, keywords, creator, producer, creation/modification time (ISO-8601 UTC), page count | text-less `METADATA` blocks (`name`, `value`) |
+| each page with a text layer | one `TEXT` block, attribute `page` (1-based); blank pages yield no block |
+
+PDFBox 2.0.x is chosen over 3.x for its stable `PDDocument.load` API and class files that run on Java 8 (major version 50). Text is read with position sorting; no OCR is performed (`NO_TEXT_LAYER` warning when no page has text). Encryption: a required user password yields `PDF_ENCRYPTED` (no password is ever requested; document passwords are deliberately not an Adyton concern yet), a forbidden extraction permission yields `PDF_EXTRACTION_NOT_PERMITTED`, and an owner-password-only document is extracted with a `PDF_OWNER_PASSWORD_PROTECTED` warning. Other failures start with `UNSUPPORTED_CONTENT_TYPE`, `CONTENT_TOO_LARGE` (above 64 MiB) or `PDF_PARSE_FAILED`. The parsed document is closed on every path.
 
 ## Usage with astu
 
