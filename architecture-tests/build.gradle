@@ -17,6 +17,7 @@ ext.architectureProjects = [
         ':proasteion:emporion:deigma',
         ':proasteion:emporion:deigma-html',
         ':proasteion:emporion:deigma-pdf',
+        ':proasteion:emporion:deigma-office',
         ':proasteion:application',
         ':proasteion:platform',
         ':proasteion:platform:network',
