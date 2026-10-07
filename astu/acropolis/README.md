@@ -30,24 +30,24 @@ file: URI
 | Class | Purpose |
 |-------|---------|
 | `ResourceLifecycleCoordinator` | Orchestrates the full processing pipeline for a single resource; acquires only through `MediatedResourceAccess` |
-| `ProcessingResult` | Outcome of processing (INDEXED, DENIED, UNCHANGED, FAILED) |
-| `ContentInspector` / `InspectionResult` | Inward port for detection and extraction; today implemented only by test-local deigma adapters (`createDeigmaInspector()` in the acropolis tests). The production deigma → `ContentInspector` adapter is part of #10 Slice 2 (ADR-0001) |
+| `ProcessingResult` | Outcome of processing (INDEXED, UNCHANGED, DENIED, NO_EXTRACTABLE_CONTENT, REMOVED, CANCELLED, FAILED) with the executed steps and a typed failure |
+| `ResourceProcessingPlan` / `ResourceProcessingStep` / `ResourceProcessingRun` / `ResourceProcessingRunner` | Immutable plan, step log and run summary over several resources (#10 Slice 4); no engine, no persistence |
+| `ContentInspector` / `InspectionResult` | Inward port for detection and extraction; implemented in production by `DeigmaContentInspector` in `proasteion:application` (#10 Slice 2) |
 | `SearchCoordinator` | Thin search facade over the lexical index |
 
 ### Decision semantics
 
 - A `tamias` indexing-rule `DENY` is a lifecycle decision for the resource: it yields `DENIED` and removes stale index entries and the snapshot.
-- A `tamias` access decision that withholds the content (`DENY`, `ALLOW_CACHED_ONLY` without cached content on either evaluation, `REQUIRE_AUTH`, `REQUIRE_SOURCE_CHECK`) yields `DENIED` with the decision in the message. Access denials are never lifecycle decisions and never delete derived state, including resource-level reason codes such as `BLACKLISTED`; withdrawing an already indexed resource is decided by Tamias (#5) and executed by the lifecycle (#10) on top of the #33 resource records (`knownGap_blacklisted…` test). `REQUIRE_AUTH` becomes an Adyton-backed preparation step in #10 Slice 3.
-- An acquisition error inside the counter yields `FAILED`.
+- A `tamias` access decision that withholds the content (`DENY`, `ALLOW_CACHED_ONLY` without cached content on either evaluation, `REQUIRE_AUTH` without a station, `REQUIRE_SOURCE_CHECK`) yields `DENIED` with the decision in the message. Access denials are never lifecycle decisions and never delete derived state, including resource-level reason codes such as `BLACKLISTED`; withdrawing an already indexed resource is decided by Tamias (#5) and executed by the lifecycle (#10) on top of the #33 resource records (`knownGap_blacklisted…` test).
+- Authentication outcomes stay distinct (#10 Slice 3): cancellation `CANCELLED`, missing credential and failed authentication `FAILED` with their own reason codes. An acquisition error yields `FAILED`.
 
 ### Composition
 
-`acropolis` does not construct connectors, extractors, policies or the counter. ArchUnit forbids any dependency of this module (outside `chalcotheca`) on `MediatedResourceService`, `AcquisitionPort` and `holkas`, and whitelists `ContentInspector` as the only inward port declared in the root package. The production composition point is decided in [ADR-0001](../../docs/adr/0001-composition-root.md) and created in #10 Slice 2. Until then:
+`acropolis` does not construct connectors, extractors, policies or the counter. ArchUnit forbids any dependency of this module (outside `chalcotheca`) on `MediatedResourceService`, `AcquisitionPort` and `holkas`, and whitelists `ContentInspector` as the only inward port declared in the root package. The production composition point is `CorenthComposition` in `proasteion:application` ([ADR-0001](../../docs/adr/0001-composition-root.md), #10 Slice 2). Besides it:
 
 - **Contract:** `MediatedResourceAccess` (chalcotheca), implemented by `MediatedResourceService`.
 - **Test composition with real adapters:** `WalkingSkeletonIntegrationTest` and `MediatedAccessWalkingSkeletonTest` wire `HolkasAcquisitionPort` over `FileSystemResourceConnector` behind an anonymous permit-all `ResourceAccessPolicy`; the first also builds the `ContentInspector` from real deigma extractors.
 - **Fakes only:** `MediatedLifecycleCoordinatorTest` (`RecordingMediatedAccess`, `CountingAcquisitionPort`, recording index) proves the contract shape and the decision mapping, not any integration.
-- **Production composition, production `ResourceAccessPolicy`, production `ContentInspector` adapter:** none yet.
 
 ### Known gaps (left to later slices)
 
