@@ -8,6 +8,7 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessDec
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessPolicy;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceOperation;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.scope.ResourceSizePolicy;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -21,23 +22,25 @@ import java.util.Map;
 import static org.junit.Assert.*;
 
 /**
- * Payload refresh, metadata reads and invalidation of the archive counter (#10 Slice 5).
+ * Payload refresh, bounded acquisition, metadata reads and invalidation of the archive counter
+ * (#10 Slice 5).
  * Runs against a fake acquisition port; it proves the counter's mediation, not a connector.
  */
 public class MediatedPayloadRefreshTest {
 
     private static final ActorIdentity ACTOR = new ActorIdentity("indexer", ActorType.SERVICE);
     private static final BookmarkUri DOC = BookmarkUri.parse("file:///virtual/doc.txt");
+    private static final ResourceSizePolicy UNLIMITED = ResourceSizePolicy.unlimited();
 
     @Test
     public void refreshPermitted_reacquiresAndReplacesTheCachedPayload() {
         FakePort port = new FakePort();
         MediatedResourceService counter = counter(allowing(), port);
         port.text = "first";
-        assertEquals("first", text(counter.refreshContent(read())));
+        assertEquals("first", text(counter.refreshContent(read(), UNLIMITED)));
 
         port.text = "second";
-        assertEquals("second", text(counter.refreshContent(read())));
+        assertEquals("second", text(counter.refreshContent(read(), UNLIMITED)));
         assertEquals("second", text(counter.readContent(read())));
         assertEquals(2, port.fetches);
     }
@@ -49,10 +52,10 @@ public class MediatedPayloadRefreshTest {
         policy.decisions.put(ResourceOperation.REFRESH_EXTERNAL, ResourceAccessDecision.cachedOnly("no refresh"));
         MediatedResourceService counter = counter(policy, port);
         port.text = "first";
-        assertEquals("first", text(counter.refreshContent(read())));
+        assertEquals("first", text(counter.refreshContent(read(), UNLIMITED)));
 
         port.text = "second";
-        assertEquals("first", text(counter.refreshContent(read())));
+        assertEquals("first", text(counter.refreshContent(read(), UNLIMITED)));
         assertEquals(1, port.fetches);
     }
 
@@ -62,7 +65,7 @@ public class MediatedPayloadRefreshTest {
         Policy policy = allowing();
         policy.decisions.put(ResourceOperation.READ_CONTENT,
                 ResourceAccessDecision.deny(AccessReasonCode.BLACKLISTED, "blacklisted"));
-        MediatedResult<BronzeContent> result = counter(policy, port).refreshContent(read());
+        MediatedResult<BronzeContent> result = counter(policy, port).refreshContent(read(), UNLIMITED);
 
         assertFalse(result.isSuccess());
         assertEquals(AccessReasonCode.BLACKLISTED, result.decision().reasonCode());
@@ -76,10 +79,10 @@ public class MediatedPayloadRefreshTest {
         FakePort port = new FakePort();
         MediatedResourceService counter = counter(allowing(), port);
         port.text = "cached";
-        counter.refreshContent(read());
+        counter.refreshContent(read(), UNLIMITED);
 
         port.absent = true;
-        MediatedResult<BronzeContent> refreshed = counter.refreshContent(read());
+        MediatedResult<BronzeContent> refreshed = counter.refreshContent(read(), UNLIMITED);
 
         assertEquals(MediatedResult.Failure.SOURCE_ABSENT, refreshed.failure());
         assertNull("stale bytes are never returned for a failed refresh", refreshed.value());
@@ -91,7 +94,7 @@ public class MediatedPayloadRefreshTest {
         FakePort port = new FakePort();
         port.metadata = true;
         MediatedResourceService counter = counter(allowing(), port);
-        counter.refreshContent(read());
+        counter.refreshContent(read(), UNLIMITED);
         counter.readMetadata(metadata());
         counter.storeBronzeListing(new BronzeListing(DOC, Collections.<BronzeListing.Entry>emptyList(), 1L));
 
@@ -152,8 +155,84 @@ public class MediatedPayloadRefreshTest {
     @Test
     public void refreshAndMetadata_rejectMismatchedOperations() {
         MediatedResourceService counter = counter(allowing(), new FakePort());
-        assertEquals(AccessReasonCode.INVALID_OPERATION, counter.refreshContent(metadata()).decision().reasonCode());
+        assertEquals(AccessReasonCode.INVALID_OPERATION, counter.refreshContent(metadata(), UNLIMITED).decision().reasonCode());
         assertEquals(AccessReasonCode.INVALID_OPERATION, counter.readMetadata(read()).decision().reasonCode());
+    }
+
+    @Test
+    public void boundedRefresh_withinTheLimit_acquiresAndCaches_throughTheBoundedPortRead() {
+        FakePort port = new FakePort();
+        port.text = "12345";
+        MediatedResourceService counter = counter(allowing(), port);
+
+        assertEquals("12345", text(counter.refreshContent(read(), ResourceSizePolicy.maxBytes(5))));
+
+        assertEquals(Long.valueOf(5L), port.lastLimit);
+        assertTrue(counter.hasCachedContent(DOC));
+    }
+
+    @Test
+    public void boundedRefresh_overTheLimit_isWithheldAsTooLarge_andCachesNothing() {
+        FakePort port = new FakePort();
+        port.text = "123456";
+        MediatedResourceService counter = counter(allowing(), port);
+
+        MediatedResult<BronzeContent> result = counter.refreshContent(read(), ResourceSizePolicy.maxBytes(5));
+
+        assertFalse(result.isSuccess());
+        assertEquals(AccessReasonCode.TOO_LARGE, result.decision().reasonCode());
+        assertTrue(result.decision().explanation(), result.decision().explanation().contains("limit 5 bytes"));
+        assertNull(result.value());
+        assertFalse("an oversized payload is never cached", counter.hasCachedContent(DOC));
+        assertEquals("the port stopped one byte beyond the limit", 6L, port.bytesRead);
+    }
+
+    @Test
+    public void boundedRefresh_overTheLimit_keepsThePreviouslyCachedPayload() {
+        FakePort port = new FakePort();
+        port.text = "small";
+        MediatedResourceService counter = counter(allowing(), port);
+        counter.refreshContent(read(), ResourceSizePolicy.maxBytes(5));
+
+        port.text = "grown beyond the limit";
+        MediatedResult<BronzeContent> refreshed = counter.refreshContent(read(), ResourceSizePolicy.maxBytes(5));
+
+        assertEquals(AccessReasonCode.TOO_LARGE, refreshed.decision().reasonCode());
+        assertEquals("small", new String(counter.readContent(read()).value().content(), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void boundedRead_onACacheMiss_withoutRefreshPermission_isBoundedToo() {
+        FakePort port = new FakePort();
+        port.text = "123456";
+        Policy policy = allowing();
+        policy.decisions.put(ResourceOperation.REFRESH_EXTERNAL, ResourceAccessDecision.cachedOnly("no refresh"));
+
+        MediatedResult<BronzeContent> result = counter(policy, port).refreshContent(read(), ResourceSizePolicy.maxBytes(5));
+
+        assertEquals(AccessReasonCode.TOO_LARGE, result.decision().reasonCode());
+        assertEquals(Long.valueOf(5L), port.lastLimit);
+    }
+
+    @Test
+    public void boundedRefresh_throughAPortThatCannotBound_failsWithoutReadingTheSource() {
+        FakePort port = new FakePort();
+        port.bounded = false;
+        MediatedResourceService counter = counter(allowing(), port);
+
+        MediatedResult<BronzeContent> result = counter.refreshContent(read(), ResourceSizePolicy.maxBytes(5));
+
+        assertEquals(MediatedResult.Failure.ACQUISITION_FAILED, result.failure());
+        assertEquals("no unbounded fetch", 0, port.fetches);
+        assertFalse(counter.hasCachedContent(DOC));
+    }
+
+    @Test
+    public void refresh_withoutALimit_usesTheUnboundedPortRead() {
+        FakePort port = new FakePort();
+        port.bounded = false;
+        assertEquals("content", text(counter(allowing(), port).refreshContent(read(), UNLIMITED)));
+        assertNull(port.lastLimit);
     }
 
     private static MediatedResourceService counter(ResourceAccessPolicy policy, AcquisitionPort port) {
@@ -195,7 +274,29 @@ public class MediatedPayloadRefreshTest {
         String text = "content";
         boolean absent;
         boolean metadata;
+        boolean bounded = true;
         int fetches;
+        Long lastLimit;
+        long bytesRead;
+
+        @Override
+        public BronzeContent fetchContent(BookmarkUri uri, AcquisitionCapability capability, long maxBytes)
+                throws IOException {
+            if (!bounded) {
+                return AcquisitionPort.super.fetchContent(uri, capability, maxBytes);
+            }
+            lastLimit = maxBytes;
+            if (absent) {
+                throw new SourceAbsentException("gone");
+            }
+            byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+            bytesRead = Math.min(bytes.length, maxBytes + 1);
+            if (bytes.length > maxBytes) {
+                throw new AcquisitionLimitExceededException(bytesRead, "more than " + maxBytes + " bytes");
+            }
+            fetches++;
+            return new BronzeContent(uri, bytes, ContentHasher.digest(bytes), System.currentTimeMillis());
+        }
 
         @Override
         public BronzeContent fetchContent(BookmarkUri uri) throws IOException {

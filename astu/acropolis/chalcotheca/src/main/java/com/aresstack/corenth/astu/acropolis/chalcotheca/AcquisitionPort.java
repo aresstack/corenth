@@ -55,6 +55,27 @@ public interface AcquisitionPort {
     }
 
     /**
+     * Fetches content and reads at most {@code maxBytes} bytes from the source (#10 Slice 5).
+     *
+     * <p>A source that holds more bytes ends the read with an
+     * {@link AcquisitionLimitExceededException} after at most {@code maxBytes + 1} bytes; no
+     * payload is returned. The default refuses the acquisition: a port that cannot bound its read
+     * must not acquire a resource of unknown or unreliable size completely.
+     *
+     * @param uri the resource to acquire
+     * @param capability the prepared capability, or {@code null} if none is required
+     * @param maxBytes the largest admitted payload in bytes; {@code >= 0}
+     * @return the acquired bronze content of at most {@code maxBytes} bytes
+     * @throws AcquisitionLimitExceededException if the source holds more than {@code maxBytes} bytes
+     * @throws SourceAbsentException if the source confirms that the resource does not exist
+     * @throws IOException if acquisition fails or the port cannot bound it
+     */
+    default BronzeContent fetchContent(BookmarkUri uri, AcquisitionCapability capability, long maxBytes)
+            throws IOException {
+        throw new IOException("This acquisition port cannot bound an acquisition to " + maxBytes + " bytes");
+    }
+
+    /**
      * Lists children with a prepared authentication capability (#10 Slice 3).
      *
      * @param uri the container resource to list

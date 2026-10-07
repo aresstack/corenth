@@ -3,8 +3,12 @@ package com.aresstack.corenth.astu.acropolis;
 import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceKind;
 import com.aresstack.corenth.astu.VirtualResourceRef;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionCapability;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ArchivedResource;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeContent;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeListing;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeMetadata;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.InMemoryResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceAccess;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceService;
@@ -25,6 +29,9 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessDec
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessPolicy;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceOperation;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.DigestChangeDetection;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.disposition.DerivativeDispositionPolicy;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.scope.ResourceSizePolicy;
 import com.aresstack.corenth.proasteion.emporion.deigma.DetectedContentType;
 import com.aresstack.corenth.proasteion.emporion.deigma.ExtractedBlock;
 import com.aresstack.corenth.proasteion.emporion.deigma.ExtractionRegistry;
@@ -50,6 +57,7 @@ import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.Charset;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -229,24 +237,14 @@ public class WalkingSkeletonIntegrationTest {
 
     /**
      * Regression for the former {@code knownGap_oversizedFile_isAcquiredAndRetainedByCounterBeforeDenial}
-     * (#10 Slice 5): the counter reads the source metadata, the lifecycle applies the size limit
-     * before any payload is acquired, and no oversized bytes are cached.
+     * (#10 Slice 5): the counter reads the source metadata, the Tamias size policy rejects the
+     * known size before any payload is acquired, and no oversized bytes are cached.
      */
     @Test
     public void oversizedFile_isDeniedFromSourceMetadata_beforeAnyPayloadIsAcquired() throws IOException {
-        IndexingRule tinyRule = new IndexingRule(
-                "tiny-rule",
-                Arrays.asList("file"),
-                Arrays.asList("**/*.txt"),
-                Collections.<String>emptyList(),
-                10 // only 10 bytes allowed
-        );
-        PatternResourcePolicy tinyPolicy = new PatternResourcePolicy(Arrays.asList(tinyRule));
-
         InMemoryResourceArchive archive = new InMemoryResourceArchive();
         MediatedResourceService tinyCounter = mediatedFileAccess(archive);
-        ResourceLifecycleCoordinator tinyCoordinator = new ResourceLifecycleCoordinator(
-                tinyCounter, LIFECYCLE_ACTOR, createDeigmaInspector(), tinyPolicy, archive, lexicalIndex);
+        ResourceLifecycleCoordinator tinyCoordinator = sizeLimited(tinyCounter, archive, 10);
 
         File bigFile = tempFolder.newFile("big.txt");
         writeFile(bigFile, "This content is definitely larger than 10 bytes.");
@@ -254,13 +252,102 @@ public class WalkingSkeletonIntegrationTest {
         VirtualResourceRef ref = fileRef(bigFile);
         ProcessingResult result = tinyCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.DENIED, result.status());
-        assertTrue(result.message().contains("maxBytes"));
+        assertTrue(result.message(), result.message().startsWith("SIZE_OVER_LIMIT"));
         assertFalse("the size is known from metadata, so no payload is acquired or cached",
                 tinyCounter.hasCachedContent(ref.uri()));
         for (ResourceProcessingStep step : result.steps()) {
             assertNotEquals(ResourceProcessingStepType.MEDIATED_ACQUISITION, step.type());
         }
         assertNull("a denied resource gets no record", archive.records().findByRef(ref));
+    }
+
+    /**
+     * Oversized source without metadata (#10 Slice 5): the size is unknown before acquisition, so
+     * the counter reads through the bounded port read, stops one byte beyond the Tamias limit and
+     * caches nothing; the lifecycle denies the resource.
+     */
+    @Test
+    public void oversizedFile_withoutSourceMetadata_isStoppedByTheBoundedAcquisition() throws IOException {
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        UnreliableMetadataPort port = new UnreliableMetadataPort(null);
+        MediatedResourceService boundedCounter = new MediatedResourceService(permitAll(), port, archive);
+        File bigFile = tempFolder.newFile("unmeasured.txt");
+        writeFile(bigFile, repeat("unmeasuredterm ", 300));
+        VirtualResourceRef ref = fileRef(bigFile);
+
+        ProcessingResult result = sizeLimited(boundedCounter, archive, 16).process(ref);
+
+        assertEquals(ProcessingResult.Status.DENIED, result.status());
+        assertTrue(result.message(), result.message().contains("TOO_LARGE"));
+        assertEquals("the acquisition is bounded by the Tamias limit", Arrays.asList(16L), port.limits);
+        assertEquals("never read unbounded", 0, port.unboundedFetches);
+        assertFalse("no oversized payload is cached", boundedCounter.hasCachedContent(ref.uri()));
+        assertNull("a denied resource gets no record", archive.records().findByRef(ref));
+        assertTrue(searchCoordinator.search("unmeasuredterm", 10).isEmpty());
+    }
+
+    /**
+     * A file that grew beyond its reported size (#10 Slice 5): the metadata admits it, the bounded
+     * acquisition still stops at the limit, so stale metadata never leads to an unbounded read.
+     */
+    @Test
+    public void fileThatGrewBeyondItsReportedSize_isStoppedByTheBoundedAcquisition() throws IOException {
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        UnreliableMetadataPort port = new UnreliableMetadataPort(5L);
+        MediatedResourceService boundedCounter = new MediatedResourceService(permitAll(), port, archive);
+        File grownFile = tempFolder.newFile("grown.txt");
+        writeFile(grownFile, repeat("grownterm ", 300));
+        VirtualResourceRef ref = fileRef(grownFile);
+
+        ProcessingResult result = sizeLimited(boundedCounter, archive, 16).process(ref);
+
+        assertEquals(ProcessingResult.Status.DENIED, result.status());
+        assertEquals("size 5", result.steps().get(1).detail());
+        assertEquals(Arrays.asList(16L), port.limits);
+        assertFalse(boundedCounter.hasCachedContent(ref.uri()));
+        assertTrue(searchCoordinator.search("grownterm", 10).isEmpty());
+    }
+
+    /** A file within the limit is indexed through the bounded acquisition as usual. */
+    @Test
+    public void fileWithinTheLimit_withoutSourceMetadata_isIndexedThroughTheBoundedAcquisition() throws IOException {
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        UnreliableMetadataPort port = new UnreliableMetadataPort(null);
+        MediatedResourceService boundedCounter = new MediatedResourceService(permitAll(), port, archive);
+        File smallFile = tempFolder.newFile("small.txt");
+        writeFile(smallFile, "boundedterm fits");
+        VirtualResourceRef ref = fileRef(smallFile);
+
+        ProcessingResult result = sizeLimited(boundedCounter, archive, 64).process(ref);
+
+        assertEquals(ProcessingResult.Status.INDEXED, result.status());
+        assertEquals(Arrays.asList(64L), port.limits);
+        assertFalse(searchCoordinator.search("boundedterm", 10).isEmpty());
+    }
+
+    /**
+     * An indexed file that grows beyond the limit is denied by the bounded acquisition; its stale
+     * index entry is withdrawn like for any size rejection, the record keeps its history.
+     */
+    @Test
+    public void indexedFileThatGrowsBeyondTheLimit_isDenied_andItsIndexEntryIsWithdrawn() throws IOException {
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        UnreliableMetadataPort port = new UnreliableMetadataPort(null);
+        MediatedResourceService boundedCounter = new MediatedResourceService(permitAll(), port, archive);
+        ResourceLifecycleCoordinator lifecycle = sizeLimited(boundedCounter, archive, 64);
+        File file = tempFolder.newFile("growing.txt");
+        writeFile(file, "growingterm small");
+        VirtualResourceRef ref = fileRef(file);
+        assertEquals(ProcessingResult.Status.INDEXED, lifecycle.process(ref).status());
+
+        writeFile(file, repeat("growingterm ", 300));
+        ProcessingResult grown = lifecycle.process(ref);
+
+        assertEquals(ProcessingResult.Status.DENIED, grown.status());
+        assertTrue(searchCoordinator.search("growingterm", 10).isEmpty());
+        ArchivedResource record = archive.records().findByRef(ref);
+        assertFalse(record.isIndexed());
+        assertEquals("#33: the oversized content is never observed", 1, record.versions().size());
     }
 
     @Test
@@ -618,6 +705,66 @@ public class WalkingSkeletonIntegrationTest {
         AcquisitionPort acquisition = new HolkasAcquisitionPort(
                 DefaultResourceConnectorRegistry.of(new FileSystemResourceConnector()));
         return new MediatedResourceService(permitAll(), acquisition, archive);
+    }
+
+    /** Coordinator over the file counter with the Tamias size policy (#5, #10 Slice 5). */
+    private ResourceLifecycleCoordinator sizeLimited(MediatedResourceService fileCounter,
+                                                     InMemoryResourceArchive archive, long maxBytes) {
+        return new ResourceLifecycleCoordinator(fileCounter, LIFECYCLE_ACTOR, createDeigmaInspector(),
+                allowAllFiles(), archive.records(), lexicalIndex, null, new DigestChangeDetection(),
+                new DerivativeDispositionPolicy(), ResourceSizePolicy.maxBytes(maxBytes), Clock.systemUTC());
+    }
+
+    private static String repeat(String text, int times) {
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < times; i++) {
+            out.append(text);
+        }
+        return out.toString();
+    }
+
+    /**
+     * Holkas file port whose metadata is missing ({@code null}) or reports a fixed, possibly stale
+     * size; it records every bounded and unbounded content fetch.
+     */
+    private static final class UnreliableMetadataPort implements AcquisitionPort {
+        private final HolkasAcquisitionPort delegate = new HolkasAcquisitionPort(
+                DefaultResourceConnectorRegistry.of(new FileSystemResourceConnector()));
+        private final Long reportedSize;
+        final List<Long> limits = new ArrayList<Long>();
+        int unboundedFetches;
+
+        UnreliableMetadataPort(Long reportedSize) {
+            this.reportedSize = reportedSize;
+        }
+
+        @Override
+        public BronzeContent fetchContent(BookmarkUri uri) throws IOException {
+            unboundedFetches++;
+            return delegate.fetchContent(uri);
+        }
+
+        @Override
+        public BronzeContent fetchContent(BookmarkUri uri, AcquisitionCapability capability, long maxBytes)
+                throws IOException {
+            limits.add(maxBytes);
+            return delegate.fetchContent(uri, capability, maxBytes);
+        }
+
+        @Override
+        public BronzeListing listChildren(BookmarkUri uri) throws IOException {
+            return delegate.listChildren(uri);
+        }
+
+        @Override
+        public boolean offersMetadata(BookmarkUri uri) {
+            return reportedSize != null;
+        }
+
+        @Override
+        public BronzeMetadata fetchMetadata(BookmarkUri uri, AcquisitionCapability capability) {
+            return new BronzeMetadata(uri, "stale", "text/plain", reportedSize, 1L, 1L);
+        }
     }
 
     private static ResourceAccessPolicy permitAll() {

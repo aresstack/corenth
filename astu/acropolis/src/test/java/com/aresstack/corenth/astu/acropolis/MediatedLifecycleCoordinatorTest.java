@@ -30,11 +30,15 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessPol
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceOperation;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.DigestChangeDetection;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.disposition.DerivativeDispositionPolicy;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.scope.ResourceSizePolicy;
 
 import org.junit.Test;
 
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -94,19 +98,50 @@ public class MediatedLifecycleCoordinatorTest {
     }
 
     @Test
-    public void sizeLimit_withoutSourceMetadata_isEnforcedAfterAcquisition_andInvalidatesThePayload() {
+    public void sizeLimit_withoutSourceMetadata_boundsTheMediatedRead_andDeniesTheOversizedSource() {
+        RecordingMediatedAccess access = new RecordingMediatedAccess();
+        access.nextContent = MediatedResult.denied(
+                ResourceAccessDecision.deny(AccessReasonCode.TOO_LARGE, "at least 11 bytes > limit 10 bytes"));
+        RecordingLexicalIndex index = new RecordingLexicalIndex();
+
+        ProcessingResult result = sized(access, ResourceSizePolicy.maxBytes(10), index).process(DOC);
+
+        assertEquals(ProcessingResult.Status.DENIED, result.status());
+        assertEquals("the counter receives the Tamias size policy as acquisition bound",
+                ResourceSizePolicy.maxBytes(10), access.acquisitionLimits.get(0));
+        ResourceProcessingStep acquisition = step(result, ResourceProcessingStepType.MEDIATED_ACQUISITION);
+        assertTrue(acquisition.detail(), acquisition.detail().contains("TOO_LARGE"));
+        assertTrue("no ad-hoc invalidation: the counter cached nothing", access.invalidated.isEmpty());
+        assertTrue(index.removed.contains(DOC));
+    }
+
+    @Test
+    public void sizeLimit_onAnAcquiredOrCachedPayload_isDecidedByTheSizePolicy() {
         RecordingMediatedAccess access = new RecordingMediatedAccess();
         access.nextContent = MediatedResult.success(bronze(DOC_URI, "this text is longer than ten bytes"),
                 ResourceAccessDecision.allow());
-        ResourcePolicy tiny = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
-                "tiny", Arrays.asList("file"), Arrays.asList("**/*"), Collections.<String>emptyList(), 10)));
 
-        ProcessingResult result = coordinator(access, tiny, new RecordingLexicalIndex()).process(DOC);
+        ProcessingResult result = sized(access, ResourceSizePolicy.maxBytes(10), new RecordingLexicalIndex())
+                .process(DOC);
 
         assertEquals(ProcessingResult.Status.DENIED, result.status());
-        assertTrue(result.message().contains("maxBytes"));
-        assertEquals("without metadata the size is only known after the mediated read", 1, access.requests.size());
-        assertEquals("the rejected payload must not stay cached", Arrays.asList(DOC_URI), access.invalidated);
+        assertTrue(result.message(), result.message().startsWith("SIZE_OVER_LIMIT"));
+        assertTrue("no ad-hoc invalidation outside a #5 disposition", access.invalidated.isEmpty());
+    }
+
+    @Test
+    public void sizePolicy_withSourceMetadata_deniesBeforeAnyMediatedRead() {
+        RecordingMediatedAccess access = new RecordingMediatedAccess();
+        access.nextMetadata = MediatedResult.success(
+                new BronzeMetadata(DOC_URI, "notes.txt", "text/plain", 4096L, 1L, 1L), ResourceAccessDecision.allow());
+        access.nextContent = MediatedResult.success(bronze(DOC_URI, "never read"), ResourceAccessDecision.allow());
+
+        ProcessingResult result = sized(access, ResourceSizePolicy.maxBytes(10), new RecordingLexicalIndex())
+                .process(DOC);
+
+        assertEquals(ProcessingResult.Status.DENIED, result.status());
+        assertTrue(result.message(), result.message().startsWith("SIZE_OVER_LIMIT"));
+        assertTrue("a known oversized resource is never read", access.requests.isEmpty());
     }
 
     @Test
@@ -478,6 +513,22 @@ public class MediatedLifecycleCoordinatorTest {
         return new ResourceLifecycleCoordinator(access, INDEXER, plainText(), policy, archive, index);
     }
 
+    private static ResourceLifecycleCoordinator sized(MediatedResourceAccess access, ResourceSizePolicy sizePolicy,
+                                                      LexicalIndex index) {
+        return new ResourceLifecycleCoordinator(access, INDEXER, plainText(), acceptAll(),
+                new InMemoryResourceArchive().records(), index, null, new DigestChangeDetection(),
+                new DerivativeDispositionPolicy(), sizePolicy, Clock.systemUTC());
+    }
+
+    private static ResourceProcessingStep step(ProcessingResult result, ResourceProcessingStepType type) {
+        for (ResourceProcessingStep step : result.steps()) {
+            if (step.type() == type) {
+                return step;
+            }
+        }
+        throw new AssertionError("no step " + type + " in " + result.steps());
+    }
+
     private static ResourcePolicy acceptAll() {
         return new PatternResourcePolicy(Arrays.asList(new IndexingRule(
                 "accept-all", Collections.<String>emptyList(), Arrays.asList("**/*"),
@@ -526,6 +577,7 @@ public class MediatedLifecycleCoordinatorTest {
         final List<ResourceAccessRequest> requests = new ArrayList<ResourceAccessRequest>();
         final List<ResourceAccessRequest> metadataRequests = new ArrayList<ResourceAccessRequest>();
         final List<BookmarkUri> invalidated = new ArrayList<BookmarkUri>();
+        final List<ResourceSizePolicy> acquisitionLimits = new ArrayList<ResourceSizePolicy>();
         MediatedResult<BronzeContent> nextContent;
         MediatedResult<BronzeMetadata> nextMetadata;
         RuntimeException failure;
@@ -546,7 +598,9 @@ public class MediatedLifecycleCoordinatorTest {
         }
 
         @Override
-        public MediatedResult<BronzeContent> refreshContent(ResourceAccessRequest request) {
+        public MediatedResult<BronzeContent> refreshContent(ResourceAccessRequest request,
+                                                            ResourceSizePolicy acquisitionLimit) {
+            acquisitionLimits.add(acquisitionLimit);
             return readContent(request);
         }
 
@@ -580,6 +634,7 @@ public class MediatedLifecycleCoordinatorTest {
 
     private static final class RecordingLexicalIndex implements LexicalIndex {
         final Set<VirtualResourceRef> indexed = new HashSet<VirtualResourceRef>();
+        final Set<VirtualResourceRef> removed = new HashSet<VirtualResourceRef>();
         String lastTitle;
 
         @Override
@@ -596,6 +651,7 @@ public class MediatedLifecycleCoordinatorTest {
         @Override
         public void remove(VirtualResourceRef resourceRef) {
             indexed.remove(resourceRef);
+            removed.add(resourceRef);
         }
 
         @Override

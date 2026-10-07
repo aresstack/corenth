@@ -22,6 +22,7 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PatternResourcePo
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessDecision;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.scope.ResourceSizePolicy;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -261,7 +262,8 @@ public class LifecycleRunRecordingTest {
         }
 
         @Override
-        public MediatedResult<BronzeContent> refreshContent(ResourceAccessRequest request) {
+        public MediatedResult<BronzeContent> refreshContent(ResourceAccessRequest request,
+                                                            ResourceSizePolicy acquisitionLimit) {
             return readContent(new ResourceAccessRequest(request.actor(), request.target(),
                     ResourceOperation.READ_CONTENT, request.purpose()));
         }

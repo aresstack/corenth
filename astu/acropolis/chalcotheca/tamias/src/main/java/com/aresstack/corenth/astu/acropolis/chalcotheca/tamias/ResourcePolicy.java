@@ -13,9 +13,9 @@ public interface ResourcePolicy {
 
     /**
      * Sentinel passed as {@code sizeBytes} when the policy is evaluated before the content
-     * has been acquired and its size is therefore not yet known (the mediated access
-     * contract offers no size probe yet, see #5/#10). Implementations must not treat it as
-     * an empty resource; size limits are enforced in a second evaluation with the real size.
+     * has been acquired and its size is therefore not yet known. Implementations must not
+     * treat it as an empty resource; size limits are enforced in a second evaluation with the
+     * real size.
      */
     long SIZE_UNKNOWN = -1L;
 

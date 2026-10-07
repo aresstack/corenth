@@ -36,6 +36,25 @@ public interface ResourceConnector {
     RawResource fetch(VirtualResourceRef ref) throws IOException;
 
     /**
+     * Fetches the raw resource and reads at most {@code maxBytes} bytes from the source
+     * (#10 Slice 5).
+     *
+     * <p>A source with more bytes ends the read with a {@link ResourceSizeLimitExceededException}
+     * after at most {@code maxBytes + 1} bytes. The default refuses: a connector that cannot bound
+     * its read must not read a resource of unknown size completely.
+     *
+     * @param ref      the resource reference
+     * @param maxBytes the largest admitted payload in bytes; {@code >= 0}
+     * @return the raw resource of at most {@code maxBytes} bytes
+     * @throws ResourceSizeLimitExceededException if the source holds more than {@code maxBytes} bytes
+     * @throws IOException if the resource cannot be read or the connector cannot bound the read
+     */
+    default RawResource fetch(VirtualResourceRef ref, long maxBytes) throws IOException {
+        throw new ResourceConnectorException("Connector for " + supportedScheme()
+                + " cannot bound a fetch to " + maxBytes + " bytes");
+    }
+
+    /**
      * Lists child resources addressed by the given container reference.
      *
      * @param ref the container resource reference

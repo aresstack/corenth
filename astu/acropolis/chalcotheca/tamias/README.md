@@ -46,7 +46,7 @@ Tamias does not import Chalcotheca (`TAMIAS_MUST_STAY_POLICY_STEWARD`; the Gradl
 | `ResourceSizePolicy` | Size limit for one operation; an unknown size is `UNDETERMINED`, never zero bytes |
 | `ScopeDecision` / `ScopeReasonCode` / `ScopeVerdict` | Immutable outcome; each reason code implies one verdict (`ADMIT`, `REJECT`, `UNDETERMINED`) |
 
-Include/exclude patterns stay with `PatternResourcePolicy`/`IndexingRule`; callers compose scope, patterns and size. `IndexingRule.maxBytes` keeps its semantics until #10 Slice 5 replaces it with `ResourceSizePolicy`.
+Include/exclude patterns stay with `PatternResourcePolicy`/`IndexingRule`; callers compose scope, patterns and size. Since #10 Slice 5 the production composition sets no `IndexingRule.maxBytes`; the size limit is the `ResourceSizePolicy` that the lifecycle applies to metadata, to the bounded acquisition and to the acquired size. `IndexingRule.maxBytes` keeps its semantics for existing callers.
 
 ### Change detection (`tamias.change`)
 

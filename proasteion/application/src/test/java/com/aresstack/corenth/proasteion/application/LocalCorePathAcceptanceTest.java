@@ -169,7 +169,7 @@ public class LocalCorePathAcceptanceTest {
         ProcessingResult result = application.resourceLifecycle().process(ref(big));
 
         assertEquals(ProcessingResult.Status.DENIED, result.status());
-        assertTrue(result.message(), result.message().contains("maxBytes"));
+        assertTrue(result.message(), result.message().startsWith("SIZE_OVER_LIMIT"));
         assertFalse("the size comes from source metadata",
                 executed(result, ResourceProcessingStepType.MEDIATED_ACQUISITION));
         assertTrue(application.search().search("oversizedterm", 10).isEmpty());

@@ -2,6 +2,7 @@ package com.aresstack.corenth.astu.acropolis.chalcotheca;
 
 import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.scope.ResourceSizePolicy;
 
 /**
  * Narrow mediated-access contract through which lifecycle use cases obtain bronze resources.
@@ -48,10 +49,16 @@ public interface MediatedResourceAccess {
      * {@link #readContent(ResourceAccessRequest)}. A confirmed absence at the source is the typed
      * failure {@link MediatedResult.Failure#SOURCE_ABSENT}.
      *
-     * @param request access request carrying actor, target and {@code READ_CONTENT}
+     * <p>Every acquisition the call makes is bounded by the Tamias size policy: with a limit the
+     * counter reads at most one byte beyond it and never caches an oversized payload; it withholds
+     * the payload with {@code TOO_LARGE} instead. A cached payload is returned as it is; its size
+     * is the caller's to check.
+     *
+     * @param request          access request carrying actor, target and {@code READ_CONTENT}
+     * @param acquisitionLimit the Tamias size policy that bounds the acquisition
      * @return the mediated result; never {@code null}
      */
-    MediatedResult<BronzeContent> refreshContent(ResourceAccessRequest request);
+    MediatedResult<BronzeContent> refreshContent(ResourceAccessRequest request, ResourceSizePolicy acquisitionLimit);
 
     /**
      * Reads source metadata without acquiring the payload, mediated by Tamias (#10 Slice 5).
@@ -69,8 +76,8 @@ public interface MediatedResourceAccess {
     /**
      * Drops the counter's cached payloads (content, listing, metadata) for a resource.
      *
-     * <p>This executes a Tamias cache disposition ({@code INVALIDATE}, or a rejected payload that
-     * must not stay cached); it exposes nothing and leaves the resource records untouched.
+     * <p>This executes a Tamias cache disposition ({@code INVALIDATE}); it exposes nothing and
+     * leaves the resource records untouched.
      *
      * @param uri the resource whose cached payloads to drop
      */

@@ -5,6 +5,7 @@ import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceKind;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionCapability;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionLimitExceededException;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeContent;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeListing;
@@ -80,6 +81,34 @@ public final class HolkasAcquisitionPort implements AcquisitionPort {
             raw = authenticated(uri).fetchWith(ref, capability);
         } catch (ResourceNotFoundException e) {
             throw absent(e);
+        }
+        byte[] bytes = raw.content().bytes();
+        return new BronzeContent(uri, bytes, ContentHasher.digest(bytes), System.currentTimeMillis());
+    }
+
+    /**
+     * Fetches content and reads at most {@code maxBytes} bytes through the connector (#10 Slice 5).
+     *
+     * <p>Authenticated connectors cannot bound their read yet; with a capability the acquisition
+     * is refused instead of read unbounded.
+     */
+    @Override
+    public BronzeContent fetchContent(BookmarkUri uri, AcquisitionCapability capability, long maxBytes)
+            throws IOException {
+        if (uri == null) {
+            throw new IllegalArgumentException("uri must not be null");
+        }
+        if (capability != null) {
+            throw new ResourceConnectorException("Authenticated connectors cannot bound an acquisition yet: " + uri);
+        }
+        VirtualResourceRef ref = new VirtualResourceRef(uri, VirtualResourceKind.FILE);
+        RawResource raw;
+        try {
+            raw = connectorRegistry.require(uri.scheme()).fetch(ref, maxBytes);
+        } catch (ResourceNotFoundException e) {
+            throw absent(e);
+        } catch (ResourceSizeLimitExceededException e) {
+            throw new AcquisitionLimitExceededException(e.observedBytes(), e.getMessage());
         }
         byte[] bytes = raw.content().bytes();
         return new BronzeContent(uri, bytes, ContentHasher.digest(bytes), System.currentTimeMillis());

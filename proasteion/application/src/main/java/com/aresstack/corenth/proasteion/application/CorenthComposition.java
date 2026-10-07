@@ -25,6 +25,7 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessPol
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.DigestChangeDetection;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.disposition.DerivativeDispositionPolicy;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.scope.ResourceSizePolicy;
 import com.aresstack.corenth.proasteion.emporion.deigma.ExtractionRegistry;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.MarkdownTextExtractor;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.PlainTextExtractor;
@@ -120,6 +121,7 @@ public final class CorenthComposition {
                 chunker,
                 new DigestChangeDetection(),
                 new DerivativeDispositionPolicy(),
+                sizePolicy(settings),
                 Clock.systemUTC());
 
         List<Closeable> ownedResources = new ArrayList<Closeable>();
@@ -138,6 +140,13 @@ public final class CorenthComposition {
         return new MediatedResourceService(accessPolicy, acquisition, archive, AcquisitionAccessPort.unauthenticated());
     }
 
+    /** Tamias size policy for indexed resources; {@code 0} configures no limit. */
+    private static ResourceSizePolicy sizePolicy(ApplicationSettings settings) {
+        return settings.maxIndexedBytes() > 0
+                ? ResourceSizePolicy.maxBytes(settings.maxIndexedBytes())
+                : ResourceSizePolicy.unlimited();
+    }
+
     /** Deigma detection and the registered extractors (#42), behind the lifecycle port. */
     private static ContentInspector deigmaInspector() {
         ExtractionRegistry extractors = new ExtractionRegistry();
@@ -150,14 +159,17 @@ public final class CorenthComposition {
         return new DeigmaContentInspector(new SimpleContentDetector(), extractors);
     }
 
-    /** Tamias indexing policy (deny by default) parameterised with the host's file patterns. */
+    /**
+     * Tamias indexing policy (deny by default) parameterised with the host's file patterns. The
+     * size limit is the Tamias size policy, not the rule (#5, #10 Slice 5).
+     */
     private static ResourcePolicy indexingPolicy(ApplicationSettings settings) {
         IndexingRule rule = new IndexingRule(
                 INDEXING_RULE_NAME,
                 Collections.singletonList("file"),
                 settings.indexedPatterns(),
                 settings.excludedPatterns(),
-                settings.maxIndexedBytes());
+                0L);
         return new PatternResourcePolicy(Collections.singletonList(rule));
     }
 }
