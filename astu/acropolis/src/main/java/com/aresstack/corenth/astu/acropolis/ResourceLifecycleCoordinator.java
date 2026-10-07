@@ -15,6 +15,7 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalDocume
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndex;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.chunking.LexicalChunker;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.AcceptanceDecision;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.AccessReasonCode;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ActorIdentity;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PolicyReason;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessDecision;
@@ -31,6 +32,8 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.SourceObse
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.disposition.CacheAction;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.disposition.DerivativeDisposition;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.disposition.DerivativeDispositionPolicy;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.scope.ResourceSizePolicy;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.scope.ScopeDecision;
 
 import java.io.IOException;
 import java.net.URI;
@@ -51,12 +54,13 @@ import java.util.List;
  * <p>Pipeline ({@link ResourceProcessingPlan#standard()}):
  * <ol>
  *   <li>{@code tamias} {@link ResourcePolicy}: indexing rules before acquisition (size unknown);</li>
- *   <li>source metadata through the counter; a known size is checked against the indexing rules
- *       before any payload is acquired (#10 Slice 5);</li>
- *   <li>{@link MediatedResourceAccess#refreshContent(ResourceAccessRequest)}: mediated read that
- *       re-acquires the payload when Tamias permits {@code REFRESH_EXTERNAL};</li>
- *   <li>{@code tamias} {@link ResourcePolicy}: indexing rules with the actual size; a rejected
- *       payload is invalidated in the counter so that it does not stay cached;</li>
+ *   <li>source metadata through the counter; a known size is decided by the indexing rules and
+ *       the Tamias {@link ResourceSizePolicy} before any payload is acquired (#10 Slice 5);</li>
+ *   <li>{@link MediatedResourceAccess#refreshContent(ResourceAccessRequest, ResourceSizePolicy)}:
+ *       mediated read that re-acquires the payload when Tamias permits {@code REFRESH_EXTERNAL};
+ *       every acquisition is bounded by the size policy, so an oversized source without reliable
+ *       metadata is stopped after one byte beyond the limit and nothing is cached;</li>
+ *   <li>indexing rules and size policy with the actual size (a cached payload is checked too);</li>
  *   <li>change detection and derivative disposition by Tamias (#5) on a projection of the
  *       resource record (#33); the record observes the version, unchanged content whose
  *       indexed version is current is neither extracted nor indexed again;</li>
@@ -89,15 +93,19 @@ import java.util.List;
  *       counter's payload is invalidated and an indexed version is withdrawn: {@code REMOVED}.
  *       A cached payload fetched before a recorded removal is no proof that the resource exists
  *       again and is treated as absent.</li>
- *   <li>An indexing-policy {@code DENY} or a payload without indexable text is a lifecycle
- *       decision for this resource: stale index entries are removed and the indexed-version
- *       fact is withdrawn (the record and its history are kept, #33).</li>
+ *   <li>An indexing-policy {@code DENY} or a scope or size rejection is a resource-level
+ *       admission decision: Tamias maps it to a disposition (#5,
+ *       {@link DerivativeDispositionPolicy#decideNotAdmitted}); an indexed version is withdrawn,
+ *       the payload stays cached, the record and its history are kept (#33): {@code DENIED}.</li>
+ *   <li>A payload without indexable text executes the Tamias {@code INDEX}/{@code REINDEX}
+ *       decision with an empty derivative: the previous index entry is withdrawn.</li>
+ *   <li>Every index withdrawal runs through one execution path; the lifecycle never decides a
+ *       withdrawal itself.</li>
  *   <li>Acquisition errors: {@code FAILED} with a typed reason.</li>
  * </ul>
  *
- * <p>Open gap: a source without metadata still has its payload acquired completely before the
- * size limit applies. The rejected payload is invalidated afterwards, but a bounded acquisition
- * for unknown sizes does not exist yet.
+ * <p>Limit: a port that cannot bound its read (today every authenticated connector) fails the
+ * acquisition when a size limit is configured, instead of reading the resource completely.
  */
 public final class ResourceLifecycleCoordinator {
 
@@ -113,6 +121,7 @@ public final class ResourceLifecycleCoordinator {
     private final LexicalChunker lexicalChunker;
     private final ChangeDetectionStrategy changeDetection;
     private final DerivativeDispositionPolicy dispositionPolicy;
+    private final ResourceSizePolicy sizePolicy;
     private final Clock clock;
 
     /**
@@ -170,6 +179,39 @@ public final class ResourceLifecycleCoordinator {
                                          ChangeDetectionStrategy changeDetection,
                                          DerivativeDispositionPolicy dispositionPolicy,
                                          Clock clock) {
+        this(mediatedAccess, actor, contentInspector, policy, records, lexicalIndex, lexicalChunker,
+                changeDetection, dispositionPolicy, ResourceSizePolicy.unlimited(), clock);
+    }
+
+    /**
+     * Creates a coordinator with a Tamias size policy (#5, #10 Slice 5).
+     *
+     * <p>The size policy decides on the source size from metadata before acquisition, bounds the
+     * mediated acquisition when the size is unknown or unreliable, and decides on the acquired size.
+     *
+     * @param mediatedAccess    the mediated bronze access contract (archive counter)
+     * @param actor             the identity under which this lifecycle requests resources
+     * @param contentInspector  content inspector port
+     * @param policy            indexing policy (scheme, include and exclude patterns)
+     * @param records           the resource records (#33), the only truth about versions
+     * @param lexicalIndex      lexical index
+     * @param lexicalChunker    optional chunker; if non-null, text blocks are chunked before indexing
+     * @param changeDetection   Tamias change detection (#5)
+     * @param dispositionPolicy Tamias derivative disposition (#5)
+     * @param sizePolicy        Tamias size policy for indexed resources (#5)
+     * @param clock             clock for indexing and removal times
+     */
+    public ResourceLifecycleCoordinator(MediatedResourceAccess mediatedAccess,
+                                         ActorIdentity actor,
+                                         ContentInspector contentInspector,
+                                         ResourcePolicy policy,
+                                         ResourceArchiveRepository records,
+                                         LexicalIndex lexicalIndex,
+                                         LexicalChunker lexicalChunker,
+                                         ChangeDetectionStrategy changeDetection,
+                                         DerivativeDispositionPolicy dispositionPolicy,
+                                         ResourceSizePolicy sizePolicy,
+                                         Clock clock) {
         if (mediatedAccess == null) throw new IllegalArgumentException("mediatedAccess must not be null");
         if (actor == null) throw new IllegalArgumentException("actor must not be null");
         if (contentInspector == null) throw new IllegalArgumentException("contentInspector must not be null");
@@ -178,6 +220,7 @@ public final class ResourceLifecycleCoordinator {
         if (lexicalIndex == null) throw new IllegalArgumentException("lexicalIndex must not be null");
         if (changeDetection == null) throw new IllegalArgumentException("changeDetection must not be null");
         if (dispositionPolicy == null) throw new IllegalArgumentException("dispositionPolicy must not be null");
+        if (sizePolicy == null) throw new IllegalArgumentException("sizePolicy must not be null");
         if (clock == null) throw new IllegalArgumentException("clock must not be null");
         this.mediatedAccess = mediatedAccess;
         this.actor = actor;
@@ -188,6 +231,7 @@ public final class ResourceLifecycleCoordinator {
         this.lexicalChunker = lexicalChunker;
         this.changeDetection = changeDetection;
         this.dispositionPolicy = dispositionPolicy;
+        this.sizePolicy = sizePolicy;
         this.clock = clock;
     }
 
@@ -213,7 +257,7 @@ public final class ResourceLifecycleCoordinator {
         PolicyReason preAcquisition = policy.evaluate(ref, ResourcePolicy.SIZE_UNKNOWN);
         if (preAcquisition.decision() == AcceptanceDecision.DENY) {
             run.stopped(ResourceProcessingStepType.INDEXING_POLICY_BEFORE_ACQUISITION, preAcquisition.reason());
-            return cleanupAfterStop(run, ResourceProcessingOutcome.DENIED, preAcquisition.reason(), null);
+            return notAdmitted(run, dispositionPolicy.decideNotAdmitted(factsOf(records.findByRef(ref)), preAcquisition));
         }
         run.completed(ResourceProcessingStepType.INDEXING_POLICY_BEFORE_ACQUISITION, preAcquisition.reason());
 
@@ -230,11 +274,10 @@ public final class ResourceLifecycleCoordinator {
                 && metadata.value().sizeBytes() >= 0) {
             long size = metadata.value().sizeBytes();
             run.completed(ResourceProcessingStepType.SOURCE_METADATA, "size " + size);
-            PolicyReason sizeCheck = policy.evaluate(ref, size);
-            if (sizeCheck.decision() == AcceptanceDecision.DENY) {
-                run.stopped(ResourceProcessingStepType.INDEXING_POLICY_WITH_SIZE, sizeCheck.reason());
-                mediatedAccess.invalidatePayload(ref.uri());
-                return cleanupAfterStop(run, ResourceProcessingOutcome.DENIED, sizeCheck.reason(), null);
+            DerivativeDisposition rejected = rejectedAdmission(ref, size);
+            if (rejected != null) {
+                run.stopped(ResourceProcessingStepType.INDEXING_POLICY_WITH_SIZE, rejected.rejection());
+                return notAdmitted(run, rejected);
             }
         } else if (failureOf(metadata) == MediatedResult.Failure.SOURCE_ABSENT) {
             run.stopped(ResourceProcessingStepType.SOURCE_METADATA, "source reports the resource absent");
@@ -246,11 +289,12 @@ public final class ResourceLifecycleCoordinator {
             run.completed(ResourceProcessingStepType.SOURCE_METADATA, "size unknown");
         }
 
-        // 3. Mediated read; the counter refreshes from the source when Tamias permits it
+        // 3. Mediated read; the counter refreshes from the source when Tamias permits it and bounds
+        //    every acquisition by the Tamias size policy, because metadata may be missing or stale
         run.at(ResourceProcessingStepType.MEDIATED_ACQUISITION);
         MediatedResult<BronzeContent> access;
         try {
-            access = mediatedAccess.refreshContent(request(ref, ResourceOperation.READ_CONTENT));
+            access = mediatedAccess.refreshContent(request(ref, ResourceOperation.READ_CONTENT), sizePolicy);
         } catch (RuntimeException e) {
             return run.fail(ResourceProcessingFailure.Reason.MEDIATED_ACCESS_ERROR,
                     "Mediated access failed: " + e.getMessage());
@@ -265,6 +309,12 @@ public final class ResourceLifecycleCoordinator {
             if (access.decision() != null) {
                 String reason = describe(access.decision());
                 run.stopped(ResourceProcessingStepType.MEDIATED_ACQUISITION, reason);
+                if (access.decision().reasonCode() == AccessReasonCode.TOO_LARGE && sizePolicy.isLimited()) {
+                    // The bounded acquisition stopped beyond the limit: the source holds at least
+                    // limit + 1 bytes, which the Tamias size policy rejects like a known oversize
+                    return notAdmitted(run, dispositionPolicy.decideNotAdmitted(factsOf(records.findByRef(ref)),
+                            sizePolicy.evaluate(sizePolicy.limitBytes() + 1)));
+                }
                 return accessWithheld(run, reason);
             }
             if (failureOf(access) == MediatedResult.Failure.SOURCE_ABSENT) {
@@ -281,14 +331,14 @@ public final class ResourceLifecycleCoordinator {
 
         byte[] bytes = bronze.content();
 
-        // 4. Indexing policy with the actual size; a rejected payload must not stay cached
-        PolicyReason policyResult = policy.evaluate(ref, bytes.length);
-        if (policyResult.decision() == AcceptanceDecision.DENY) {
-            run.stopped(ResourceProcessingStepType.INDEXING_POLICY_WITH_SIZE, policyResult.reason());
-            mediatedAccess.invalidatePayload(ref.uri());
-            return cleanupAfterStop(run, ResourceProcessingOutcome.DENIED, policyResult.reason(), null);
+        // 4. Indexing policy and Tamias size policy with the actual size (also for a cached payload)
+        DerivativeDisposition rejected = rejectedAdmission(ref, bytes.length);
+        if (rejected != null) {
+            run.stopped(ResourceProcessingStepType.INDEXING_POLICY_WITH_SIZE, rejected.rejection());
+            return notAdmitted(run, rejected);
         }
-        run.completed(ResourceProcessingStepType.INDEXING_POLICY_WITH_SIZE, policyResult.reason());
+        run.completed(ResourceProcessingStepType.INDEXING_POLICY_WITH_SIZE,
+                sizePolicy.evaluate(bytes.length).explanation());
 
         // 5. Tamias change detection and disposition on the record projection (#5, #33)
         ArchivedResource record = records.findByRef(ref);
@@ -327,11 +377,13 @@ public final class ResourceLifecycleCoordinator {
         }
         LexicalDocument document = lexicalDocument(ref, filenameHint, inspection);
         if (document == null) {
-            // Extraction succeeded but no text-bearing blocks remain
+            // Extraction succeeded but no text-bearing blocks remain. Tamias decided INDEX or REINDEX:
+            // rebuild the index derivative from the current observation. The rebuilt derivative is
+            // empty, so executing that decision withdraws the previous entry.
             String reason = "No indexable text content after extraction";
             run.stopped(ResourceProcessingStepType.CONTENT_INSPECTION, reason);
-            return cleanupAfterStop(run, ResourceProcessingOutcome.NO_EXTRACTABLE_CONTENT, reason,
-                    new ResourceProcessingFailure(ResourceProcessingFailure.Reason.NO_INDEXABLE_TEXT, reason));
+            return withdrawIndexEntry(run, disposition, ResourceProcessingOutcome.NO_EXTRACTABLE_CONTENT,
+                    reason, new ResourceProcessingFailure(ResourceProcessingFailure.Reason.NO_INDEXABLE_TEXT, reason));
         }
         run.completed(ResourceProcessingStepType.CONTENT_INSPECTION, inspection.mimeType());
 
@@ -351,6 +403,28 @@ public final class ResourceLifecycleCoordinator {
                 "indexed version #" + observed.latestObservedVersion().sequence());
 
         return run.finish(ResourceProcessingOutcome.INDEXED, "indexed successfully", null);
+    }
+
+    /**
+     * Returns the Tamias disposition for a resource of the known size that the indexing policy or
+     * the size policy rejects, or {@code null} if both admit it.
+     */
+    private DerivativeDisposition rejectedAdmission(VirtualResourceRef ref, long sizeBytes) {
+        PolicyReason indexing = policy.evaluate(ref, sizeBytes);
+        if (indexing.decision() == AcceptanceDecision.DENY) {
+            return dispositionPolicy.decideNotAdmitted(factsOf(records.findByRef(ref)), indexing);
+        }
+        ScopeDecision size = sizePolicy.evaluate(sizeBytes);
+        return size.isRejected() ? dispositionPolicy.decideNotAdmitted(factsOf(records.findByRef(ref)), size) : null;
+    }
+
+    /**
+     * Ends a run whose resource the indexing, scope or size policy does not admit: executes the
+     * Tamias disposition for the rejected admission (#5). Only resource-level rejections come
+     * here; an actor- or request-specific access denial goes to {@link #accessWithheld}.
+     */
+    private ProcessingResult notAdmitted(Execution run, DerivativeDisposition disposition) {
+        return executeDisposition(run, disposition, ResourceProcessingOutcome.DENIED, disposition.rejection());
     }
 
     private ResourceAccessRequest request(VirtualResourceRef ref, ResourceOperation operation) {
@@ -384,7 +458,7 @@ public final class ResourceLifecycleCoordinator {
         DerivativeDisposition disposition = dispositionPolicy.decide(
                 changeDetection.detect(factsOf(record), SourceObservation.absent()));
         run.completed(ResourceProcessingStepType.CHANGE_DETECTION, describe(disposition));
-        return executeRemoval(run, record, disposition, ResourceProcessingOutcome.DENIED, reason);
+        return executeDisposition(run, disposition, ResourceProcessingOutcome.DENIED, reason);
     }
 
     /** Executes the Tamias disposition for a resource the source reports as absent. */
@@ -401,33 +475,47 @@ public final class ResourceLifecycleCoordinator {
                             "Resource not found at its source"));
         }
         run.completed(ResourceProcessingStepType.CHANGE_DETECTION, describe(disposition));
-        ArchivedResource updated = record;
         if (change.reasonCode() == ChangeReasonCode.REMOVAL_OBSERVED) {
-            updated = record.markRemovedAtSource(clock.millis());
-            records.save(updated);
+            records.save(record.markRemovedAtSource(clock.millis()));
             run.completed(ResourceProcessingStepType.RECORD_UPDATE, "removal at source recorded");
         }
-        return executeRemoval(run, updated, disposition, ResourceProcessingOutcome.REMOVED, "removed at source");
+        return executeDisposition(run, disposition, ResourceProcessingOutcome.REMOVED, "removed at source");
     }
 
-    /** Invalidates the payload and withdraws the index entry as the disposition requires. */
-    private ProcessingResult executeRemoval(Execution run, ArchivedResource record, DerivativeDisposition disposition,
-                                            ResourceProcessingOutcome outcome, String message) {
+    /** Executes the cache and index parts of a Tamias disposition that ends the run. */
+    private ProcessingResult executeDisposition(Execution run, DerivativeDisposition disposition,
+                                                ResourceProcessingOutcome outcome, String message) {
         if (disposition.cacheAction() == CacheAction.INVALIDATE) {
             mediatedAccess.invalidatePayload(run.ref.uri());
         }
         if (!disposition.requiresWithdrawal()) {
             return run.finish(outcome, message, null);
         }
+        return withdrawIndexEntry(run, disposition, outcome, message + "; index entry withdrawn", null);
+    }
+
+    /**
+     * The single execution path for every index withdrawal: removes the lexical entries and
+     * withdraws the indexed-version fact; the record and its history stay (#33). Callers come
+     * only from a Tamias disposition ({@code WITHDRAW}, or {@code INDEX}/{@code REINDEX} whose
+     * rebuilt derivative is empty).
+     */
+    private ProcessingResult withdrawIndexEntry(Execution run, DerivativeDisposition disposition,
+                                                ResourceProcessingOutcome outcome, String message,
+                                                ResourceProcessingFailure failure) {
         try {
             lexicalIndex.remove(run.ref);
             lexicalIndex.commit();
         } catch (IOException e) {
             return cleanupFailed(run, e);
         }
-        records.save(record.withdrawIndexedVersion());
-        run.completed(ResourceProcessingStepType.DERIVED_STATE_CLEANUP, "index entry withdrawn");
-        return run.finish(outcome, message + "; index entry withdrawn", null);
+        ArchivedResource current = records.findByRef(run.ref);
+        if (current != null && current.isIndexed()) {
+            records.save(current.withdrawIndexedVersion());
+        }
+        run.completed(ResourceProcessingStepType.DERIVED_STATE_CLEANUP,
+                "index entry withdrawn (" + disposition.indexReason() + ")");
+        return run.finish(outcome, message, failure);
     }
 
     /** Builds the lexical document, or returns {@code null} if no text-bearing block remains. */
@@ -492,27 +580,6 @@ public final class ResourceLifecycleCoordinator {
         }
     }
 
-    /**
-     * Removes stale lexical entries and withdraws the indexed-version fact after a lifecycle
-     * decision; the resource record and its history are kept (#33).
-     */
-    private ProcessingResult cleanupAfterStop(Execution run, ResourceProcessingOutcome outcome, String message,
-                                              ResourceProcessingFailure failure) {
-        VirtualResourceRef ref = run.ref;
-        try {
-            lexicalIndex.remove(ref);
-            lexicalIndex.commit();
-        } catch (IOException e) {
-            return cleanupFailed(run, e);
-        }
-        ArchivedResource record = records.findByRef(ref);
-        if (record != null && record.isIndexed()) {
-            records.save(record.withdrawIndexedVersion());
-        }
-        run.completed(ResourceProcessingStepType.DERIVED_STATE_CLEANUP, null);
-        return run.finish(outcome, message, failure);
-    }
-
     private static ProcessingResult cleanupFailed(Execution run, IOException e) {
         run.failed(ResourceProcessingStepType.DERIVED_STATE_CLEANUP, e.getMessage());
         return run.finish(ResourceProcessingOutcome.FAILED, "Index cleanup failed: " + e.getMessage(),
@@ -520,7 +587,7 @@ public final class ResourceLifecycleCoordinator {
     }
 
     private static String describe(DerivativeDisposition disposition) {
-        return disposition.change().reasonCode() + ": cache " + disposition.cacheAction()
+        return disposition.trigger() + ": cache " + disposition.cacheAction()
                 + ", index " + disposition.indexAction() + " (" + disposition.indexReason() + ")";
     }
 

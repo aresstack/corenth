@@ -1,10 +1,13 @@
 package com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.disposition;
 
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.AcceptanceDecision;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PolicyReason;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.ChangeDecision;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.ContentComparison;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.DigestChangeDetection;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.ResourceRecordFacts;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.SourceObservation;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.scope.ResourceSizePolicy;
 import org.junit.Test;
 
 import static com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.ResourceRecordFacts.NOT_INDEXED;
@@ -129,9 +132,11 @@ public class DerivativeDispositionPolicyTest {
     @Test
     public void reasonCodes_areStableAndImplyTheirActions() {
         assertEquals("NOT_YET_INDEXED, INDEXED_VERSION_CURRENT, INDEXED_FACT_MISSING, INDEXED_VERSION_OUTDATED, "
-                        + "CONTENT_CHANGED, REMOVED_WHILE_INDEXED, REMOVED_NOT_INDEXED, NOT_FOUND",
+                        + "CONTENT_CHANGED, REMOVED_WHILE_INDEXED, REMOVED_NOT_INDEXED, NOT_FOUND, "
+                        + "NOT_ADMITTED_WHILE_INDEXED, NOT_ADMITTED_NOT_INDEXED, NOT_ADMITTED_UNRECORDED",
                 java.util.Arrays.toString(IndexReasonCode.values()).replace("[", "").replace("]", ""));
-        assertEquals("NO_RECORDED_VERSION, CONTENT_UNCHANGED, CONTENT_CHANGED, REMOVED_AT_SOURCE, NOT_FOUND_AT_SOURCE",
+        assertEquals("NO_RECORDED_VERSION, CONTENT_UNCHANGED, CONTENT_CHANGED, REMOVED_AT_SOURCE, NOT_FOUND_AT_SOURCE, "
+                        + "NOT_ADMITTED",
                 java.util.Arrays.toString(CacheReasonCode.values()).replace("[", "").replace("]", ""));
         assertEquals(IndexAction.WITHDRAW, IndexReasonCode.REMOVED_WHILE_INDEXED.action());
         assertEquals(CacheAction.INVALIDATE, CacheReasonCode.REMOVED_AT_SOURCE.action());
@@ -149,5 +154,64 @@ public class DerivativeDispositionPolicyTest {
     @Test(expected = IllegalArgumentException.class)
     public void missingChange_isRejected() {
         policy.decide(null);
+    }
+
+    // ── Rejected admission (#10 Slice 5) ──
+
+    private static PolicyReason excluded() {
+        return new PolicyReason(AcceptanceDecision.DENY, "excluded by pattern in rule 'local'");
+    }
+
+    @Test
+    public void notAdmittedWhileIndexed_withdrawsTheIndexEntry_andRetainsThePayload() {
+        DerivativeDisposition disposition = policy.decideNotAdmitted(new ResourceRecordFacts(3, 3, false), excluded());
+
+        assertEquals(IndexReasonCode.NOT_ADMITTED_WHILE_INDEXED, disposition.indexReason());
+        assertTrue(disposition.requiresWithdrawal());
+        assertEquals(CacheReasonCode.NOT_ADMITTED, disposition.cacheReason());
+        assertEquals(CacheAction.RETAIN, disposition.cacheAction());
+        assertTrue(disposition.isNotAdmitted());
+        assertTrue(disposition.trigger(), disposition.trigger().contains("excluded by pattern"));
+    }
+
+    @Test
+    public void notAdmittedWithoutIndexedVersion_withdrawsNothing() {
+        DerivativeDisposition disposition = policy.decideNotAdmitted(new ResourceRecordFacts(3, NOT_INDEXED, false), excluded());
+
+        assertEquals(IndexReasonCode.NOT_ADMITTED_NOT_INDEXED, disposition.indexReason());
+        assertEquals(IndexAction.NONE, disposition.indexAction());
+        assertFalse(disposition.requiresWithdrawal());
+    }
+
+    @Test
+    public void notAdmittedWithoutRecord_withdrawsIdempotently_becauseAnUnrecordedEntryCannotBeRuledOut() {
+        DerivativeDisposition disposition = policy.decideNotAdmitted(null, excluded());
+
+        assertEquals(IndexReasonCode.NOT_ADMITTED_UNRECORDED, disposition.indexReason());
+        assertTrue(disposition.requiresWithdrawal());
+    }
+
+    @Test
+    public void sizeOverLimit_isMappedLikeAnyOtherRejectedAdmission() {
+        DerivativeDisposition disposition = policy.decideNotAdmitted(new ResourceRecordFacts(2, 2, false),
+                ResourceSizePolicy.maxBytes(10).evaluate(11));
+
+        assertEquals(IndexReasonCode.NOT_ADMITTED_WHILE_INDEXED, disposition.indexReason());
+        assertTrue(disposition.trigger(), disposition.trigger().contains("SIZE_OVER_LIMIT"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void anAcceptedIndexingVerdict_isNoRejection() {
+        policy.decideNotAdmitted(null, new PolicyReason(AcceptanceDecision.ACCEPT, "accepted"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void anAdmittingSizeDecision_isNoRejection() {
+        policy.decideNotAdmitted(null, ResourceSizePolicy.maxBytes(10).evaluate(10));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void anUndeterminedSize_isNoRejection() {
+        policy.decideNotAdmitted(null, ResourceSizePolicy.maxBytes(10).evaluate(-1));
     }
 }

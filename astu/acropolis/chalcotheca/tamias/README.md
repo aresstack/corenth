@@ -46,7 +46,7 @@ Tamias does not import Chalcotheca (`TAMIAS_MUST_STAY_POLICY_STEWARD`; the Gradl
 | `ResourceSizePolicy` | Size limit for one operation; an unknown size is `UNDETERMINED`, never zero bytes |
 | `ScopeDecision` / `ScopeReasonCode` / `ScopeVerdict` | Immutable outcome; each reason code implies one verdict (`ADMIT`, `REJECT`, `UNDETERMINED`) |
 
-Include/exclude patterns stay with `PatternResourcePolicy`/`IndexingRule`; callers compose scope, patterns and size. `IndexingRule.maxBytes` keeps its semantics until #10 Slice 5 replaces it with `ResourceSizePolicy`.
+Include/exclude patterns stay with `PatternResourcePolicy`/`IndexingRule`; callers compose scope, patterns and size. Since #10 Slice 5 the production composition sets no `IndexingRule.maxBytes`; the size limit is the `ResourceSizePolicy` that the lifecycle applies to metadata, to the bounded acquisition and to the acquired size. `IndexingRule.maxBytes` keeps its semantics for existing callers.
 
 ### Change detection (`tamias.change`)
 
@@ -63,7 +63,7 @@ Change is measured against the latest **observed** version, not the indexed one.
 
 | Type | Purpose |
 |------|---------|
-| `DerivativeDispositionPolicy` | Maps a `ChangeDecision` to separate cache and index decisions |
+| `DerivativeDispositionPolicy` | Maps a `ChangeDecision` to separate cache and index decisions; `decideNotAdmitted` maps a resource-level rejection (`PolicyReason` `DENY`, rejected `ScopeDecision`) to `RETAIN/NOT_ADMITTED` and `WITHDRAW/NOT_ADMITTED_WHILE_INDEXED`, `NONE/NOT_ADMITTED_NOT_INDEXED` or `WITHDRAW/NOT_ADMITTED_UNRECORDED` (#10 Slice 5). Actor- or request-specific access decisions never reach it. |
 | `DerivativeDisposition` | Immutable plan: `CacheAction` (`RETAIN`, `REFRESH`, `INVALIDATE`) and `IndexAction` (`INDEX`, `REINDEX`, `RETAIN`, `WITHDRAW`, `NONE`) with `CacheReasonCode`/`IndexReasonCode` |
 
 Key cases: unchanged content without an indexed fact, or with an older indexed version, requires `REINDEX`; a tombstoned resource is withdrawn only if a version is still indexed.

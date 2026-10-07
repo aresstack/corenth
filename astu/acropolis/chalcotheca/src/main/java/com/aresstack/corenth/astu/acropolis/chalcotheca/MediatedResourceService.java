@@ -7,6 +7,7 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessDec
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessPolicy;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceOperation;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.scope.ResourceSizePolicy;
 
 import java.io.IOException;
 import java.util.Map;
@@ -40,8 +41,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p><strong>Payload caches (#10 Slice 5):</strong> the three in-memory stores below hold
  * payloads without TTL. {@link #readContent(ResourceAccessRequest)} serves cached content;
- * {@link #refreshContent(ResourceAccessRequest)} re-acquires it when Tamias permits
- * {@code REFRESH_EXTERNAL}; {@link #invalidatePayload(BookmarkUri)} executes a Tamias cache
+ * {@link #refreshContent(ResourceAccessRequest, ResourceSizePolicy)} re-acquires it within the
+ * Tamias size limit when Tamias permits {@code REFRESH_EXTERNAL};
+ * {@link #invalidatePayload(BookmarkUri)} executes a Tamias cache
  * disposition (#5) and {@link #deleteEntry(ResourceAccessRequest)} an explicit tombstone.
  * The {@link ResourceArchive} facade and the resource records (#33) hold facts about payloads,
  * not the payloads, and they do not record cache presence.
@@ -158,6 +160,11 @@ public final class MediatedResourceService implements MediatedResourceAccess {
      */
     @Override
     public MediatedResult<BronzeContent> readContent(ResourceAccessRequest request) {
+        return readContent(request, ResourceSizePolicy.unlimited());
+    }
+
+    /** Reads content like {@link #readContent(ResourceAccessRequest)}; a cache miss is acquired within the limit. */
+    private MediatedResult<BronzeContent> readContent(ResourceAccessRequest request, final ResourceSizePolicy limit) {
         if (request == null) {
             return MediatedResult.error("request must not be null");
         }
@@ -197,9 +204,7 @@ public final class MediatedResourceService implements MediatedResourceAccess {
         return acquireExternally(request, decision, new Acquisition<BronzeContent>() {
             @Override
             public BronzeContent acquire(AcquisitionCapability capability) throws IOException {
-                BronzeContent acquired = acquisitionPort.fetchContent(target, capability);
-                contentCache.put(target, acquired);
-                return acquired;
+                return fetchWithin(target, capability, limit);
             }
         });
     }
@@ -212,11 +217,21 @@ public final class MediatedResourceService implements MediatedResourceAccess {
      * replaces the cache on success. A failed refresh keeps the previous cached payload; the caller
      * receives the typed failure, never the stale bytes. Without refresh permission the request is
      * served exactly like {@link #readContent(ResourceAccessRequest)}.
+     *
+     * <p>Every acquisition is bounded by {@code acquisitionLimit}: with a limit the port reads at
+     * most one byte beyond it, and an oversized source is withheld with
+     * {@link AccessReasonCode#TOO_LARGE} without caching anything; the previous cached payload
+     * stays. A port that cannot bound its read fails the acquisition instead of reading
+     * unbounded.
      */
     @Override
-    public MediatedResult<BronzeContent> refreshContent(ResourceAccessRequest request) {
+    public MediatedResult<BronzeContent> refreshContent(ResourceAccessRequest request,
+                                                       final ResourceSizePolicy acquisitionLimit) {
         if (request == null) {
             return MediatedResult.error("request must not be null");
+        }
+        if (acquisitionLimit == null) {
+            return MediatedResult.error("acquisitionLimit must not be null");
         }
         if (request.operation() != ResourceOperation.READ_CONTENT) {
             return MediatedResult.denied(ResourceAccessDecision.deny(
@@ -228,21 +243,45 @@ public final class MediatedResourceService implements MediatedResourceAccess {
             return MediatedResult.denied(decision);
         }
         if (decision.type() == AccessDecisionType.ALLOW_CACHED_ONLY) {
-            return readContent(request);
+            return readContent(request, acquisitionLimit);
         }
         ResourceAccessDecision refreshDecision = evaluateSourceAccess(request, ResourceOperation.REFRESH_EXTERNAL);
         if (!permitsSourceAccess(refreshDecision)) {
-            return readContent(request);
+            return readContent(request, acquisitionLimit);
         }
         final BookmarkUri target = request.target();
         return acquirePrepared(request, decision, refreshDecision, new Acquisition<BronzeContent>() {
             @Override
             public BronzeContent acquire(AcquisitionCapability capability) throws IOException {
-                BronzeContent acquired = acquisitionPort.fetchContent(target, capability);
-                contentCache.put(target, acquired);
-                return acquired;
+                return fetchWithin(target, capability, acquisitionLimit);
             }
         });
+    }
+
+    /**
+     * Acquires content within the Tamias size limit and caches it only when it fits. An oversized
+     * source ends with an {@link AcquisitionLimitExceededException} that carries the Tamias
+     * explanation.
+     */
+    private BronzeContent fetchWithin(BookmarkUri target, AcquisitionCapability capability,
+                                      ResourceSizePolicy limit) throws IOException {
+        BronzeContent acquired;
+        if (limit.isLimited()) {
+            try {
+                acquired = acquisitionPort.fetchContent(target, capability, limit.limitBytes());
+            } catch (AcquisitionLimitExceededException e) {
+                throw new AcquisitionLimitExceededException(e.observedBytes(),
+                        "at least " + limit.evaluate(e.observedBytes()).explanation());
+            }
+            if (!limit.evaluate(acquired.content().length).isAdmitted()) {
+                throw new AcquisitionLimitExceededException(acquired.content().length,
+                        limit.evaluate(acquired.content().length).explanation());
+            }
+        } else {
+            acquired = acquisitionPort.fetchContent(target, capability);
+        }
+        contentCache.put(target, acquired);
+        return acquired;
     }
 
     /**
@@ -459,6 +498,9 @@ public final class MediatedResourceService implements MediatedResourceAccess {
                 return MediatedResult.error("Acquisition returned no payload");
             }
             return MediatedResult.success(acquired, decision);
+        } catch (AcquisitionLimitExceededException e) {
+            // Tamias size limit exceeded during a bounded acquisition: withheld, nothing cached
+            return MediatedResult.denied(ResourceAccessDecision.deny(AccessReasonCode.TOO_LARGE, e.getMessage()));
         } catch (MetadataUnavailableException e) {
             return MediatedResult.failure(MediatedResult.Failure.METADATA_UNAVAILABLE, e.getMessage());
         } catch (SourceAbsentException e) {

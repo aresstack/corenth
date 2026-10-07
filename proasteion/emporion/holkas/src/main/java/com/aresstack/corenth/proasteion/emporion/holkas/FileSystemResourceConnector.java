@@ -5,7 +5,9 @@ import com.aresstack.corenth.astu.ResourceScheme;
 import com.aresstack.corenth.astu.VirtualResourceKind;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -35,6 +37,40 @@ public final class FileSystemResourceConnector implements ResourceConnector {
 
         byte[] bytes = Files.readAllBytes(path);
         RawResourceContent content = new RawResourceContent(bytes);
+        RawResourceMetadata metadata = metadataFor(path, VirtualResourceKind.FILE, content.sizeBytes());
+        return new RawResource(ref, content, metadata);
+    }
+
+    /**
+     * Reads the file through a stream and stops after {@code maxBytes + 1} bytes, so that a file
+     * that grew beyond its reported size is never read completely.
+     */
+    @Override
+    public RawResource fetch(VirtualResourceRef ref, long maxBytes) throws IOException {
+        if (maxBytes < 0) {
+            throw new IllegalArgumentException("maxBytes must be >= 0");
+        }
+        if (maxBytes >= Integer.MAX_VALUE - 8) {
+            return fetch(ref);
+        }
+        Path path = pathFrom(ref);
+        requireRegularFile(path);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream((int) Math.min(maxBytes + 1, 8192));
+        byte[] buffer = new byte[8192];
+        long budget = maxBytes + 1;
+        try (InputStream in = Files.newInputStream(path)) {
+            int read;
+            while (budget > 0 && (read = in.read(buffer, 0, (int) Math.min(buffer.length, budget))) != -1) {
+                out.write(buffer, 0, read);
+                budget -= read;
+            }
+        }
+        if (out.size() > maxBytes) {
+            throw new ResourceSizeLimitExceededException(out.size(),
+                    "file: resource holds more than " + maxBytes + " bytes: " + path);
+        }
+        RawResourceContent content = new RawResourceContent(out.toByteArray());
         RawResourceMetadata metadata = metadataFor(path, VirtualResourceKind.FILE, content.sizeBytes());
         return new RawResource(ref, content, metadata);
     }

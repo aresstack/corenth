@@ -37,7 +37,8 @@ file: URI
 
 ### Decision semantics
 
-- A `tamias` indexing-rule `DENY` is a lifecycle decision for the resource: it yields `DENIED`, removes stale index entries and withdraws the indexed-version fact; the record history stays. A known size above the limit is denied from source metadata before any payload is acquired; without metadata the payload is acquired, rejected and invalidated in the counter (bounded acquisition is still open).
+- A `tamias` indexing-rule `DENY` and a scope or size rejection are resource-level admission decisions. Tamias maps them to a disposition (`DerivativeDispositionPolicy.decideNotAdmitted`): `WITHDRAW` while a version is indexed (or when no record exists), `NONE` otherwise; the payload stays cached. The lifecycle executes it and yields `DENIED`; the record history stays. Sizes are decided by the Tamias `ResourceSizePolicy` (#5): a known size above the limit is denied from source metadata before any payload is acquired; without metadata, or with stale metadata, the counter's acquisition is bounded by the same policy, stops one byte beyond the limit and caches nothing (`TOO_LARGE`, `DENIED`).
+- Every index withdrawal (source removal, tombstone, admission rejection, a reindex whose extraction yields no text) runs through one execution path in the coordinator; the lifecycle decides none of them itself.
 - Change and derivative decisions come from Tamias (#5): the lifecycle maps the #33 record to `ResourceRecordFacts`, compares digests with `ResourceDigest.equals`, runs `DigestChangeDetection` and `DerivativeDispositionPolicy`, and executes the result (refresh happens in the counter when Tamias permits `REFRESH_EXTERNAL`; `RETAIN` yields `UNCHANGED` without extraction or index write; `REINDEX`/`INDEX` re-index; `INVALIDATE`/`WITHDRAW` drop the payload and the index entry).
 - A source that confirms the resource is absent yields `REMOVED`: the record observes the removal, the payload is invalidated, an indexed version is withdrawn, and the history stays.
 - A `tamias` access decision that withholds the content (`DENY`, `ALLOW_CACHED_ONLY` without cached content, `REQUIRE_AUTH` without a station, `REQUIRE_SOURCE_CHECK`) yields `DENIED`. An access denial alone never deletes derived state, including `BLACKLISTED`; only an explicit removal in the record (tombstone, e.g. `deleteEntry`) makes the next run withdraw the index entry.
@@ -54,7 +55,8 @@ file: URI
 
 ### Known gaps (left to later slices)
 
-- A source without metadata is acquired completely before the size limit applies; the rejected payload is invalidated afterwards, but there is no bounded acquisition yet.
+- Authenticated connectors cannot bound their read yet: with a size limit configured, their acquisition fails instead of reading unbounded. Today no authenticated connector is in the production composition.
+- Depth decisions (`TraversalPolicy`) have no production caller: the lifecycle processes single resources and no traversal exists yet. Scope is the access gate's root containment (`LocalFileRootsAccessPolicy`).
 - Bronze content carries no name yet; the filename hint for extraction is derived from the last path segment of the `BookmarkUri`. The #33 resource records deliberately carry no name metadata yet; stable resource metadata is a follow-up.
 
 ### Running the walking skeleton

@@ -3,6 +3,8 @@ package com.aresstack.corenth.proasteion.emporion.holkas;
 import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.ResourceScheme;
 import com.aresstack.corenth.astu.VirtualResourceKind;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionCapability;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionLimitExceededException;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeContent;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeListing;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeMetadata;
@@ -126,5 +128,60 @@ public class HolkasAcquisitionPortTest {
         HolkasAcquisitionPort port = new HolkasAcquisitionPort(
                 DefaultResourceConnectorRegistry.of(new FileSystemResourceConnector()));
         assertFalse(port.offersMetadata(BookmarkUri.parse("ndv://host/LIB/MEMBER")));
+    }
+
+    @Test
+    public void boundedFetch_returnsAFileAtTheLimit() throws Exception {
+        File file = temporaryFolder.newFile("exact.txt");
+        Files.write(file.toPath(), "0123456789".getBytes(StandardCharsets.UTF_8));
+
+        BronzeContent content = filePort().fetchContent(BookmarkUri.parse(file.toURI().toString()), null, 10L);
+
+        assertArrayEquals("0123456789".getBytes(StandardCharsets.UTF_8), content.content());
+    }
+
+    @Test
+    public void boundedFetch_stopsOneByteBeyondTheLimit_forALargeFile() throws Exception {
+        File file = temporaryFolder.newFile("large.bin");
+        Files.write(file.toPath(), new byte[1024 * 1024]);
+
+        try {
+            filePort().fetchContent(BookmarkUri.parse(file.toURI().toString()), null, 10L);
+            fail("an oversized file must not be returned");
+        } catch (AcquisitionLimitExceededException e) {
+            assertEquals("the read stopped after limit + 1 bytes", 11L, e.observedBytes());
+        }
+    }
+
+    @Test
+    public void boundedFetch_ofAMissingFile_isAConfirmedAbsence() throws Exception {
+        File file = new File(temporaryFolder.getRoot(), "gone.txt");
+        try {
+            filePort().fetchContent(BookmarkUri.parse(file.toURI().toString()), null, 10L);
+            fail("expected a confirmed absence");
+        } catch (SourceAbsentException expected) {
+            // expected
+        }
+    }
+
+    @Test
+    public void boundedFetch_withACapability_isRefused_insteadOfReadUnbounded() throws Exception {
+        File file = temporaryFolder.newFile("secured.txt");
+        Files.write(file.toPath(), "x".getBytes(StandardCharsets.UTF_8));
+        try {
+            filePort().fetchContent(BookmarkUri.parse(file.toURI().toString()), new AcquisitionCapability() {
+                @Override public String grantId() { return "grant"; }
+                @Override public String targetSystem() { return "file"; }
+                @Override public long expiresAtEpochMillis() { return Long.MAX_VALUE; }
+                @Override public void close() { }
+            }, 10L);
+            fail("authenticated connectors cannot bound their read yet");
+        } catch (ResourceConnectorException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("cannot bound"));
+        }
+    }
+
+    private static HolkasAcquisitionPort filePort() {
+        return new HolkasAcquisitionPort(DefaultResourceConnectorRegistry.of(new FileSystemResourceConnector()));
     }
 }

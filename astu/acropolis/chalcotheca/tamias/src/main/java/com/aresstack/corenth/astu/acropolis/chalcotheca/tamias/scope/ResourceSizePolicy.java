@@ -11,9 +11,10 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
  * resource: with a configured limit the decision is {@link ScopeReasonCode#SIZE_UNKNOWN}
  * ({@link ScopeVerdict#UNDETERMINED}) and has to be repeated with the real size.
  *
- * <p>Relation to {@code IndexingRule.maxBytes}: the rule-level limit keeps its existing
- * semantics inside {@code PatternResourcePolicy} until #10 Slice 5 retires it in favour of this
- * policy; the two are not merged here.
+ * <p>Relation to {@code IndexingRule.maxBytes}: since #10 Slice 5 the production composition
+ * configures the indexing size limit only here; the lifecycle applies it to source metadata, to
+ * the bounded acquisition and to the acquired size. The rule-level limit keeps its semantics
+ * inside {@code PatternResourcePolicy} for existing callers; the two are not merged.
  */
 public final class ResourceSizePolicy {
 
