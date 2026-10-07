@@ -155,6 +155,12 @@ public class CorenthArchitectureRulesTest {
                     ADYTON)
             .because("Tamias owns access and cache policy without knowing adapters, archive lifecycle, indexing, or secrets");
 
+    private static final ArchRule TAMIAS_MUST_DECIDE_FROM_HANDED_IN_FACTS = noClasses()
+            .that().resideInAnyPackage(TAMIAS)
+            .should().dependOnClassesThat().resideInAPackage(ACROPOLIS_ROOT)
+            .because("Tamias decides from fact projections that the Acropolis orchestration (#10) hands in; "
+                    + "it must not know the orchestration that executes its decisions (#5)");
+
     private static final ArchRule ANAGRAPHAI_MUST_STAY_LEXICAL_ONLY = noClasses()
             .that().resideInAnyPackage(ANAGRAPHAI)
             .should().dependOnClassesThat().resideInAnyPackage(
@@ -263,6 +269,11 @@ public class CorenthArchitectureRulesTest {
     @Test
     public void tamiasMustStayPolicySteward() {
         TAMIAS_MUST_STAY_POLICY_STEWARD.check(corenthClasses);
+    }
+
+    @Test
+    public void tamiasMustDecideFromHandedInFacts() {
+        TAMIAS_MUST_DECIDE_FROM_HANDED_IN_FACTS.check(corenthClasses);
     }
 
     @Test
