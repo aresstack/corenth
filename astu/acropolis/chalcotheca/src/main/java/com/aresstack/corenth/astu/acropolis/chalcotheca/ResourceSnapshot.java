@@ -3,9 +3,11 @@ package com.aresstack.corenth.astu.acropolis.chalcotheca;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 
 /**
- * A snapshot record for a resource that has been processed.
+ * Compatibility view of a resource's indexed version: reference, the digest of the version
+ * recorded as indexed, and when it was indexed.
  *
- * <p>Stores enough information to determine whether a resource needs reindexing.
+ * <p>A snapshot is a value passed to and returned by the {@link ResourceArchive} facade. It is
+ * not stored on its own; the authoritative facts live in {@link ArchivedResource}.
  */
 public final class ResourceSnapshot {
 

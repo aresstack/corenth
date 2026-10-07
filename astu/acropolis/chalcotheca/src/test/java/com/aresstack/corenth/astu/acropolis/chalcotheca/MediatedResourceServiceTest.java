@@ -550,7 +550,7 @@ public class MediatedResourceServiceTest {
     // ── Fix 5: Delete is type-agnostic (uses URI not hardcoded FILE kind) ──
 
     @Test
-    public void deleteEntry_removesArchiveState_forDirectoryResource() {
+    public void deleteEntry_tombstonesArchiveRecord_forDirectoryResource_keepingHistoryAndIndexedFact() {
         ResourceAccessPolicy allowAll = allowAllPolicy();
 
         // Store a directory-type snapshot in archive
@@ -567,8 +567,13 @@ public class MediatedResourceServiceTest {
         MediatedResult<Void> result = service.deleteEntry(deleteReq);
         assertTrue(result.isSuccess());
 
-        // Archive state removed by URI regardless of kind
-        assertNull(archive.findByUri(DIR_URI));
+        // The record is tombstoned by URI regardless of kind (#33): the history is kept and the
+        // indexed-version fact stays, because deleteEntry does not touch derived indexes.
+        ArchivedResource record = archive.records().findByRef(dirRef);
+        assertTrue(record.isRemovedAtSource());
+        assertEquals(1, record.versions().size());
+        assertTrue(record.isIndexed());
+        assertNotNull(archive.findByUri(DIR_URI));
     }
 
     @Test

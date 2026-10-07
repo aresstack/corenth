@@ -4,6 +4,7 @@ import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceKind;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.ArchivedResource;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.InMemoryResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceAccess;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceService;
@@ -304,7 +305,7 @@ public class WalkingSkeletonIntegrationTest {
         assertEquals(ProcessingResult.Status.INDEXED, first.status());
         assertFalse(searchCoordinator.search("reacceptable", 10).isEmpty());
 
-        // Step 2: Deny the same ref — lexical entry + archive snapshot removed
+        // Step 2: Deny the same ref — lexical entry removed, indexed-version fact withdrawn
         ResourceLifecycleCoordinator denyCoordinator = new ResourceLifecycleCoordinator(
                 mediatedFileAccess(sharedArchive), LIFECYCLE_ACTOR, createDeigmaInspector(),
                 denyPolicy, sharedArchive, lexicalIndex);
@@ -312,11 +313,20 @@ public class WalkingSkeletonIntegrationTest {
         ProcessingResult denied = denyCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.DENIED, denied.status());
         assertTrue(searchCoordinator.search("reacceptable", 10).isEmpty());
+        // #33: the denial is not recorded; only the indexed fact is gone, the history stays
+        assertNull(sharedArchive.find(ref));
+        ArchivedResource record = sharedArchive.records().findByRef(ref);
+        assertFalse(record.isIndexed());
+        assertEquals(1, record.versions().size());
 
-        // Step 3: Re-accept the same unchanged file — should re-index (not UNCHANGED)
+        // Step 3: Re-accept the same unchanged file — without an indexed fact hasChanged is
+        // true, so it is re-indexed (not UNCHANGED) and no new version is created
         ProcessingResult reindexed = acceptCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.INDEXED, reindexed.status());
         assertFalse(searchCoordinator.search("reacceptable", 10).isEmpty());
+        record = sharedArchive.records().findByRef(ref);
+        assertTrue(record.isIndexed());
+        assertEquals(1, record.versions().size());
     }
 
     @Test
@@ -334,7 +344,7 @@ public class WalkingSkeletonIntegrationTest {
     }
 
     /**
-     * Documents a guarantee lost in #10 Slice 1 and tracked by #33/#5: before the slice the
+     * Documents a guarantee lost in #10 Slice 1 and tracked by #5/#10: before the slice the
      * direct provider path re-read the source on every run, so a rewritten file produced a new
      * digest and was re-indexed. The archive counter caches bronze content without
      * invalidation, so a changed source is now served from the cache within one service
@@ -439,9 +449,11 @@ public class WalkingSkeletonIntegrationTest {
         assertEquals(ProcessingResult.Status.FAILED, noText.status());
         assertTrue(searchCoordinator.search("notext", 10).isEmpty());
         assertNull(sharedArchive.find(ref));
+        assertEquals("#33: cleanup withdraws the indexed fact but keeps the observed history",
+                1, sharedArchive.records().findByRef(ref).versions().size());
 
-        // Step 3: Re-process same unchanged file with normal inspector — archive snapshot was
-        // removed during cleanup, so hasChanged returns true and file is re-indexed
+        // Step 3: Re-process same unchanged file with normal inspector — the indexed fact was
+        // withdrawn during cleanup, so hasChanged returns true and file is re-indexed
         ProcessingResult reindexed = normalCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.INDEXED, reindexed.status());
         assertFalse(searchCoordinator.search("notext", 10).isEmpty());

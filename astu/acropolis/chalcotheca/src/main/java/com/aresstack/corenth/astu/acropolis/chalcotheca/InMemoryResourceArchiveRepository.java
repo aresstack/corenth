@@ -1,25 +1,27 @@
 package com.aresstack.corenth.astu.acropolis.chalcotheca;
 
+import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * In-memory implementation of {@link ResourceArchiveRepository}.
+ * Deterministic in-memory reference implementation of {@link ResourceArchiveRepository}.
  *
- * <p>Suitable for tests and the walking skeleton. Production implementations
- * may back this with filesystem, database or other persistent stores.
+ * <p>Suitable for tests and the walking skeleton. Records are immutable, so the stored
+ * instances can be handed out directly. A persistent adapter (e.g. H2) is a later outer
+ * adapter behind the same port.
  */
 public final class InMemoryResourceArchiveRepository implements ResourceArchiveRepository {
 
     private final Map<VirtualResourceRef, ArchivedResource> resources =
-            new HashMap<VirtualResourceRef, ArchivedResource>();
+            new LinkedHashMap<VirtualResourceRef, ArchivedResource>();
 
     @Override
-    public void save(ArchivedResource resource) {
+    public synchronized void save(ArchivedResource resource) {
         if (resource == null) {
             throw new IllegalArgumentException("resource must not be null");
         }
@@ -27,7 +29,7 @@ public final class InMemoryResourceArchiveRepository implements ResourceArchiveR
     }
 
     @Override
-    public ArchivedResource findByRef(VirtualResourceRef ref) {
+    public synchronized ArchivedResource findByRef(VirtualResourceRef ref) {
         if (ref == null) {
             return null;
         }
@@ -35,18 +37,16 @@ public final class InMemoryResourceArchiveRepository implements ResourceArchiveR
     }
 
     @Override
-    public List<ArchivedResource> findByState(ResourceLifecycleState state) {
+    public synchronized List<ArchivedResource> findByUri(BookmarkUri uri) {
         List<ArchivedResource> result = new ArrayList<ArchivedResource>();
-        for (ArchivedResource r : resources.values()) {
-            if (r.state() == state) {
-                result.add(r);
+        if (uri == null) {
+            return result;
+        }
+        for (ArchivedResource resource : resources.values()) {
+            if (uri.equals(resource.ref().uri())) {
+                result.add(resource);
             }
         }
         return result;
-    }
-
-    @Override
-    public boolean remove(VirtualResourceRef ref) {
-        return resources.remove(ref) != null;
     }
 }
