@@ -186,6 +186,17 @@ public class CorenthArchitectureRulesTest {
                     ADYTON)
             .because("Anagraphai is the lexical register and must not know semantic indexes, policy, lifecycle, adapters, or secrets");
 
+    private static final ArchRule PROPYLAEA_MUST_STAY_A_PURE_SOURCE_GATE = noClasses()
+            .that().resideInAnyPackage(PROPYLAEA)
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "com.aresstack.corenth.astu.acropolis..",
+                    PROASTEION,
+                    ADYTON,
+                    "java.nio.file..",
+                    "java.net..")
+            .because("Propylaea parses source text handed in by the caller into a language-neutral structure; "
+                    + "it must not read resources, know lifecycle, policy, indexing, adapters, or secrets (#3)");
+
     private static final ArchRule EXEDRA_MUST_STAY_THIN_UI_SHELL = noClasses()
             .that().resideInAnyPackage(EXEDRA)
             .should().dependOnClassesThat().resideInAnyPackage(
@@ -342,6 +353,11 @@ public class CorenthArchitectureRulesTest {
     @Test
     public void anagraphaiMustStayLexicalOnly() {
         ANAGRAPHAI_MUST_STAY_LEXICAL_ONLY.check(corenthClasses);
+    }
+
+    @Test
+    public void propylaeaMustStayAPureSourceGate() {
+        PROPYLAEA_MUST_STAY_A_PURE_SOURCE_GATE.check(corenthClasses);
     }
 
     @Test
