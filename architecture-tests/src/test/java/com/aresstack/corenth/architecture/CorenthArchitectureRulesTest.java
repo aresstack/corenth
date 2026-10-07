@@ -209,6 +209,17 @@ public class CorenthArchitectureRulesTest {
             .because("Pinakes holds semantic ports and reference code only; embedding/rerank runtimes, HTTP clients and "
                     + "Lucene stay in adapters or in Anagraphai, and Pinakes knows no policy, lifecycle, secrets or UI");
 
+    private static final ArchRule PROPYLAEA_MUST_STAY_A_PURE_SOURCE_GATE = noClasses()
+            .that().resideInAnyPackage(PROPYLAEA)
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "com.aresstack.corenth.astu.acropolis..",
+                    PROASTEION,
+                    ADYTON,
+                    "java.nio.file..",
+                    "java.net..")
+            .because("Propylaea parses source text handed in by the caller into a language-neutral structure; "
+                    + "it must not read resources, know lifecycle, policy, indexing, adapters, or secrets (#3)");
+
     private static final ArchRule EXEDRA_MUST_STAY_THIN_UI_SHELL = noClasses()
             .that().resideInAnyPackage(EXEDRA)
             .should().dependOnClassesThat().resideInAnyPackage(
@@ -370,6 +381,11 @@ public class CorenthArchitectureRulesTest {
     @Test
     public void pinakesMustStaySemanticRegister() {
         PINAKES_MUST_STAY_SEMANTIC_REGISTER.check(corenthClasses);
+    }
+
+    @Test
+    public void propylaeaMustStayAPureSourceGate() {
+        PROPYLAEA_MUST_STAY_A_PURE_SOURCE_GATE.check(corenthClasses);
     }
 
     @Test
