@@ -15,6 +15,7 @@ ext.architectureProjects = [
         ':proasteion:emporion',
         ':proasteion:emporion:holkas',
         ':proasteion:emporion:deigma',
+        ':proasteion:emporion:deigma-html',
         ':proasteion:platform',
         ':proasteion:platform:network',
         ':proasteion:platform:network-winproxy',
