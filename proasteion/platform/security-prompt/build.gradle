@@ -1,0 +1,6 @@
+description = 'Interactive, headless-testable secret source for adyton (callback port, no UI technology).'
+
+dependencies {
+    api project(':adyton')
+    testImplementation 'junit:junit:4.13.2'
+}

@@ -258,4 +258,11 @@ public class AdytonApiTest {
         AuthCancelledException ex = new AuthCancelledException();
         assertTrue(ex instanceof SecretUnavailableException);
     }
+
+    @Test
+    public void secretReleaseDeniedIsSubtypeOfSecretUnavailableButNotCancellation() {
+        SecretReleaseDeniedException ex = new SecretReleaseDeniedException();
+        assertTrue(ex instanceof SecretUnavailableException);
+        assertFalse(((Object) ex) instanceof AuthCancelledException);
+    }
 }

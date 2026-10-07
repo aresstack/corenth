@@ -20,7 +20,8 @@ ext.architectureProjects = [
         ':proasteion:platform',
         ':proasteion:platform:network',
         ':proasteion:platform:network-winproxy',
-        ':proasteion:platform:security-keepassrpc'
+        ':proasteion:platform:security-keepassrpc',
+        ':proasteion:platform:security-prompt'
 ]
 
 // Every Gradle project that compiles production classes must be listed explicitly above so that
