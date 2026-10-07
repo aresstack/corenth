@@ -7,8 +7,14 @@ dependencies {
     // Concrete outer adapters are known only here and never leak through the public API.
     implementation project(':proasteion:emporion:holkas')
     implementation project(':proasteion:emporion:deigma')
+    implementation project(':proasteion:emporion:deigma-html')
+    implementation project(':proasteion:emporion:deigma-pdf')
+    implementation project(':proasteion:emporion:deigma-office')
 
     testImplementation 'junit:junit:4.13.2'
+    // Fixture generation for the PDF and Office acceptance tests; no binary fixtures are checked in.
+    testImplementation 'org.apache.pdfbox:pdfbox:2.0.37'
+    testImplementation 'org.apache.poi:poi-ooxml:5.2.5'
 }
 
 tasks.named('test') {

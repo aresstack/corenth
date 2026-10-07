@@ -17,6 +17,7 @@ public final class ResourceProcessingPlan {
 
     private static final ResourceProcessingPlan STANDARD = new ResourceProcessingPlan(Arrays.asList(
             ResourceProcessingStepType.INDEXING_POLICY_BEFORE_ACQUISITION,
+            ResourceProcessingStepType.SOURCE_METADATA,
             ResourceProcessingStepType.MEDIATED_ACQUISITION,
             ResourceProcessingStepType.INDEXING_POLICY_WITH_SIZE,
             ResourceProcessingStepType.CHANGE_DETECTION,

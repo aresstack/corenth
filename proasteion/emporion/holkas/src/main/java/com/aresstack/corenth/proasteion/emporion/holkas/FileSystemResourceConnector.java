@@ -8,6 +8,7 @@ import com.aresstack.corenth.astu.VirtualResourceRef;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -30,9 +31,7 @@ public final class FileSystemResourceConnector implements ResourceConnector {
     @Override
     public RawResource fetch(VirtualResourceRef ref) throws IOException {
         Path path = pathFrom(ref);
-        if (!Files.isRegularFile(path)) {
-            throw new ResourceConnectorException("file: resource is not a regular file: " + path);
-        }
+        requireRegularFile(path);
 
         byte[] bytes = Files.readAllBytes(path);
         RawResourceContent content = new RawResourceContent(bytes);
@@ -64,6 +63,26 @@ public final class FileSystemResourceConnector implements ResourceConnector {
             }
         }
         return new ResourceListing(ref, entries, observedAtMillis);
+    }
+
+    /**
+     * Reads size, name, type and modification time of a regular file without reading its content.
+     */
+    @Override
+    public RawResourceMetadata metadata(VirtualResourceRef ref) throws IOException {
+        Path path = pathFrom(ref);
+        requireRegularFile(path);
+        return metadataFor(path, VirtualResourceKind.FILE, Files.size(path));
+    }
+
+    /** A missing path is a confirmed absence; an existing non-file is an ordinary error. */
+    private static void requireRegularFile(Path path) throws ResourceConnectorException {
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS) && !Files.exists(path)) {
+            throw new ResourceNotFoundException("file: resource does not exist: " + path);
+        }
+        if (!Files.isRegularFile(path)) {
+            throw new ResourceConnectorException("file: resource is not a regular file: " + path);
+        }
     }
 
     private Path pathFrom(VirtualResourceRef ref) {

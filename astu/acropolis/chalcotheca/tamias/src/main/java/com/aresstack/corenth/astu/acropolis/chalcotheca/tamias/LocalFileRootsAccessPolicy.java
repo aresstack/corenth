@@ -26,9 +26,12 @@ import java.util.Set;
  *       is denied with {@link AccessReasonCode#NOT_WHITELISTED};</li>
  *   <li>only the read path of the archive counter is granted ({@link ResourceOperation#LIST_CHILDREN},
  *       {@link ResourceOperation#READ_METADATA}, {@link ResourceOperation#READ_CONTENT} and the
- *       acquisition step {@link ResourceOperation#FETCH_EXTERNAL}); refresh, index, search-result
- *       and archive-deletion decisions are denied with {@link AccessReasonCode#NOT_WHITELISTED}
- *       until #5 supplies the composed policies for them.</li>
+ *       acquisition step {@link ResourceOperation#FETCH_EXTERNAL}); index, search-result and
+ *       archive-deletion decisions are denied with {@link AccessReasonCode#NOT_WHITELISTED}
+ *       until #5 supplies the composed policies for them;</li>
+ *   <li>{@link ResourceOperation#REFRESH_EXTERNAL} (re-reading a source whose payload is cached)
+ *       is granted only when the policy is constructed with source refresh enabled
+ *       (#10 Slice 5); otherwise it is denied like the other operations.</li>
  * </ul>
  *
  * <p>The policy is actor-neutral: humans, bots and services receive the same decision.
@@ -48,11 +51,23 @@ public final class LocalFileRootsAccessPolicy implements ResourceAccessPolicy {
             ResourceOperation.FETCH_EXTERNAL));
 
     private final List<Path> roots;
+    private final boolean sourceRefresh;
 
     /**
      * @param roots the local directories whose contents may be read; must not be empty
      */
     public LocalFileRootsAccessPolicy(List<Path> roots) {
+        this(roots, false);
+    }
+
+    /**
+     * Creates the policy with an explicit refresh setting (#10 Slice 5).
+     *
+     * @param roots         the accessible root directories; at least one
+     * @param sourceRefresh whether {@link ResourceOperation#REFRESH_EXTERNAL} is granted inside
+     *                      the roots, so that a cached payload is re-read from the file system
+     */
+    public LocalFileRootsAccessPolicy(List<Path> roots, boolean sourceRefresh) {
         if (roots == null || roots.isEmpty()) {
             throw new IllegalArgumentException("at least one accessible root is required");
         }
@@ -64,11 +79,17 @@ public final class LocalFileRootsAccessPolicy implements ResourceAccessPolicy {
             normalized.add(root.toAbsolutePath().normalize());
         }
         this.roots = Collections.unmodifiableList(normalized);
+        this.sourceRefresh = sourceRefresh;
     }
 
     /** Returns the normalized absolute roots this policy grants access to. */
     public List<Path> roots() {
         return roots;
+    }
+
+    /** Returns whether {@link ResourceOperation#REFRESH_EXTERNAL} is granted inside the roots. */
+    public boolean sourceRefresh() {
+        return sourceRefresh;
     }
 
     @Override
@@ -89,6 +110,9 @@ public final class LocalFileRootsAccessPolicy implements ResourceAccessPolicy {
         if (!isInsideRoot(path)) {
             return ResourceAccessDecision.deny(AccessReasonCode.NOT_WHITELISTED,
                     "target is outside the accessible local roots: " + path);
+        }
+        if (request.operation() == ResourceOperation.REFRESH_EXTERNAL && sourceRefresh) {
+            return ResourceAccessDecision.allow();
         }
         if (!GRANTED_OPERATIONS.contains(request.operation())) {
             return ResourceAccessDecision.deny(AccessReasonCode.NOT_WHITELISTED,

@@ -95,6 +95,23 @@ public class LocalFileRootsAccessPolicyTest {
     }
 
     @Test
+    public void grantsSourceRefreshInsideTheRoots_onlyWhenEnabled() {
+        BookmarkUri inside = uri(root.resolve("notes.txt"));
+        LocalFileRootsAccessPolicy refreshing = new LocalFileRootsAccessPolicy(Arrays.asList(root), true);
+
+        assertTrue(refreshing.sourceRefresh());
+        assertTrue(refreshing.evaluate(new ResourceAccessRequest(
+                SERVICE, inside, ResourceOperation.REFRESH_EXTERNAL)).isAllowed());
+        assertFalse(policy.sourceRefresh());
+        assertFalse(policy.evaluate(new ResourceAccessRequest(
+                SERVICE, inside, ResourceOperation.REFRESH_EXTERNAL)).isAllowed());
+        assertFalse("refresh never widens the roots", refreshing.evaluate(new ResourceAccessRequest(
+                SERVICE, BookmarkUri.parse("https://example.org/a.txt"), ResourceOperation.REFRESH_EXTERNAL)).isAllowed());
+        assertFalse(refreshing.evaluate(new ResourceAccessRequest(
+                SERVICE, inside, ResourceOperation.DELETE_ARCHIVE_ENTRY)).isAllowed());
+    }
+
+    @Test
     public void isActorNeutral() {
         BookmarkUri file = uri(root.resolve("notes.txt"));
         assertTrue(policy.evaluate(new ResourceAccessRequest(BOT, file, ResourceOperation.READ_CONTENT)).isAllowed());

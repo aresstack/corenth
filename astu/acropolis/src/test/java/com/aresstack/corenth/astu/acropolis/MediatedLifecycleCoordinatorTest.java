@@ -4,8 +4,10 @@ import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceKind;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.ArchivedResource;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeContent;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeListing;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeMetadata;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ContentHasher;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.InMemoryResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceAccess;
@@ -92,7 +94,7 @@ public class MediatedLifecycleCoordinatorTest {
     }
 
     @Test
-    public void sizeLimit_isEnforcedAfterAcquisition_becauseTheContractHasNoSizeProbe() {
+    public void sizeLimit_withoutSourceMetadata_isEnforcedAfterAcquisition_andInvalidatesThePayload() {
         RecordingMediatedAccess access = new RecordingMediatedAccess();
         access.nextContent = MediatedResult.success(bronze(DOC_URI, "this text is longer than ten bytes"),
                 ResourceAccessDecision.allow());
@@ -103,7 +105,25 @@ public class MediatedLifecycleCoordinatorTest {
 
         assertEquals(ProcessingResult.Status.DENIED, result.status());
         assertTrue(result.message().contains("maxBytes"));
-        assertEquals("size is only known after the mediated read", 1, access.requests.size());
+        assertEquals("without metadata the size is only known after the mediated read", 1, access.requests.size());
+        assertEquals("the rejected payload must not stay cached", Arrays.asList(DOC_URI), access.invalidated);
+    }
+
+    @Test
+    public void sizeLimit_withSourceMetadata_deniesBeforeAnyMediatedRead() {
+        RecordingMediatedAccess access = new RecordingMediatedAccess();
+        access.nextMetadata = MediatedResult.success(
+                new BronzeMetadata(DOC_URI, "notes.txt", "text/plain", 4096L, 1L, 1L), ResourceAccessDecision.allow());
+        access.nextContent = MediatedResult.success(bronze(DOC_URI, "never read"), ResourceAccessDecision.allow());
+        ResourcePolicy tiny = new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                "tiny", Arrays.asList("file"), Arrays.asList("**/*"), Collections.<String>emptyList(), 10)));
+
+        ProcessingResult result = coordinator(access, tiny, new RecordingLexicalIndex()).process(DOC);
+
+        assertEquals(ProcessingResult.Status.DENIED, result.status());
+        assertTrue(result.message().contains("maxBytes"));
+        assertTrue("a known oversized resource is never read", access.requests.isEmpty());
+        assertEquals(ResourceOperation.READ_METADATA, access.metadataRequests.get(0).operation());
     }
 
     // ── Decision semantics: DENY, ALLOW_CACHED_ONLY, REQUIRE_AUTH, errors ──
@@ -249,13 +269,12 @@ public class MediatedLifecycleCoordinatorTest {
     }
 
     /**
-     * Documents a gap tracked by #5/#10: resource-level access denials (e.g. a blacklist) do not
-     * withdraw an already indexed resource from the lexical index, because no withdrawal path
-     * exists yet and access denials never delete derived state. When an explicit withdrawal
-     * operation lands, this test must be inverted.
+     * Former {@code knownGap_blacklistedAfterIndexing_staysInTheIndex_untilAWithdrawalPathExists},
+     * part 1 (#10 Slice 5): an actor-scoped access denial alone is no lifecycle decision, so the
+     * index entry stays. Withdrawal needs an explicit removal in the record (part 2).
      */
     @Test
-    public void knownGap_blacklistedAfterIndexing_staysInTheIndex_untilAWithdrawalPathExists() {
+    public void blacklistedAfterIndexing_withoutRecordedRemoval_staysInTheIndex() {
         RecordingMediatedAccess access = new RecordingMediatedAccess();
         RecordingLexicalIndex index = new RecordingLexicalIndex();
         ResourceLifecycleCoordinator coordinator = coordinator(access, acceptAll(), index);
@@ -269,7 +288,109 @@ public class MediatedLifecycleCoordinatorTest {
 
         assertEquals(ProcessingResult.Status.DENIED, denied.status());
         assertTrue(denied.message(), denied.message().contains("BLACKLISTED"));
-        assertTrue("known gap: blacklisting does not withdraw the index entry yet", index.indexed.contains(DOC));
+        assertTrue("an access denial alone does not withdraw the index entry", index.indexed.contains(DOC));
+    }
+
+    /**
+     * Former {@code knownGap_blacklistedAfterIndexing_staysInTheIndex_untilAWithdrawalPathExists},
+     * part 2 (#10 Slice 5): after the explicit {@code deleteEntry} decision the record carries a
+     * removal; the next run executes the Tamias disposition and withdraws the index entry while
+     * the history stays.
+     */
+    @Test
+    public void blacklistedAfterExplicitDeleteEntry_isWithdrawnFromTheIndex_andKeepsTheHistory() {
+        final boolean[] blacklisted = {false};
+        ResourceAccessPolicy policy = new ResourceAccessPolicy() {
+            @Override
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                if (blacklisted[0] && request.operation() != ResourceOperation.DELETE_ARCHIVE_ENTRY) {
+                    return ResourceAccessDecision.deny(AccessReasonCode.BLACKLISTED, "resource is blacklisted");
+                }
+                return ResourceAccessDecision.allow();
+            }
+        };
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        CountingAcquisitionPort acquisition = new CountingAcquisitionPort();
+        MediatedResourceService counter = new MediatedResourceService(policy, acquisition, archive);
+        RecordingLexicalIndex index = new RecordingLexicalIndex();
+        ResourceLifecycleCoordinator coordinator = coordinator(counter, acceptAll(), index, archive);
+        assertEquals(ProcessingResult.Status.INDEXED, coordinator.process(DOC).status());
+
+        blacklisted[0] = true;
+        assertTrue(counter.deleteEntry(new ResourceAccessRequest(
+                INDEXER, DOC_URI, ResourceOperation.DELETE_ARCHIVE_ENTRY, "blacklist")).isSuccess());
+        ProcessingResult denied = coordinator.process(DOC);
+
+        assertEquals(ProcessingResult.Status.DENIED, denied.status());
+        assertTrue(denied.message(), denied.message().contains("BLACKLISTED"));
+        assertFalse("the explicit removal withdraws the index entry", index.indexed.contains(DOC));
+        ArchivedResource record = archive.records().findByRef(DOC);
+        assertFalse(record.isIndexed());
+        assertTrue(record.isRemovedAtSource());
+        assertEquals("#33: the history stays", 1, record.versions().size());
+        assertEquals("no acquisition for a blacklisted resource", 1, acquisition.fetches);
+    }
+
+    @Test
+    public void cachedPayloadOlderThanTheRecordedRemoval_isNoProofOfExistence() {
+        RecordingMediatedAccess access = new RecordingMediatedAccess();
+        RecordingLexicalIndex index = new RecordingLexicalIndex();
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        ResourceLifecycleCoordinator coordinator = coordinator(access, acceptAll(), index, archive);
+        access.nextContent = MediatedResult.success(bronze(DOC_URI, "old payload"), ResourceAccessDecision.allow());
+        assertEquals(ProcessingResult.Status.INDEXED, coordinator.process(DOC).status());
+
+        archive.removeByUri(DOC_URI);
+        ProcessingResult result = coordinator.process(DOC);
+
+        assertEquals("the payload was fetched before the removal", ProcessingResult.Status.REMOVED, result.status());
+        assertFalse(index.indexed.contains(DOC));
+        ArchivedResource record = archive.records().findByRef(DOC);
+        assertTrue("the removal stands", record.isRemovedAtSource());
+        assertFalse(record.isIndexed());
+        assertTrue(access.invalidated.contains(DOC_URI));
+    }
+
+    @Test
+    public void sourceAbsentWithoutRecord_failsAsNotFound_withoutTouchingTheIndex() {
+        RecordingMediatedAccess access = new RecordingMediatedAccess();
+        access.nextContent = MediatedResult.failure(MediatedResult.Failure.SOURCE_ABSENT, "gone");
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+
+        ProcessingResult result = coordinator(access, acceptAll(), new RecordingLexicalIndex(), archive).process(DOC);
+
+        assertEquals(ProcessingResult.Status.FAILED, result.status());
+        assertEquals(ResourceProcessingFailure.Reason.SOURCE_NOT_FOUND, result.failure().reason());
+        assertNull("no record for a resource that was never seen", archive.records().findByRef(DOC));
+    }
+
+    @Test
+    public void refreshPermitted_reacquiresTheChangedSource_andRecordsTheNewVersion() {
+        final String[] source = {"first version"};
+        AcquisitionPort changing = new AcquisitionPort() {
+            @Override
+            public BronzeContent fetchContent(BookmarkUri uri) {
+                return bronze(uri, source[0]);
+            }
+
+            @Override
+            public BronzeListing listChildren(BookmarkUri uri) {
+                return new BronzeListing(uri, Collections.<BronzeListing.Entry>emptyList(), 1L);
+            }
+        };
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        MediatedResourceService counter = new MediatedResourceService(decide(ResourceAccessDecision.allow(),
+                ResourceAccessDecision.allow(), ResourceAccessDecision.allow()), changing, archive);
+        ResourceLifecycleCoordinator coordinator = coordinator(counter, acceptAll(), new RecordingLexicalIndex(), archive);
+        assertEquals(ProcessingResult.Status.INDEXED, coordinator.process(DOC).status());
+
+        source[0] = "second version";
+        assertEquals(ProcessingResult.Status.INDEXED, coordinator.process(DOC).status());
+        assertEquals(ProcessingResult.Status.UNCHANGED, coordinator.process(DOC).status());
+
+        ArchivedResource record = archive.records().findByRef(DOC);
+        assertEquals(2, record.versions().size());
+        assertEquals(2L, record.indexedVersion().version().sequence());
     }
 
     @Test
@@ -377,20 +498,36 @@ public class MediatedLifecycleCoordinatorTest {
         return new BronzeContent(uri, bytes, ContentHasher.digest(bytes), 1L);
     }
 
-    /** Policy returning one decision for the primary operation and another for FETCH_EXTERNAL. */
+    /**
+     * Policy returning one decision for the primary operation and another for FETCH_EXTERNAL.
+     * REFRESH_EXTERNAL is answered with ALLOW_CACHED_ONLY: these policies configure no refresh.
+     */
     private static ResourceAccessPolicy decide(final ResourceAccessDecision primary,
                                                final ResourceAccessDecision external) {
+        return decide(primary, external, ResourceAccessDecision.cachedOnly("refresh not configured"));
+    }
+
+    /** Policy with separate decisions for the primary operation, FETCH_EXTERNAL and REFRESH_EXTERNAL. */
+    private static ResourceAccessPolicy decide(final ResourceAccessDecision primary,
+                                               final ResourceAccessDecision external,
+                                               final ResourceAccessDecision refresh) {
         return new ResourceAccessPolicy() {
             @Override
             public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
-                return request.operation() == ResourceOperation.FETCH_EXTERNAL ? external : primary;
+                if (request.operation() == ResourceOperation.FETCH_EXTERNAL) {
+                    return external;
+                }
+                return request.operation() == ResourceOperation.REFRESH_EXTERNAL ? refresh : primary;
             }
         };
     }
 
     private static final class RecordingMediatedAccess implements MediatedResourceAccess {
         final List<ResourceAccessRequest> requests = new ArrayList<ResourceAccessRequest>();
+        final List<ResourceAccessRequest> metadataRequests = new ArrayList<ResourceAccessRequest>();
+        final List<BookmarkUri> invalidated = new ArrayList<BookmarkUri>();
         MediatedResult<BronzeContent> nextContent;
+        MediatedResult<BronzeMetadata> nextMetadata;
         RuntimeException failure;
 
         @Override
@@ -406,6 +543,23 @@ public class MediatedLifecycleCoordinatorTest {
         public MediatedResult<BronzeListing> listChildren(ResourceAccessRequest request) {
             requests.add(request);
             return MediatedResult.error("listing is not used by the lifecycle");
+        }
+
+        @Override
+        public MediatedResult<BronzeContent> refreshContent(ResourceAccessRequest request) {
+            return readContent(request);
+        }
+
+        @Override
+        public MediatedResult<BronzeMetadata> readMetadata(ResourceAccessRequest request) {
+            metadataRequests.add(request);
+            return nextMetadata != null ? nextMetadata
+                    : MediatedResult.<BronzeMetadata>failure(MediatedResult.Failure.METADATA_UNAVAILABLE, "no metadata");
+        }
+
+        @Override
+        public void invalidatePayload(BookmarkUri uri) {
+            invalidated.add(uri);
         }
     }
 

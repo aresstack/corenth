@@ -11,6 +11,8 @@ package com.aresstack.corenth.astu.acropolis.chalcotheca;
  *   <li>{@link Status#UNAVAILABLE}: authentication is required but no credential could be
  *       provided (for example no configured secret source).</li>
  *   <li>{@link Status#CANCELLED}: the user cancelled an interactive credential request.</li>
+ *   <li>{@link Status#DENIED}: the owner of the secret refused to release it for this request
+ *       (a decision, not a missing credential, #43).</li>
  *   <li>{@link Status#FAILED}: authentication was attempted and failed.</li>
  * </ul>
  * Access denial by policy is not a status here; it is a Tamias decision made before preparation.
@@ -24,6 +26,7 @@ public final class AcquisitionAccess implements AutoCloseable {
         GRANTED,
         UNAVAILABLE,
         CANCELLED,
+        DENIED,
         FAILED
     }
 
@@ -59,6 +62,11 @@ public final class AcquisitionAccess implements AutoCloseable {
     /** The user cancelled the credential request. */
     public static AcquisitionAccess cancelled(String detail) {
         return new AcquisitionAccess(Status.CANCELLED, null, detail);
+    }
+
+    /** The owner of the secret refused to release it for this request. */
+    public static AcquisitionAccess denied(String detail) {
+        return new AcquisitionAccess(Status.DENIED, null, detail);
     }
 
     /** Authentication was attempted and failed. */

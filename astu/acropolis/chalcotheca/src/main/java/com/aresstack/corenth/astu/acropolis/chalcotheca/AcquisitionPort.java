@@ -21,6 +21,7 @@ public interface AcquisitionPort {
      *
      * @param uri the resource to acquire
      * @return the acquired bronze content
+     * @throws SourceAbsentException if the source confirms that the resource does not exist
      * @throws IOException if acquisition fails
      */
     BronzeContent fetchContent(BookmarkUri uri) throws IOException;
@@ -67,5 +68,36 @@ public interface AcquisitionPort {
             throw new IOException("This acquisition port does not support authenticated acquisition");
         }
         return listChildren(uri);
+    }
+
+    /**
+     * Returns whether {@link #fetchMetadata(BookmarkUri, AcquisitionCapability)} can answer for
+     * this resource (#10 Slice 5).
+     *
+     * <p>The counter asks before preparing access, so that a source without metadata never
+     * triggers a credential request just to report that nothing is available. The default is
+     * {@code false}.
+     *
+     * @param uri the resource to inspect
+     * @return {@code true} if the port reads metadata for this resource
+     */
+    default boolean offersMetadata(BookmarkUri uri) {
+        return false;
+    }
+
+    /**
+     * Reads source metadata (size, name, modification time) without acquiring the payload
+     * (#10 Slice 5).
+     *
+     * <p>The default reports that the source offers no metadata by returning {@code null}.
+     *
+     * @param uri the resource to inspect
+     * @param capability the prepared capability, or {@code null} if none is required
+     * @return the metadata, or {@code null} if the source offers no metadata
+     * @throws SourceAbsentException if the source confirms that the resource does not exist
+     * @throws IOException if reading the metadata fails
+     */
+    default BronzeMetadata fetchMetadata(BookmarkUri uri, AcquisitionCapability capability) throws IOException {
+        return null;
     }
 }
