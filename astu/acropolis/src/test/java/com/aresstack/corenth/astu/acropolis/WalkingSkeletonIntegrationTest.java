@@ -231,7 +231,7 @@ public class WalkingSkeletonIntegrationTest {
      * oversized files before fetching them (size probe on the direct provider). The mediated
      * contract has no size probe, so the counter acquires and retains the content and the
      * lifecycle denies it only afterwards. When a {@code READ_METADATA} operation exists
-     * (#5/#33), this test must be inverted (expect no cached content).
+     * (#5/#10), this test must be inverted (expect no cached content).
      */
     @Test
     public void knownGap_oversizedFile_isAcquiredAndRetainedByCounterBeforeDenial() throws IOException {

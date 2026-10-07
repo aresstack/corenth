@@ -449,21 +449,23 @@ public class MediatedResourceServiceTest {
         assertTrue(service.hasCachedContent(FILE_URI));
     }
 
-    // ── Acceptance criterion 4: Blacklist/tombstone removes archive state ──
+    // ── Acceptance criterion 4: deleteEntry clears the payload cache and tombstones the record ──
 
     @Test
-    public void blacklistTombstone_removesArchiveState() {
+    public void deleteEntry_clearsPayloadCache_andTombstonesRecord_keepingHistoryAndIndexedFact() {
         ResourceAccessPolicy allowAll = allowAllPolicy();
 
         acquisitionPort.setContent(FILE_URI, "Content to be tombstoned".getBytes());
 
         MediatedResourceService service = new MediatedResourceService(allowAll, acquisitionPort, archive);
 
-        // First, populate
+        // First, populate the payload cache and record an indexed version
         ResourceAccessRequest readReq = new ResourceAccessRequest(
                 HUMAN_ACTOR, FILE_URI, ResourceOperation.READ_CONTENT);
-        service.readContent(readReq);
+        MediatedResult<BronzeContent> read = service.readContent(readReq);
         assertTrue(service.hasCachedContent(FILE_URI));
+        VirtualResourceRef fileRef = new VirtualResourceRef(FILE_URI, VirtualResourceKind.FILE);
+        archive.store(new ResourceSnapshot(fileRef, read.value().digest(), System.currentTimeMillis()));
 
         // Now explicitly delete (tombstone) — this is the blacklist/tombstone path
         ResourceAccessRequest deleteReq = new ResourceAccessRequest(
@@ -471,8 +473,13 @@ public class MediatedResourceServiceTest {
         MediatedResult<Void> deleteResult = service.deleteEntry(deleteReq);
         assertTrue(deleteResult.isSuccess());
 
-        // The transient payload cache is cleared; archive records are only tombstoned (#33)
+        // The transient payload cache is cleared; the record is only tombstoned (#33): history
+        // and indexed-version fact stay until #5 decides and #10 executes a withdrawal
         assertFalse(service.hasCachedContent(FILE_URI));
+        ArchivedResource record = archive.records().findByRef(fileRef);
+        assertTrue(record.isRemovedAtSource());
+        assertEquals(1, record.versions().size());
+        assertTrue(record.isIndexed());
     }
 
     // ── Acceptance criterion 5: Unknown URI triggers acquisition when allowed ──

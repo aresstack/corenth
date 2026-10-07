@@ -37,7 +37,7 @@ file: URI
 ### Decision semantics
 
 - A `tamias` indexing-rule `DENY` is a lifecycle decision for the resource: it yields `DENIED` and removes stale index entries and the snapshot.
-- A `tamias` access decision that withholds the content (`DENY`, `ALLOW_CACHED_ONLY` without cached content on either evaluation, `REQUIRE_AUTH`, `REQUIRE_SOURCE_CHECK`) yields `DENIED` with the decision in the message. Access denials are never lifecycle decisions and never delete derived state, including resource-level reason codes such as `BLACKLISTED`; withdrawing an already indexed resource is an explicit archive operation to be integrated in #33/#5 (`knownGap_blacklisted…` test). `REQUIRE_AUTH` becomes an Adyton-backed preparation step in #10 Slice 3.
+- A `tamias` access decision that withholds the content (`DENY`, `ALLOW_CACHED_ONLY` without cached content on either evaluation, `REQUIRE_AUTH`, `REQUIRE_SOURCE_CHECK`) yields `DENIED` with the decision in the message. Access denials are never lifecycle decisions and never delete derived state, including resource-level reason codes such as `BLACKLISTED`; withdrawing an already indexed resource is decided by Tamias (#5) and executed by the lifecycle (#10) on top of the #33 resource records (`knownGap_blacklisted…` test). `REQUIRE_AUTH` becomes an Adyton-backed preparation step in #10 Slice 3.
 - An acquisition error inside the counter yields `FAILED`.
 
 ### Composition

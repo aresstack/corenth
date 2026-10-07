@@ -71,7 +71,8 @@ import java.util.List;
  *       therefore acquired and retained in the counter's cache for the lifetime of the service
  *       instance; the lifecycle cannot evict it ({@code deleteEntry} is not on the contract).
  *       A {@code READ_METADATA} operation on the contract and the acquisition port belongs to
- *       #5/#33.</li>
+ *       #5/#10 (#33 already records the facts; the policy is #5, contract wiring and execution
+ *       are #10).</li>
  *   <li>The counter's bronze caches have no invalidation. Before Slice 1 every run re-read the
  *       source and a changed file was re-indexed; through the counter a changed source is
  *       served from the cache within one service instance and reported as {@code UNCHANGED}
