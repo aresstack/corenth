@@ -1,0 +1,8 @@
+description = 'Deigma PDF extractor — PDFBox-backed implementation adapter for the Deigma extraction contracts.'
+
+dependencies {
+    api project(':proasteion:emporion:deigma')
+    // Implementation detail only: no PDFBox type appears in a public signature of this module.
+    implementation 'org.apache.pdfbox:pdfbox:2.0.37'
+    testImplementation 'junit:junit:4.13.2'
+}

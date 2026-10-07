@@ -264,11 +264,11 @@ final class HtmlBlockCollector {
 
     private static String join(List<String> parts, char separator) {
         StringBuilder result = new StringBuilder();
-        for (String part : parts) {
-            if (result.length() > 0) {
+        for (int i = 0; i < parts.size(); i++) {
+            if (i > 0) {
                 result.append(separator);
             }
-            result.append(part);
+            result.append(parts.get(i));
         }
         return result.toString();
     }
