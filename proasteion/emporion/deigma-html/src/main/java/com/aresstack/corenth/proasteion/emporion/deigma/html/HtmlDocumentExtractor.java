@@ -81,9 +81,7 @@ public final class HtmlDocumentExtractor implements ResourceExtractor {
         Document html;
         try {
             html = Jsoup.parse(new ByteArrayInputStream(content), charsetName, "");
-        } catch (IOException e) {
-            return ExtractionResult.failure(request.resourceRef(), type, "HTML_PARSE_FAILED: " + e.getMessage());
-        } catch (RuntimeException e) {
+        } catch (IOException | RuntimeException e) {
             return ExtractionResult.failure(request.resourceRef(), type, "HTML_PARSE_FAILED: " + e.getMessage());
         }
 
