@@ -4,6 +4,9 @@ dependencies {
     // Inner contracts and use cases exposed to hosts (lifecycle, search, mediated access).
     api project(':astu:acropolis')
 
+    // Tool capability contracts that the composed use cases are bound to (#12).
+    api project(':proasteion:katagogion')
+
     // Concrete outer adapters are known only here and never leak through the public API.
     implementation project(':proasteion:emporion:holkas')
     implementation project(':proasteion:emporion:deigma')
