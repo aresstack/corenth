@@ -27,6 +27,8 @@ Clients depend on the `MediatedResourceAccess` contract, not on `MediatedResourc
 
 **Known limitation (#5/#10):** `MediatedResourceService` keeps three in-memory payload stores (`listingCache`, `contentCache`, `metadataCache`) without invalidation or TTL. Content read once is served from the cache until `deleteEntry` removes it, so a changed source is not re-acquired within the lifetime of a service instance. `metadataCache` is never populated: `ResourceOperation.READ_METADATA` is declared in Tamias, but neither the `MediatedResourceAccess` contract / `MediatedResourceService` nor `AcquisitionPort` offer a metadata operation yet. The lifecycle also cannot evict content it caused to be cached (e.g. an oversized resource denied after acquisition), because `deleteEntry` is not on the contract. Since #33 the archive holds the authoritative resource records (see below); they are facts about payloads, not payloads, and do not record cache presence. Deciding when a cached payload is invalid belongs to Tamias (#5); consolidating the stores against the records is #10 Slice 5.
 
+**Access preparation (#10 Slice 3):** every permitted source contact goes through `AcquisitionAccessPort`. The local composition uses `AcquisitionAccessPort.unauthenticated()`; authenticated sources plug in the Holkas `BrokeredAcquisitionAccess`. The counter never sees secret material, only a closeable `AcquisitionCapability`; cancellation, unavailability and failure stay distinct `MediatedResult.Failure` values.
+
 ## Bronze resource shapes
 
 | Shape | Purpose |

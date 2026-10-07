@@ -434,7 +434,10 @@ public class WalkingSkeletonIntegrationTest {
         assertEquals(ProcessingResult.Status.INDEXED, first.status());
         assertFalse(searchCoordinator.search("notext", 10).isEmpty());
 
-        // Step 2: Keep same file content but use empty inspector, which triggers cleanup
+        // Step 2: A new source version yields no indexable text, which triggers cleanup. Since #10
+        // Slice 4 an unchanged indexed version is not extracted again, so the no-text run needs a
+        // version that is not yet indexed; that version stays unchanged in step 3.
+        writeFile(txtFile, "notext reindex unique content, second version");
         ContentInspector emptyInspector = new ContentInspector() {
             @Override
             public InspectionResult inspect(VirtualResourceRef r, byte[] content, String filenameHint) {
@@ -452,8 +455,8 @@ public class WalkingSkeletonIntegrationTest {
         assertEquals("#33: cleanup withdraws the indexed fact but keeps the observed history",
                 1, sharedArchive.records().findByRef(ref).versions().size());
 
-        // Step 3: Re-process same unchanged file with normal inspector — the indexed fact was
-        // withdrawn during cleanup, so hasChanged returns true and file is re-indexed
+        // Step 3: Re-process the same, unchanged file with the normal inspector — the indexed fact
+        // was withdrawn during cleanup, so hasChanged returns true and the file is re-indexed
         ProcessingResult reindexed = normalCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.INDEXED, reindexed.status());
         assertFalse(searchCoordinator.search("notext", 10).isEmpty());
