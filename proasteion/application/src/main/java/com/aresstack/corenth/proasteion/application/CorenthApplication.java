@@ -1,11 +1,13 @@
 package com.aresstack.corenth.proasteion.application;
 
 import com.aresstack.corenth.astu.acropolis.ResourceLifecycleCoordinator;
+import com.aresstack.corenth.astu.acropolis.ResourceProcessingRunner;
 import com.aresstack.corenth.astu.acropolis.SearchCoordinator;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceAccess;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -44,6 +46,11 @@ public final class CorenthApplication implements Closeable {
     }
 
     /** Lexical search over everything the lifecycle has indexed. */
+    /** Returns the run entry point that processes a list of resources and records the run. */
+    public ResourceProcessingRunner resourceProcessing() {
+        return new ResourceProcessingRunner(resourceLifecycle, Clock.systemUTC());
+    }
+
     public SearchCoordinator search() {
         return search;
     }

@@ -3,6 +3,7 @@ package com.aresstack.corenth.proasteion.application;
 import com.aresstack.corenth.astu.acropolis.ContentInspector;
 import com.aresstack.corenth.astu.acropolis.ResourceLifecycleCoordinator;
 import com.aresstack.corenth.astu.acropolis.SearchCoordinator;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionAccessPort;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.InMemoryResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceAccess;
@@ -121,7 +122,9 @@ public final class CorenthComposition {
         ResourceAccessPolicy accessPolicy = new LocalFileRootsAccessPolicy(settings.accessibleRoots());
         AcquisitionPort acquisition = new HolkasAcquisitionPort(
                 DefaultResourceConnectorRegistry.of(new FileSystemResourceConnector()));
-        return new MediatedResourceService(accessPolicy, acquisition, archive);
+        // The local composition has no authenticated source: the access station never needs the vault.
+        // Authenticated sources plug in a Holkas BrokeredAcquisitionAccess here (#10 Slice 3).
+        return new MediatedResourceService(accessPolicy, acquisition, archive, AcquisitionAccessPort.unauthenticated());
     }
 
     /** Deigma detection and the shallow extractors that exist on main, behind the lifecycle port. */

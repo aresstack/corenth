@@ -221,6 +221,13 @@ public class CorenthArchitectureRulesTest {
             .because("the composition root is instantiated explicitly; no global singletons or static registries (ADR-0001)")
             .allowEmptyShould(true);
 
+    private static final ArchRule ACROPOLIS_AND_CHALCOTHECA_MUST_NOT_SEE_THE_VAULT = noClasses()
+            .that().resideInAPackage(ACROPOLIS_ROOT + "..")
+            .should().dependOnClassesThat().resideInAnyPackage(ADYTON)
+            .because("the archive counter and the lifecycle prepare authenticated acquisitions only through the opaque "
+                    + "AcquisitionAccessPort capability; secret material, references and handles stay in Adyton and the "
+                    + "outer adapters (#10 Slice 3)");
+
     private static final ArchRule RAW_SECRET_MATERIAL_MUST_STAY_INSIDE_VAULT_OR_TRUSTED_SECRET_ADAPTER = noClasses()
             .that().resideOutsideOfPackages(ADYTON, PLATFORM_SECURITY_KEEPASSRPC)
             .should().dependOnClassesThat(secretMaterialTypes())
@@ -342,6 +349,11 @@ public class CorenthArchitectureRulesTest {
     @Test
     public void applicationMustNotHoldStaticState() {
         APPLICATION_MUST_NOT_HOLD_STATIC_STATE.check(corenthClasses);
+    }
+
+    @Test
+    public void acropolisAndChalcothecaMustNotSeeTheVault() {
+        ACROPOLIS_AND_CHALCOTHECA_MUST_NOT_SEE_THE_VAULT.check(corenthClasses);
     }
 
     @Test

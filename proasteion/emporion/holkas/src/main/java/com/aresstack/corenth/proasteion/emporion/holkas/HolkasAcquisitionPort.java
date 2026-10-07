@@ -1,8 +1,10 @@
 package com.aresstack.corenth.proasteion.emporion.holkas;
 
+import com.aresstack.corenth.adyton.AccessHandle;
 import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceKind;
 import com.aresstack.corenth.astu.VirtualResourceRef;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionCapability;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeContent;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeListing;
@@ -48,11 +50,104 @@ public final class HolkasAcquisitionPort implements AcquisitionPort {
         }
         VirtualResourceRef ref = new VirtualResourceRef(uri, VirtualResourceKind.DIRECTORY);
         ResourceConnector connector = connectorRegistry.require(uri.scheme());
-        ResourceListing listing = connector.list(ref);
+        return toBronze(uri, connector.list(ref));
+    }
+
+    /**
+     * Fetches content with a capability prepared by {@link BrokeredAcquisitionAccess}.
+     *
+     * <p>The capability's handle is passed to an {@link AuthenticatedResourceConnector} of the
+     * matching handle type. The caller keeps ownership of the capability and closes it.
+     */
+    @Override
+    public BronzeContent fetchContent(BookmarkUri uri, AcquisitionCapability capability) throws IOException {
+        if (capability == null) {
+            return fetchContent(uri);
+        }
+        if (uri == null) {
+            throw new IllegalArgumentException("uri must not be null");
+        }
+        VirtualResourceRef ref = new VirtualResourceRef(uri, VirtualResourceKind.FILE);
+        RawResource raw = authenticated(uri).fetchWith(ref, capability);
+        byte[] bytes = raw.content().bytes();
+        return new BronzeContent(uri, bytes, ContentHasher.digest(bytes), System.currentTimeMillis());
+    }
+
+    /**
+     * Lists children with a capability prepared by {@link BrokeredAcquisitionAccess}.
+     *
+     * @see #fetchContent(BookmarkUri, AcquisitionCapability)
+     */
+    @Override
+    public BronzeListing listChildren(BookmarkUri uri, AcquisitionCapability capability) throws IOException {
+        if (capability == null) {
+            return listChildren(uri);
+        }
+        if (uri == null) {
+            throw new IllegalArgumentException("uri must not be null");
+        }
+        VirtualResourceRef ref = new VirtualResourceRef(uri, VirtualResourceKind.DIRECTORY);
+        return toBronze(uri, authenticated(uri).listWith(ref, capability));
+    }
+
+    private AuthenticatedCall authenticated(BookmarkUri uri) throws IOException {
+        ResourceConnector connector = connectorRegistry.require(uri.scheme());
+        if (!(connector instanceof AuthenticatedResourceConnector)) {
+            throw new ResourceConnectorException("Connector for " + uri.scheme() + " does not accept prepared access");
+        }
+        return new AuthenticatedCall((AuthenticatedResourceConnector<?>) connector);
+    }
+
+    private static BronzeListing toBronze(BookmarkUri uri, ResourceListing listing) {
         List<BronzeListing.Entry> entries = new ArrayList<BronzeListing.Entry>();
         for (ResourceListingEntry entry : listing.entries()) {
             entries.add(new BronzeListing.Entry(entry.ref().uri(), entry.name(), entry.kind()));
         }
         return new BronzeListing(uri, entries, listing.observedAtMillis());
+    }
+
+    /** Unwraps a Holkas capability and checks its handle type against the connector. */
+    private static final class AuthenticatedCall {
+        private final AuthenticatedResourceConnector<?> connector;
+
+        AuthenticatedCall(AuthenticatedResourceConnector<?> connector) {
+            this.connector = connector;
+        }
+
+        RawResource fetchWith(VirtualResourceRef ref, AcquisitionCapability capability) throws IOException {
+            return fetch(connector, ref, capability);
+        }
+
+        ResourceListing listWith(VirtualResourceRef ref, AcquisitionCapability capability) throws IOException {
+            return list(connector, ref, capability);
+        }
+
+        private static <H extends AccessHandle> RawResource fetch(AuthenticatedResourceConnector<H> connector,
+                                                                 VirtualResourceRef ref,
+                                                                 AcquisitionCapability capability) throws IOException {
+            return connector.fetch(ref, handleOf(connector, capability));
+        }
+
+        private static <H extends AccessHandle> ResourceListing list(AuthenticatedResourceConnector<H> connector,
+                                                                    VirtualResourceRef ref,
+                                                                    AcquisitionCapability capability) throws IOException {
+            return connector.list(ref, handleOf(connector, capability));
+        }
+
+        private static <H extends AccessHandle> H handleOf(AuthenticatedResourceConnector<H> connector,
+                                                          AcquisitionCapability capability) throws IOException {
+            if (!(capability instanceof HandleCapability)) {
+                throw new ResourceConnectorException("Capability was not prepared by the Holkas access station");
+            }
+            HandleCapability prepared = (HandleCapability) capability;
+            if (prepared.isClosed()) {
+                throw new ResourceConnectorException("Capability is already closed");
+            }
+            AccessHandle handle = prepared.handle();
+            if (!connector.handleType().isInstance(handle)) {
+                throw new ResourceConnectorException("Prepared handle does not match the connector's handle type");
+            }
+            return connector.handleType().cast(handle);
+        }
     }
 }

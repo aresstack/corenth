@@ -22,6 +22,7 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -39,10 +40,18 @@ import java.util.List;
  *   <li>{@link MediatedResourceAccess} — mediated read: Tamias access decision, cached or
  *       acquired bronze content</li>
  *   <li>{@code tamias} {@link ResourcePolicy} — indexing rules with the actual size</li>
+ *   <li>{@code chalcotheca} — change detection against the indexed version; unchanged content
+ *       is neither extracted nor indexed again</li>
  *   <li>{@link ContentInspector} — detect and extract</li>
  *   <li>{@code anagraphai} — lexical indexing</li>
- *   <li>{@code chalcotheca} — snapshot for change detection</li>
+ *   <li>{@code chalcotheca} — record the indexed version</li>
  * </ol>
+ *
+ * <p>Every call records the executed steps in {@link ResourceProcessingPlan#standard()} order,
+ * the {@link ResourceProcessingOutcome} and a typed {@link ResourceProcessingFailure}
+ * (#10 Slice 4); {@link ResourceProcessingRunner} records runs over several resources.
+ * Authentication cancellation is {@code CANCELLED}, missing credentials and authentication
+ * failure are {@code FAILED} with their own reason codes (#10 Slice 3).
  *
  * <p>Outcome semantics for the mediated read:
  * <ul>
@@ -135,74 +144,117 @@ public final class ResourceLifecycleCoordinator {
     }
 
     /**
-     * Processes a single resource through the full pipeline.
+     * Processes a single resource through the full pipeline and records every executed step
+     * (#10 Slice 4).
      *
      * @param ref the resource reference to process
-     * @return the processing result
+     * @return the immutable processing record
      */
     public ProcessingResult process(VirtualResourceRef ref) {
+        Execution run = new Execution(ref);
         if (ref == null) {
-            return ProcessingResult.failed(null, "Resource reference must not be null");
+            return run.fail(ResourceProcessingFailure.Reason.INVALID_REQUEST, "Resource reference must not be null");
         }
 
         // 1. Indexing policy before acquisition (scheme, include/exclude patterns).
         //    The size is unknown at this point; size limits are enforced again after acquisition.
         PolicyReason preAcquisition = policy.evaluate(ref, ResourcePolicy.SIZE_UNKNOWN);
         if (preAcquisition.decision() == AcceptanceDecision.DENY) {
-            return cleanupAndReturn(ProcessingResult.denied(ref, preAcquisition.reason()));
+            run.stopped(ResourceProcessingStepType.INDEXING_POLICY_BEFORE_ACQUISITION, preAcquisition.reason());
+            return cleanupAfterStop(run, ResourceProcessingOutcome.DENIED, preAcquisition.reason(), null);
         }
+        run.completed(ResourceProcessingStepType.INDEXING_POLICY_BEFORE_ACQUISITION, preAcquisition.reason());
 
         // 2. Mediated acquisition through the archive counter (Tamias decides, Holkas stays hidden)
+        run.at(ResourceProcessingStepType.MEDIATED_ACQUISITION);
         MediatedResult<BronzeContent> access;
         try {
             access = mediatedAccess.readContent(new ResourceAccessRequest(
                     actor, ref.uri(), ResourceOperation.READ_CONTENT, LIFECYCLE_PURPOSE));
         } catch (RuntimeException e) {
-            return ProcessingResult.failed(ref, "Mediated access failed: " + e.getMessage());
+            return run.fail(ResourceProcessingFailure.Reason.MEDIATED_ACCESS_ERROR,
+                    "Mediated access failed: " + e.getMessage());
         }
         if (access == null) {
-            return ProcessingResult.failed(ref, "Mediated access returned no result");
+            return run.fail(ResourceProcessingFailure.Reason.MEDIATED_ACCESS_ERROR, "Mediated access returned no result");
         }
         if (!access.isSuccess()) {
             // Any withheld result that carries a Tamias decision is a DENIED outcome. This includes
             // ALLOW_CACHED_ONLY returned for FETCH_EXTERNAL on a cache miss, which the counter wraps
             // as a withheld result although the decision type itself counts as "allowed".
             if (access.decision() != null) {
-                return ProcessingResult.denied(ref, describe(access.decision()));
+                String reason = describe(access.decision());
+                run.stopped(ResourceProcessingStepType.MEDIATED_ACQUISITION, reason);
+                return run.finish(ResourceProcessingOutcome.DENIED, reason, null);
             }
-            return ProcessingResult.failed(ref, "Acquisition failed: " + access.errorMessage());
+            return failedAcquisition(run, access);
         }
         BronzeContent bronze = access.value();
         if (bronze == null) {
-            return ProcessingResult.failed(ref, "Mediated access returned no content");
+            return run.fail(ResourceProcessingFailure.Reason.MEDIATED_ACCESS_ERROR, "Mediated access returned no content");
         }
+        run.completed(ResourceProcessingStepType.MEDIATED_ACQUISITION, null);
 
         byte[] bytes = bronze.content();
 
         // 3. Indexing policy with the actual size (tamias)
         PolicyReason policyResult = policy.evaluate(ref, bytes.length);
         if (policyResult.decision() == AcceptanceDecision.DENY) {
-            return cleanupAndReturn(ProcessingResult.denied(ref, policyResult.reason()));
+            run.stopped(ResourceProcessingStepType.INDEXING_POLICY_WITH_SIZE, policyResult.reason());
+            return cleanupAfterStop(run, ResourceProcessingOutcome.DENIED, policyResult.reason(), null);
         }
+        run.completed(ResourceProcessingStepType.INDEXING_POLICY_WITH_SIZE, policyResult.reason());
 
-        // 4. The digest travels with the bronze content (chalcotheca)
+        // 4. Unchanged content needs neither extraction nor an index write (chalcotheca facts)
         ResourceDigest digest = bronze.digest();
-        String filenameHint = filenameHint(ref.uri());
+        if (!archive.hasChanged(ref, digest)) {
+            run.stopped(ResourceProcessingStepType.CHANGE_DETECTION, "indexed version is current");
+            return run.finish(ResourceProcessingOutcome.UNCHANGED, "content unchanged", null);
+        }
+        run.completed(ResourceProcessingStepType.CHANGE_DETECTION, "indexing required");
 
         // 5. Detect and extract content
+        String filenameHint = filenameHint(ref.uri());
+        run.at(ResourceProcessingStepType.CONTENT_INSPECTION);
         InspectionResult inspection = contentInspector.inspect(ref, bytes, filenameHint);
         if (!inspection.isSuccess()) {
-            return ProcessingResult.failed(ref, inspection.errorMessage());
+            return run.fail(ResourceProcessingFailure.Reason.INSPECTION_FAILED, inspection.errorMessage());
         }
+        LexicalDocument document = lexicalDocument(ref, filenameHint, inspection);
+        if (document == null) {
+            // Extraction succeeded but no text-bearing blocks remain
+            String reason = "No indexable text content after extraction";
+            run.stopped(ResourceProcessingStepType.CONTENT_INSPECTION, reason);
+            return cleanupAfterStop(run, ResourceProcessingOutcome.NO_EXTRACTABLE_CONTENT, reason,
+                    new ResourceProcessingFailure(ResourceProcessingFailure.Reason.NO_INDEXABLE_TEXT, reason));
+        }
+        run.completed(ResourceProcessingStepType.CONTENT_INSPECTION, inspection.mimeType());
 
-        // 6. Index via anagraphai — skip blocks with null/empty text
-        List<String> textBlocks = inspection.textBlocks();
+        // 6. Index via anagraphai
+        run.at(ResourceProcessingStepType.LEXICAL_INDEXING);
+        try {
+            lexicalIndex.index(document);
+            lexicalIndex.commit();
+        } catch (IOException e) {
+            return run.fail(ResourceProcessingFailure.Reason.INDEXING_FAILED, "Indexing failed: " + e.getMessage());
+        }
+        run.completed(ResourceProcessingStepType.LEXICAL_INDEXING, null);
+
+        // 7. Record the indexed version in the resource record
+        archive.store(new ResourceSnapshot(ref, digest, System.currentTimeMillis()));
+        run.completed(ResourceProcessingStepType.RECORD_UPDATE, null);
+
+        return run.finish(ResourceProcessingOutcome.INDEXED, "indexed successfully", null);
+    }
+
+    /** Builds the lexical document, or returns {@code null} if no text-bearing block remains. */
+    private LexicalDocument lexicalDocument(VirtualResourceRef ref, String filenameHint, InspectionResult inspection) {
         LexicalDocument.Builder docBuilder = LexicalDocument.builder(ref)
                 .title(filenameHint)
                 .contentType(inspection.mimeType());
 
         int chunkIndex = 0;
-        for (String text : textBlocks) {
+        for (String text : inspection.textBlocks()) {
             if (text != null && !text.isEmpty()) {
                 if (lexicalChunker != null) {
                     // Use sentence-aware, token-budgeted chunking
@@ -217,40 +269,89 @@ public final class ResourceLifecycleCoordinator {
                 }
             }
         }
-
-        if (chunkIndex == 0) {
-            // Extraction succeeded but no text-bearing blocks remain
-            return cleanupAndReturn(
-                    ProcessingResult.failed(ref, "No indexable text content after extraction"));
-        }
-
-        // 7. Check archive for unchanged content
-        if (!archive.hasChanged(ref, digest)) {
-            return ProcessingResult.unchanged(ref);
-        }
-
-        try {
-            lexicalIndex.index(docBuilder.build());
-            lexicalIndex.commit();
-        } catch (IOException e) {
-            return ProcessingResult.failed(ref, "Indexing failed: " + e.getMessage());
-        }
-
-        // 8. Record snapshot in archive
-        archive.store(new ResourceSnapshot(ref, digest, System.currentTimeMillis()));
-
-        return ProcessingResult.indexed(ref);
+        return chunkIndex == 0 ? null : docBuilder.build();
     }
 
-    private ProcessingResult cleanupAndReturn(ProcessingResult result) {
+    private static ProcessingResult failedAcquisition(Execution run, MediatedResult<BronzeContent> access) {
+        MediatedResult.Failure kind = access.failure() == null
+                ? MediatedResult.Failure.ACQUISITION_FAILED : access.failure();
+        switch (kind) {
+            case AUTHENTICATION_CANCELLED:
+                run.stopped(ResourceProcessingStepType.MEDIATED_ACQUISITION, "credential request cancelled");
+                return run.finish(ResourceProcessingOutcome.CANCELLED, "Credential request cancelled",
+                        new ResourceProcessingFailure(ResourceProcessingFailure.Reason.AUTHENTICATION_CANCELLED,
+                                access.errorMessage()));
+            case AUTHENTICATION_UNAVAILABLE:
+                return run.fail(ResourceProcessingFailure.Reason.AUTHENTICATION_UNAVAILABLE,
+                        "No credential available: " + access.errorMessage());
+            case AUTHENTICATION_FAILED:
+                return run.fail(ResourceProcessingFailure.Reason.AUTHENTICATION_FAILED,
+                        "Authentication failed: " + access.errorMessage());
+            case ACQUISITION_FAILED:
+            default:
+                return run.fail(ResourceProcessingFailure.Reason.ACQUISITION_FAILED,
+                        "Acquisition failed: " + access.errorMessage());
+        }
+    }
+
+    /**
+     * Removes stale lexical entries and withdraws the indexed-version fact after a lifecycle
+     * decision; the resource record and its history are kept (#33).
+     */
+    private ProcessingResult cleanupAfterStop(Execution run, ResourceProcessingOutcome outcome, String message,
+                                              ResourceProcessingFailure failure) {
+        VirtualResourceRef ref = run.ref;
         try {
-            lexicalIndex.remove(result.ref());
+            lexicalIndex.remove(ref);
             lexicalIndex.commit();
-            archive.remove(result.ref());
-            return result;
+            archive.remove(ref);
         } catch (IOException e) {
-            return ProcessingResult.failed(result.ref(),
-                    "Index cleanup failed: " + e.getMessage());
+            run.failed(ResourceProcessingStepType.DERIVED_STATE_CLEANUP, e.getMessage());
+            return run.finish(ResourceProcessingOutcome.FAILED, "Index cleanup failed: " + e.getMessage(),
+                    new ResourceProcessingFailure(ResourceProcessingFailure.Reason.CLEANUP_FAILED, e.getMessage()));
+        }
+        run.completed(ResourceProcessingStepType.DERIVED_STATE_CLEANUP, null);
+        return run.finish(outcome, message, failure);
+    }
+
+    /** Collects the executed steps of one resource and produces the immutable result. */
+    private static final class Execution {
+        private final VirtualResourceRef ref;
+        private final List<ResourceProcessingStep> steps = new ArrayList<ResourceProcessingStep>();
+        private ResourceProcessingStepType current;
+
+        Execution(VirtualResourceRef ref) {
+            this.ref = ref;
+        }
+
+        void at(ResourceProcessingStepType step) {
+            current = step;
+        }
+
+        void completed(ResourceProcessingStepType step, String detail) {
+            steps.add(ResourceProcessingStep.completed(step, detail));
+            current = null;
+        }
+
+        void stopped(ResourceProcessingStepType step, String detail) {
+            steps.add(ResourceProcessingStep.stopped(step, detail));
+            current = null;
+        }
+
+        void failed(ResourceProcessingStepType step, String detail) {
+            steps.add(ResourceProcessingStep.failed(step, detail));
+            current = null;
+        }
+
+        ProcessingResult fail(ResourceProcessingFailure.Reason reason, String message) {
+            if (current != null) {
+                failed(current, reason.name());
+            }
+            return finish(ResourceProcessingOutcome.FAILED, message, new ResourceProcessingFailure(reason, message));
+        }
+
+        ProcessingResult finish(ResourceProcessingOutcome outcome, String message, ResourceProcessingFailure failure) {
+            return ProcessingResult.of(ref, outcome, message, failure, steps);
         }
     }
 
