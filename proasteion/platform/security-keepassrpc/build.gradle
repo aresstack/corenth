@@ -5,4 +5,6 @@ dependencies {
     implementation project(':proasteion:emporion:holkas')
     implementation('com.aresstack:keepassrpc-java:0.1.0-beta.1')
     testImplementation 'junit:junit:4.13.2'
+    // Drive the real KeePassRPC client against a local WebSocket endpoint; same version the library uses at runtime.
+    testImplementation 'org.java-websocket:Java-WebSocket:1.5.2'
 }

@@ -29,25 +29,6 @@ public class KeePassRpcSecretMaterialProviderTest {
         assertEquals(0, material.secret().length);
     }
 
-    @Test
-    public void reflectiveLookupAdaptsMapResult() throws Exception {
-        ReflectiveKeePassRpcSecretLookup lookup = new ReflectiveKeePassRpcSecretLookup(new MapBackedKeePassClient());
-
-        KeePassRpcSecret secret = lookup.findSecret(request());
-
-        assertEquals("map-user", secret.principal());
-        assertArrayEquals("map-secret".toCharArray(), secret.secret());
-    }
-
-    public static final class MapBackedKeePassClient {
-        public java.util.Map<String, String> find(String refId) {
-            java.util.Map<String, String> result = new java.util.HashMap<String, String>();
-            result.put("username", "map-user");
-            result.put("password", "map-secret");
-            return result;
-        }
-    }
-
     private static AccessRequest request() {
         return new AccessRequest(
                 new SecretRef("keepass://corenth/wiki"),

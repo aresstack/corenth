@@ -170,6 +170,7 @@ exposure to the `AuthenticationStrategy` implementation — connectors never see
 | `AccessException` | _new_ | Base checked exception for broker operations |
 | `SecretUnavailableException` | `KeePassNotAvailableException` et al. | Unified "access denied or unavailable" |
 | `AuthCancelledException` | `AuthCancelledException` | User-initiated cancellation (subtype) |
+| `SecretReleaseDeniedException` | _new_ | Owner explicitly refused to release the secret (subtype; secret-source chains must stop, not fall through) |
 
 ## Design principles
 
