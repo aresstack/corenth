@@ -167,7 +167,10 @@ public final class NaturalSourceParser implements SourceParser {
             label = null;
             while (p < tokens.size()) {
                 NaturalToken token = tokens.get(p);
-                if (token.isWord() && STATEMENT_LABEL.matcher(token.text()).matches() && !token.is(".")) {
+                if (token.is("END.")) {
+                    return false;
+                }
+                if (token.isWord() && STATEMENT_LABEL.matcher(token.text()).matches()) {
                     label = normalizeLabel(token.text());
                     p++;
                 } else if (token.is("THEN") || token.is("ELSE")) {

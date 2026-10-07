@@ -362,4 +362,13 @@ public class NaturalSourceParserTest {
         }
         throw new AssertionError("relations must be immutable");
     }
+
+    @Test
+    void endWithPeriodOrLonePeriod_stopsTheProgram() {
+        ProgramStructure endPeriod = parse("P", lines("CALLNAT 'IN'", "END.", "CALLNAT 'OUT'"));
+        ProgramStructure lonePeriod = parse("P", lines("CALLNAT 'IN'", ".", "CALLNAT 'OUT'"));
+
+        assertEquals(Collections.singletonList("L1 PROGRAM P CALLS EXTERNAL PROGRAM IN via CALLNAT"), relations(endPeriod));
+        assertEquals(Collections.singletonList("L1 PROGRAM P CALLS EXTERNAL PROGRAM IN via CALLNAT"), relations(lonePeriod));
+    }
 }
