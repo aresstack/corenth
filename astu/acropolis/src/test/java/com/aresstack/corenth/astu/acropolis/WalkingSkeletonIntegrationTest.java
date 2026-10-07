@@ -278,7 +278,7 @@ public class WalkingSkeletonIntegrationTest {
         ProcessingResult result = sizeLimited(boundedCounter, archive, 16).process(ref);
 
         assertEquals(ProcessingResult.Status.DENIED, result.status());
-        assertTrue(result.message(), result.message().contains("TOO_LARGE"));
+        assertTrue(result.message(), result.message().startsWith("SIZE_OVER_LIMIT"));
         assertEquals("the acquisition is bounded by the Tamias limit", Arrays.asList(16L), port.limits);
         assertEquals("never read unbounded", 0, port.unboundedFetches);
         assertFalse("no oversized payload is cached", boundedCounter.hasCachedContent(ref.uri()));

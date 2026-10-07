@@ -20,7 +20,19 @@ public enum IndexReasonCode {
     /** The resource is gone at its source and nothing is recorded as indexed. */
     REMOVED_NOT_INDEXED(IndexAction.NONE),
     /** The resource is neither recorded nor present; nothing to index or withdraw. */
-    NOT_FOUND(IndexAction.NONE);
+    NOT_FOUND(IndexAction.NONE),
+    /**
+     * The indexing, scope or size policy no longer admits the resource while a version is
+     * recorded as indexed (#10 Slice 5).
+     */
+    NOT_ADMITTED_WHILE_INDEXED(IndexAction.WITHDRAW),
+    /** The policies do not admit the resource and its record holds no indexed version. */
+    NOT_ADMITTED_NOT_INDEXED(IndexAction.NONE),
+    /**
+     * The policies do not admit the resource and no record exists, so an index entry from an
+     * earlier, unrecorded run cannot be ruled out; withdrawing is idempotent.
+     */
+    NOT_ADMITTED_UNRECORDED(IndexAction.WITHDRAW);
 
     private final IndexAction action;
 

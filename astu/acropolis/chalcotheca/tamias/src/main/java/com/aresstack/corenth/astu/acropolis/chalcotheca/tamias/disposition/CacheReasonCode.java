@@ -14,7 +14,12 @@ public enum CacheReasonCode {
     /** The resource is gone at its source. */
     REMOVED_AT_SOURCE(CacheAction.INVALIDATE),
     /** The resource is neither recorded nor present at its source. */
-    NOT_FOUND_AT_SOURCE(CacheAction.INVALIDATE);
+    NOT_FOUND_AT_SOURCE(CacheAction.INVALIDATE),
+    /**
+     * The policies do not admit the resource for indexing; admission concerns derived index
+     * state, so a cached payload stays (#10 Slice 5).
+     */
+    NOT_ADMITTED(CacheAction.RETAIN);
 
     private final CacheAction action;
 

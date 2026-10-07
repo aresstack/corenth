@@ -63,7 +63,7 @@ Change is measured against the latest **observed** version, not the indexed one.
 
 | Type | Purpose |
 |------|---------|
-| `DerivativeDispositionPolicy` | Maps a `ChangeDecision` to separate cache and index decisions |
+| `DerivativeDispositionPolicy` | Maps a `ChangeDecision` to separate cache and index decisions; `decideNotAdmitted` maps a resource-level rejection (`PolicyReason` `DENY`, rejected `ScopeDecision`) to `RETAIN/NOT_ADMITTED` and `WITHDRAW/NOT_ADMITTED_WHILE_INDEXED`, `NONE/NOT_ADMITTED_NOT_INDEXED` or `WITHDRAW/NOT_ADMITTED_UNRECORDED` (#10 Slice 5). Actor- or request-specific access decisions never reach it. |
 | `DerivativeDisposition` | Immutable plan: `CacheAction` (`RETAIN`, `REFRESH`, `INVALIDATE`) and `IndexAction` (`INDEX`, `REINDEX`, `RETAIN`, `WITHDRAW`, `NONE`) with `CacheReasonCode`/`IndexReasonCode` |
 
 Key cases: unchanged content without an indexed fact, or with an older indexed version, requires `REINDEX`; a tombstoned resource is withdrawn only if a version is still indexed.

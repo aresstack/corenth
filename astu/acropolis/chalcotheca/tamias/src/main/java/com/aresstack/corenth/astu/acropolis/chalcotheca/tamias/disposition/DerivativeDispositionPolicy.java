@@ -1,7 +1,10 @@
 package com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.disposition;
 
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.AcceptanceDecision;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PolicyReason;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.ChangeDecision;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.ResourceRecordFacts;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.scope.ScopeDecision;
 
 /**
  * Maps a {@link ChangeDecision} and the record facts it carries to a {@link DerivativeDisposition}.
@@ -20,7 +23,15 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.ResourceRe
  *       {@code NONE/REMOVED_NOT_INDEXED}.</li>
  *   <li>{@code NOT_FOUND}: cache {@code INVALIDATE/NOT_FOUND_AT_SOURCE}, index {@code NONE/NOT_FOUND}.</li>
  * </ul>
- * A reappearance after a tombstone is treated by its content kind ({@code UNCHANGED} or
+ * A resource the indexing, scope or size policy does not admit is decided by
+ * {@link #decideNotAdmitted(ResourceRecordFacts, PolicyReason)} and
+ * {@link #decideNotAdmitted(ResourceRecordFacts, ScopeDecision)}: cache {@code RETAIN/NOT_ADMITTED};
+ * index {@code WITHDRAW/NOT_ADMITTED_WHILE_INDEXED} if a version is indexed,
+ * {@code NONE/NOT_ADMITTED_NOT_INDEXED} if the record holds none, and
+ * {@code WITHDRAW/NOT_ADMITTED_UNRECORDED} without a record. An actor- or request-specific access
+ * decision is no admission decision and never reaches this mapping.
+ *
+ * <p>A reappearance after a tombstone is treated by its content kind ({@code UNCHANGED} or
  * {@code CHANGED}); clearing the tombstone is Chalcotheca's {@code observe} transition.
  *
  * <p>Pure and stateless; no cache presence, no persistence, no execution.
@@ -52,6 +63,42 @@ public final class DerivativeDispositionPolicy {
             default:
                 throw new IllegalStateException("unhandled change kind " + change.kind());
         }
+    }
+
+    /**
+     * Maps a resource-level indexing-policy rejection (scheme, include or exclude pattern) to a
+     * disposition (#10 Slice 5).
+     *
+     * @param record  the record facts, or {@code null} if the resource has no record
+     * @param verdict the indexing-policy outcome; must be {@code DENY}
+     * @return the disposition for caches and index entries
+     */
+    public DerivativeDisposition decideNotAdmitted(ResourceRecordFacts record, PolicyReason verdict) {
+        if (verdict == null || verdict.decision() != AcceptanceDecision.DENY) {
+            throw new IllegalArgumentException("verdict must be a DENY");
+        }
+        return notAdmitted(record, verdict.reason());
+    }
+
+    /**
+     * Maps a rejecting scope or size decision to a disposition (#10 Slice 5).
+     *
+     * @param record   the record facts, or {@code null} if the resource has no record
+     * @param decision the scope or size decision; must be rejected
+     * @return the disposition for caches and index entries
+     */
+    public DerivativeDisposition decideNotAdmitted(ResourceRecordFacts record, ScopeDecision decision) {
+        if (decision == null || !decision.isRejected()) {
+            throw new IllegalArgumentException("decision must be rejected");
+        }
+        return notAdmitted(record, decision.reasonCode() + ": " + decision.explanation());
+    }
+
+    private static DerivativeDisposition notAdmitted(ResourceRecordFacts record, String rejection) {
+        IndexReasonCode index = record == null ? IndexReasonCode.NOT_ADMITTED_UNRECORDED
+                : record.isIndexed() ? IndexReasonCode.NOT_ADMITTED_WHILE_INDEXED
+                : IndexReasonCode.NOT_ADMITTED_NOT_INDEXED;
+        return DerivativeDisposition.notAdmitted(rejection, CacheReasonCode.NOT_ADMITTED, index);
     }
 
     private static IndexReasonCode indexReasonForUnchanged(ResourceRecordFacts record) {

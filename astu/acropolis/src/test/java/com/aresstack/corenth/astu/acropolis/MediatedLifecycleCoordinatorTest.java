@@ -326,6 +326,68 @@ public class MediatedLifecycleCoordinatorTest {
         assertTrue("an access denial alone does not withdraw the index entry", index.indexed.contains(DOC));
     }
 
+    // ── Resource-level admission vs. actor-level access (#5, #10 Slice 5) ──
+
+    @Test
+    public void indexingPolicyDenyAfterIndexing_withdrawsThroughTheTamiasDisposition() {
+        RecordingMediatedAccess access = new RecordingMediatedAccess();
+        RecordingLexicalIndex index = new RecordingLexicalIndex();
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        access.nextContent = MediatedResult.success(bronze(DOC_URI, "indexed before the exclusion"),
+                ResourceAccessDecision.allow());
+        assertEquals(ProcessingResult.Status.INDEXED, coordinator(access, acceptAll(), index, archive).process(DOC).status());
+
+        ProcessingResult excluded = coordinator(access, excludeAll(), index, archive).process(DOC);
+
+        assertEquals(ProcessingResult.Status.DENIED, excluded.status());
+        assertFalse(index.indexed.contains(DOC));
+        assertTrue(step(excluded, ResourceProcessingStepType.DERIVED_STATE_CLEANUP).detail(),
+                step(excluded, ResourceProcessingStepType.DERIVED_STATE_CLEANUP).detail()
+                        .contains("NOT_ADMITTED_WHILE_INDEXED"));
+        ArchivedResource record = archive.records().findByRef(DOC);
+        assertFalse(record.isIndexed());
+        assertEquals("#33: the history stays", 1, record.versions().size());
+        assertTrue("admission concerns the index, the payload stays cached", access.invalidated.isEmpty());
+    }
+
+    @Test
+    public void indexingPolicyDeny_withoutIndexedVersion_withdrawsNothing() {
+        RecordingMediatedAccess access = new RecordingMediatedAccess();
+        RecordingLexicalIndex index = new RecordingLexicalIndex();
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        access.nextContent = MediatedResult.success(bronze(DOC_URI, "indexed, then withdrawn"),
+                ResourceAccessDecision.allow());
+        coordinator(access, acceptAll(), index, archive).process(DOC);
+        coordinator(access, excludeAll(), index, archive).process(DOC);
+        index.removed.clear();
+
+        ProcessingResult again = coordinator(access, excludeAll(), index, archive).process(DOC);
+
+        assertEquals(ProcessingResult.Status.DENIED, again.status());
+        assertTrue("NONE/NOT_ADMITTED_NOT_INDEXED touches no index", index.removed.isEmpty());
+        for (ResourceProcessingStep step : again.steps()) {
+            assertNotEquals(ResourceProcessingStepType.DERIVED_STATE_CLEANUP, step.type());
+        }
+    }
+
+    @Test
+    public void sizeRejectionAfterIndexing_withdrawsThroughTheSameDispositionPath() {
+        RecordingMediatedAccess access = new RecordingMediatedAccess();
+        RecordingLexicalIndex index = new RecordingLexicalIndex();
+        access.nextContent = MediatedResult.success(bronze(DOC_URI, "small"), ResourceAccessDecision.allow());
+        ResourceLifecycleCoordinator sized = sized(access, ResourceSizePolicy.maxBytes(10), index);
+        assertEquals(ProcessingResult.Status.INDEXED, sized.process(DOC).status());
+
+        access.nextContent = MediatedResult.success(bronze(DOC_URI, "grown beyond ten bytes"),
+                ResourceAccessDecision.allow());
+        ProcessingResult rejected = sized.process(DOC);
+
+        assertEquals(ProcessingResult.Status.DENIED, rejected.status());
+        assertEquals("index entry withdrawn (NOT_ADMITTED_WHILE_INDEXED)",
+                step(rejected, ResourceProcessingStepType.DERIVED_STATE_CLEANUP).detail());
+        assertFalse(index.indexed.contains(DOC));
+    }
+
     /**
      * Former {@code knownGap_blacklistedAfterIndexing_staysInTheIndex_untilAWithdrawalPathExists},
      * part 2 (#10 Slice 5): after the explicit {@code deleteEntry} decision the record carries a
@@ -527,6 +589,12 @@ public class MediatedLifecycleCoordinatorTest {
             }
         }
         throw new AssertionError("no step " + type + " in " + result.steps());
+    }
+
+    private static ResourcePolicy excludeAll() {
+        return new PatternResourcePolicy(Arrays.asList(new IndexingRule(
+                "exclude-all", Collections.<String>emptyList(), Arrays.asList("**/*"),
+                Arrays.asList("**/*"), Long.MAX_VALUE)));
     }
 
     private static ResourcePolicy acceptAll() {
