@@ -186,6 +186,29 @@ public class CorenthArchitectureRulesTest {
                     ADYTON)
             .because("Anagraphai is the lexical register and must not know semantic indexes, policy, lifecycle, adapters, or secrets");
 
+    private static final ArchRule PINAKES_MUST_STAY_SEMANTIC_REGISTER = noClasses()
+            .that().resideInAnyPackage(PINAKES)
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    PROASTEION,
+                    ACROPOLIS_ROOT,
+                    CHALCOTHECA_ROOT,
+                    TAMIAS,
+                    PROPYLAEA,
+                    ADYTON,
+                    "javax.swing..",
+                    "java.awt..",
+                    "javafx..",
+                    "org.apache.lucene..",
+                    "ai.onnxruntime..",
+                    "com.aresstack.windirectml..",
+                    "com.sun.jna..",
+                    "okhttp3..",
+                    "java.net.http..",
+                    "org.apache.http..",
+                    "org.apache.hc..")
+            .because("Pinakes holds semantic ports and reference code only; embedding/rerank runtimes, HTTP clients and "
+                    + "Lucene stay in adapters or in Anagraphai, and Pinakes knows no policy, lifecycle, secrets or UI");
+
     private static final ArchRule EXEDRA_MUST_STAY_THIN_UI_SHELL = noClasses()
             .that().resideInAnyPackage(EXEDRA)
             .should().dependOnClassesThat().resideInAnyPackage(
@@ -342,6 +365,11 @@ public class CorenthArchitectureRulesTest {
     @Test
     public void anagraphaiMustStayLexicalOnly() {
         ANAGRAPHAI_MUST_STAY_LEXICAL_ONLY.check(corenthClasses);
+    }
+
+    @Test
+    public void pinakesMustStaySemanticRegister() {
+        PINAKES_MUST_STAY_SEMANTIC_REGISTER.check(corenthClasses);
     }
 
     @Test
