@@ -73,8 +73,9 @@ import java.util.List;
  *
  * <p>Every call records the executed steps, the {@link ResourceProcessingOutcome} and a typed
  * {@link ResourceProcessingFailure} (#10 Slice 4); {@link ResourceProcessingRunner} records runs
- * over several resources. Authentication cancellation is {@code CANCELLED}, missing credentials
- * and authentication failure are {@code FAILED} with their own reason codes (#10 Slice 3).
+ * over several resources. Authentication cancellation is {@code CANCELLED}, a refused credential
+ * release is {@code DENIED} (#43), missing credentials and authentication failure are
+ * {@code FAILED} with their own reason codes (#10 Slice 3).
  *
  * <p>Outcome semantics:
  * <ul>
@@ -238,7 +239,8 @@ public final class ResourceLifecycleCoordinator {
         } else if (failureOf(metadata) == MediatedResult.Failure.SOURCE_ABSENT) {
             run.stopped(ResourceProcessingStepType.SOURCE_METADATA, "source reports the resource absent");
             return sourceAbsent(run, records.findByRef(ref));
-        } else if (failureOf(metadata) == MediatedResult.Failure.AUTHENTICATION_CANCELLED) {
+        } else if (failureOf(metadata) == MediatedResult.Failure.AUTHENTICATION_CANCELLED
+                || failureOf(metadata) == MediatedResult.Failure.AUTHENTICATION_DENIED) {
             return failedAcquisition(run, ResourceProcessingStepType.SOURCE_METADATA, metadata);
         } else {
             run.completed(ResourceProcessingStepType.SOURCE_METADATA, "size unknown");
@@ -472,6 +474,11 @@ public final class ResourceLifecycleCoordinator {
                 return run.finish(ResourceProcessingOutcome.CANCELLED, "Credential request cancelled",
                         new ResourceProcessingFailure(ResourceProcessingFailure.Reason.AUTHENTICATION_CANCELLED,
                                 access.errorMessage()));
+            case AUTHENTICATION_DENIED:
+                // A refused release is a decision about this request, not a failure; derived state stays
+                run.stopped(step, "credential release denied");
+                return run.finish(ResourceProcessingOutcome.DENIED,
+                        "Credential release denied: " + access.errorMessage(), null);
             case AUTHENTICATION_UNAVAILABLE:
                 return run.fail(ResourceProcessingFailure.Reason.AUTHENTICATION_UNAVAILABLE,
                         "No credential available: " + access.errorMessage());

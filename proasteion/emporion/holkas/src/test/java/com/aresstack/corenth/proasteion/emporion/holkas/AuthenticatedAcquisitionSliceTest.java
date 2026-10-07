@@ -11,6 +11,7 @@ import com.aresstack.corenth.adyton.SecretCachePolicy;
 import com.aresstack.corenth.adyton.SecretMaterial;
 import com.aresstack.corenth.adyton.SecretMaterialFactory;
 import com.aresstack.corenth.adyton.SecretMaterialProvider;
+import com.aresstack.corenth.adyton.SecretReleaseDeniedException;
 import com.aresstack.corenth.adyton.SecretUnavailableException;
 import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.ResourceScheme;
@@ -122,6 +123,20 @@ public class AuthenticatedAcquisitionSliceTest {
     }
 
     @Test
+    public void refusedSecretRelease_isATypedDenial_distinctFromUnavailableAndCancelled() {
+        CountingProvider provider = new CountingProvider(false, false);
+        provider.refuse = true;
+        Fixture fixture = new Fixture(provider);
+
+        MediatedResult<BronzeContent> result = fixture.counter.readContent(read(FTP_MEMBER));
+
+        assertEquals(MediatedResult.Failure.AUTHENTICATION_DENIED, result.failure());
+        assertNull("a refused release is no Tamias decision", result.decision());
+        assertFalse(result.errorMessage().contains(CountingProvider.REFUSAL_DETAIL));
+        assertEquals(0, fixture.session.reads);
+    }
+
+    @Test
     public void rejectedAuthentication_isATypedOutcome_andLeaksNoExceptionDetail() {
         Fixture fixture = new Fixture(new CountingProvider(false, false));
         fixture.strategy.reject = true;
@@ -203,7 +218,9 @@ public class AuthenticatedAcquisitionSliceTest {
 
     private static final class CountingProvider implements SecretMaterialProvider {
         private final boolean cancel;
+        static final String REFUSAL_DETAIL = "owner refused entry for this request";
         private final boolean unavailable;
+        boolean refuse;
         int resolveCalls;
 
         CountingProvider(boolean cancel, boolean unavailable) {
@@ -219,6 +236,9 @@ public class AuthenticatedAcquisitionSliceTest {
             }
             if (unavailable) {
                 throw new SecretUnavailableException("no entry");
+            }
+            if (refuse) {
+                throw new SecretReleaseDeniedException(REFUSAL_DETAIL);
             }
             return SecretMaterialFactory.fromSecret(request.credentialRef(), request.principal(), "test-only".toCharArray());
         }

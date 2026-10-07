@@ -128,6 +128,20 @@ public class LifecycleRunRecordingTest {
     }
 
     @Test
+    public void refusedCredentialRelease_isDenied_withoutFailureOrCleanup() {
+        Fixture fixture = new Fixture();
+        fixture.access.failure = MediatedResult.Failure.AUTHENTICATION_DENIED;
+
+        ProcessingResult result = fixture.lifecycle.process(ref("a.txt"));
+
+        assertEquals(ResourceProcessingOutcome.DENIED, result.outcome());
+        assertNull(result.failure());
+        assertEquals(MEDIATED_ACQUISITION, last(result).type());
+        assertEquals(ResourceProcessingStep.Status.STOPPED, last(result).status());
+        assertEquals(0, fixture.index.writes);
+    }
+
+    @Test
     public void failedIndexWrite_isRecordedOnTheIndexingStep() {
         Fixture fixture = new Fixture();
         fixture.access.put("a.txt", "alpha");

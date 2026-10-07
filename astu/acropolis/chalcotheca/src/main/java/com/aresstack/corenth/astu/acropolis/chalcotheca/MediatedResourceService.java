@@ -442,6 +442,8 @@ public final class MediatedResourceService implements MediatedResourceAccess {
                 return MediatedResult.failure(MediatedResult.Failure.AUTHENTICATION_UNAVAILABLE, access.detail());
             case CANCELLED:
                 return MediatedResult.failure(MediatedResult.Failure.AUTHENTICATION_CANCELLED, access.detail());
+            case DENIED:
+                return MediatedResult.failure(MediatedResult.Failure.AUTHENTICATION_DENIED, access.detail());
             case FAILED:
             default:
                 return MediatedResult.failure(MediatedResult.Failure.AUTHENTICATION_FAILED, access.detail());
