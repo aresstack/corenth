@@ -10,6 +10,7 @@ import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.ResourceScheme;
 import com.aresstack.corenth.astu.VirtualResourceKind;
 import com.aresstack.corenth.astu.VirtualResourceRef;
+import com.aresstack.corenth.proasteion.emporion.holkas.AuthenticatedResourceConnector;
 import com.aresstack.corenth.proasteion.emporion.holkas.RawResource;
 import com.aresstack.corenth.proasteion.emporion.holkas.RawResourceContent;
 import com.aresstack.corenth.proasteion.emporion.holkas.RawResourceMetadata;
@@ -36,7 +37,7 @@ import java.util.List;
 /**
  * MVS resource connector backed by broker-managed access handles.
  */
-public final class FtpMvsResourceConnector implements ResourceConnector {
+public final class FtpMvsResourceConnector implements AuthenticatedResourceConnector<FtpAccessHandle> {
 
     private final AccessBroker accessBroker;
     private final AccessRequest accessRequest;
@@ -97,14 +98,7 @@ public final class FtpMvsResourceConnector implements ResourceConnector {
                         @Override
                         public RawResource execute(FtpAccessHandle handle) throws AccessException {
                             try {
-                                MvsLocation location = bookmarkMapper.locationOf(ref.uri());
-                                FtpClientSession session = handle.openSession(routePlan);
-                                byte[] bytes = session.readBytes(location, ResourceReadMode.DEFAULT);
-                                RawResourceContent content = new RawResourceContent(bytes);
-                                RawResourceMetadata metadata = new RawResourceMetadata(
-                                        location.displayName(), null, content.sizeBytes(), 0L,
-                                        System.currentTimeMillis(), VirtualResourceKind.FILE);
-                                return new RawResource(ref, content, metadata);
+                                return fetchWith(ref, handle, routePlan);
                             } catch (IOException e) {
                                 throw new AccessException("MVS fetch failed", e);
                             }
@@ -127,17 +121,7 @@ public final class FtpMvsResourceConnector implements ResourceConnector {
                         @Override
                         public ResourceListing execute(FtpAccessHandle handle) throws AccessException {
                             try {
-                                MvsLocation parent = bookmarkMapper.locationOf(ref.uri());
-                                FtpClientSession session = handle.openSession(routePlan);
-                                List<String> names = session.listNames(parent);
-                                List<MvsListingEntry> mapped = listingMapper.mapNames(parent, names);
-                                List<ResourceListingEntry> entries = new ArrayList<ResourceListingEntry>();
-                                for (MvsListingEntry entry : mapped) {
-                                    BookmarkUri childUri = bookmarkMapper.childUri(ref.uri(), entry.location());
-                                    VirtualResourceRef childRef = new VirtualResourceRef(childUri, entry.kind());
-                                    entries.add(new ResourceListingEntry(childRef, entry.name(), entry.kind(), null));
-                                }
-                                return new ResourceListing(ref, entries, System.currentTimeMillis());
+                                return listWith(ref, handle, routePlan);
                             } catch (IOException e) {
                                 throw new AccessException("MVS list failed", e);
                             }
@@ -147,6 +131,66 @@ public final class FtpMvsResourceConnector implements ResourceConnector {
             throw new ResourceConnectorException("MVS access cancelled", e);
         } catch (AccessException e) {
             throw new ResourceConnectorException(e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public Class<FtpAccessHandle> handleType() {
+        return FtpAccessHandle.class;
+    }
+
+    /**
+     * Fetches with a handle prepared by the archive counter's access station (#10 Slice 3).
+     * The handle stays open; its owner closes it.
+     */
+    @Override
+    public RawResource fetch(VirtualResourceRef ref, FtpAccessHandle handle) throws IOException {
+        validateRef(ref);
+        validateHandle(handle);
+        return fetchWith(ref, handle, planRoute(ref, "fetch"));
+    }
+
+    /**
+     * Lists with a handle prepared by the archive counter's access station (#10 Slice 3).
+     * The handle stays open; its owner closes it.
+     */
+    @Override
+    public ResourceListing list(VirtualResourceRef ref, FtpAccessHandle handle) throws IOException {
+        validateRef(ref);
+        validateHandle(handle);
+        return listWith(ref, handle, planRoute(ref, "list"));
+    }
+
+    private RawResource fetchWith(VirtualResourceRef ref, FtpAccessHandle handle, NetworkRoutePlan routePlan)
+            throws IOException {
+        MvsLocation location = bookmarkMapper.locationOf(ref.uri());
+        FtpClientSession session = handle.openSession(routePlan);
+        byte[] bytes = session.readBytes(location, ResourceReadMode.DEFAULT);
+        RawResourceContent content = new RawResourceContent(bytes);
+        RawResourceMetadata metadata = new RawResourceMetadata(
+                location.displayName(), null, content.sizeBytes(), 0L,
+                System.currentTimeMillis(), VirtualResourceKind.FILE);
+        return new RawResource(ref, content, metadata);
+    }
+
+    private ResourceListing listWith(VirtualResourceRef ref, FtpAccessHandle handle, NetworkRoutePlan routePlan)
+            throws IOException {
+        MvsLocation parent = bookmarkMapper.locationOf(ref.uri());
+        FtpClientSession session = handle.openSession(routePlan);
+        List<String> names = session.listNames(parent);
+        List<MvsListingEntry> mapped = listingMapper.mapNames(parent, names);
+        List<ResourceListingEntry> entries = new ArrayList<ResourceListingEntry>();
+        for (MvsListingEntry entry : mapped) {
+            BookmarkUri childUri = bookmarkMapper.childUri(ref.uri(), entry.location());
+            VirtualResourceRef childRef = new VirtualResourceRef(childUri, entry.kind());
+            entries.add(new ResourceListingEntry(childRef, entry.name(), entry.kind(), null));
+        }
+        return new ResourceListing(ref, entries, System.currentTimeMillis());
+    }
+
+    private static void validateHandle(FtpAccessHandle handle) {
+        if (handle == null) {
+            throw new IllegalArgumentException("handle must not be null");
         }
     }
 

@@ -33,4 +33,39 @@ public interface AcquisitionPort {
      * @throws IOException if listing fails
      */
     BronzeListing listChildren(BookmarkUri uri) throws IOException;
+
+    /**
+     * Fetches content with a prepared authentication capability (#10 Slice 3).
+     *
+     * <p>Ports without authenticated sources keep the default: without a capability it
+     * delegates to {@link #fetchContent(BookmarkUri)}, with one it refuses the acquisition.
+     * The caller owns and closes the capability.
+     *
+     * @param uri the resource to acquire
+     * @param capability the prepared capability, or {@code null} if none is required
+     * @return the acquired bronze content
+     * @throws IOException if acquisition fails or the capability is not supported
+     */
+    default BronzeContent fetchContent(BookmarkUri uri, AcquisitionCapability capability) throws IOException {
+        if (capability != null) {
+            throw new IOException("This acquisition port does not support authenticated acquisition");
+        }
+        return fetchContent(uri);
+    }
+
+    /**
+     * Lists children with a prepared authentication capability (#10 Slice 3).
+     *
+     * @param uri the container resource to list
+     * @param capability the prepared capability, or {@code null} if none is required
+     * @return the bronze listing
+     * @throws IOException if listing fails or the capability is not supported
+     * @see #fetchContent(BookmarkUri, AcquisitionCapability)
+     */
+    default BronzeListing listChildren(BookmarkUri uri, AcquisitionCapability capability) throws IOException {
+        if (capability != null) {
+            throw new IOException("This acquisition port does not support authenticated acquisition");
+        }
+        return listChildren(uri);
+    }
 }

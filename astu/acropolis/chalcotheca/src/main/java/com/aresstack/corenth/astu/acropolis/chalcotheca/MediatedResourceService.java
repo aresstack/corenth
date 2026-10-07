@@ -27,7 +27,12 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Acquisition is a separate controlled decision: when a cache miss occurs,
  * the service issues a second {@link ResourceOperation#FETCH_EXTERNAL} request
- * to Tamias before invoking the internal {@link AcquisitionPort}.
+ * to Tamias before invoking the internal {@link AcquisitionPort}. {@code ALLOW} and
+ * {@code REQUIRE_AUTH} permit acquisition; the {@link AcquisitionAccessPort} then prepares it
+ * (#10 Slice 3). Unauthenticated sources need no capability and never reach the vault; an
+ * authenticated source receives an opaque {@link AcquisitionCapability} that the counter passes
+ * to the port and closes afterwards. Cancellation, missing credentials and authentication
+ * failure are typed {@link MediatedResult.Failure}s, distinct from policy denial.
  *
  * <p>Lifecycle use cases depend on the {@link MediatedResourceAccess} contract that this
  * service implements, not on this class, so that the composition point decides how the
@@ -48,6 +53,7 @@ public final class MediatedResourceService implements MediatedResourceAccess {
     private final ResourceAccessPolicy accessPolicy;
     private final AcquisitionPort acquisitionPort;
     private final ResourceArchive archive;
+    private final AcquisitionAccessPort accessPreparation;
 
     // In-memory bronze state stores without TTL or invalidation; see the known-limitation note
     // in the class Javadoc (consolidated against the #33 record/version contract and #5 invalidation).
@@ -55,15 +61,33 @@ public final class MediatedResourceService implements MediatedResourceAccess {
     private final Map<BookmarkUri, BronzeContent> contentCache = new ConcurrentHashMap<BookmarkUri, BronzeContent>();
     private final Map<BookmarkUri, BronzeMetadata> metadataCache = new ConcurrentHashMap<BookmarkUri, BronzeMetadata>();
 
+    /**
+     * Creates a counter for compositions without authenticated sources.
+     *
+     * @see AcquisitionAccessPort#unauthenticated()
+     */
     public MediatedResourceService(ResourceAccessPolicy accessPolicy,
                                    AcquisitionPort acquisitionPort,
                                    ResourceArchive archive) {
+        this(accessPolicy, acquisitionPort, archive, AcquisitionAccessPort.unauthenticated());
+    }
+
+    /**
+     * Creates a counter that prepares every external acquisition through the given access port
+     * (#10 Slice 3).
+     */
+    public MediatedResourceService(ResourceAccessPolicy accessPolicy,
+                                   AcquisitionPort acquisitionPort,
+                                   ResourceArchive archive,
+                                   AcquisitionAccessPort accessPreparation) {
         if (accessPolicy == null) throw new IllegalArgumentException("accessPolicy must not be null");
         if (acquisitionPort == null) throw new IllegalArgumentException("acquisitionPort must not be null");
         if (archive == null) throw new IllegalArgumentException("archive must not be null");
+        if (accessPreparation == null) throw new IllegalArgumentException("accessPreparation must not be null");
         this.accessPolicy = accessPolicy;
         this.acquisitionPort = acquisitionPort;
         this.archive = archive;
+        this.accessPreparation = accessPreparation;
     }
 
     /**
@@ -112,24 +136,16 @@ public final class MediatedResourceService implements MediatedResourceAccess {
             return MediatedResult.success(cached, decision);
         }
 
-        // Cache miss: check if external acquisition is allowed (Fix 2)
-        // Only strict ALLOW permits external fetch; ALLOW_CACHED_ONLY, REQUIRE_AUTH,
-        // REQUIRE_SOURCE_CHECK, and DENY must all block acquisition.
-        ResourceAccessRequest fetchRequest = new ResourceAccessRequest(
-                request.actor(), uri, ResourceOperation.FETCH_EXTERNAL, request.purpose());
-        ResourceAccessDecision fetchDecision = accessPolicy.evaluate(fetchRequest);
-        if (fetchDecision.type() != AccessDecisionType.ALLOW) {
-            return MediatedResult.denied(fetchDecision);
-        }
-
-        // Acquire internally
-        try {
-            BronzeListing acquired = acquisitionPort.listChildren(uri);
-            listingCache.put(uri, acquired);
-            return MediatedResult.success(acquired, decision);
-        } catch (IOException e) {
-            return MediatedResult.error("Acquisition failed: " + e.getMessage());
-        }
+        // Cache miss: a separate FETCH_EXTERNAL decision, access preparation, then acquisition
+        final BookmarkUri target = uri;
+        return acquireExternally(request, decision, new Acquisition<BronzeListing>() {
+            @Override
+            public BronzeListing acquire(AcquisitionCapability capability) throws IOException {
+                BronzeListing acquired = acquisitionPort.listChildren(target, capability);
+                listingCache.put(target, acquired);
+                return acquired;
+            }
+        });
     }
 
     /**
@@ -178,24 +194,16 @@ public final class MediatedResourceService implements MediatedResourceAccess {
             return MediatedResult.success(cached, decision);
         }
 
-        // Cache miss: check if external acquisition is allowed (Fix 2)
-        // Only strict ALLOW permits external fetch; ALLOW_CACHED_ONLY, REQUIRE_AUTH,
-        // REQUIRE_SOURCE_CHECK, and DENY must all block acquisition.
-        ResourceAccessRequest fetchRequest = new ResourceAccessRequest(
-                request.actor(), uri, ResourceOperation.FETCH_EXTERNAL, request.purpose());
-        ResourceAccessDecision fetchDecision = accessPolicy.evaluate(fetchRequest);
-        if (fetchDecision.type() != AccessDecisionType.ALLOW) {
-            return MediatedResult.denied(fetchDecision);
-        }
-
-        // Acquire internally
-        try {
-            BronzeContent acquired = acquisitionPort.fetchContent(uri);
-            contentCache.put(uri, acquired);
-            return MediatedResult.success(acquired, decision);
-        } catch (IOException e) {
-            return MediatedResult.error("Acquisition failed: " + e.getMessage());
-        }
+        // Cache miss: a separate FETCH_EXTERNAL decision, access preparation, then acquisition
+        final BookmarkUri target = uri;
+        return acquireExternally(request, decision, new Acquisition<BronzeContent>() {
+            @Override
+            public BronzeContent acquire(AcquisitionCapability capability) throws IOException {
+                BronzeContent acquired = acquisitionPort.fetchContent(target, capability);
+                contentCache.put(target, acquired);
+                return acquired;
+            }
+        });
     }
 
     /**
@@ -267,5 +275,75 @@ public final class MediatedResourceService implements MediatedResourceAccess {
      */
     public void storeBronzeListing(BronzeListing listing) {
         listingCache.put(listing.containerUri(), listing);
+    }
+
+    /**
+     * Acquires a missing payload externally after a separate {@code FETCH_EXTERNAL} decision.
+     *
+     * <p>Only {@code ALLOW} and {@code REQUIRE_AUTH} permit acquisition; {@code ALLOW_CACHED_ONLY},
+     * {@code REQUIRE_SOURCE_CHECK} and {@code DENY} block it. The access port is asked for every
+     * permitted acquisition; it answers {@code NOT_REQUIRED} for unauthenticated sources without
+     * contacting the vault. {@code REQUIRE_AUTH} without a granted capability withholds the
+     * payload. A granted capability is closed after the acquisition, also on failure.
+     */
+    private <T> MediatedResult<T> acquireExternally(ResourceAccessRequest request,
+                                                    ResourceAccessDecision decision,
+                                                    Acquisition<T> acquisition) {
+        BookmarkUri uri = request.target();
+        ResourceAccessRequest fetchRequest = new ResourceAccessRequest(
+                request.actor(), uri, ResourceOperation.FETCH_EXTERNAL, request.purpose());
+        ResourceAccessDecision fetchDecision = accessPolicy.evaluate(fetchRequest);
+        if (fetchDecision.type() != AccessDecisionType.ALLOW
+                && fetchDecision.type() != AccessDecisionType.REQUIRE_AUTH) {
+            return MediatedResult.denied(fetchDecision);
+        }
+
+        AcquisitionAccess access;
+        try {
+            access = accessPreparation.prepare(new AcquisitionAccessRequest(
+                    uri, request.operation(), request.actor(), request.purpose()));
+        } catch (RuntimeException e) {
+            return MediatedResult.error("Access preparation failed: " + e.getMessage());
+        }
+        if (access == null) {
+            return MediatedResult.error("Access preparation returned no result");
+        }
+
+        switch (access.status()) {
+            case NOT_REQUIRED:
+                if (fetchDecision.type() == AccessDecisionType.REQUIRE_AUTH) {
+                    // Tamias requires authentication, but no station can provide it for this source
+                    return MediatedResult.denied(fetchDecision);
+                }
+                return acquireWith(null, decision, acquisition);
+            case GRANTED:
+                try {
+                    return acquireWith(access.capability(), decision, acquisition);
+                } finally {
+                    access.close();
+                }
+            case UNAVAILABLE:
+                return MediatedResult.failure(MediatedResult.Failure.AUTHENTICATION_UNAVAILABLE, access.detail());
+            case CANCELLED:
+                return MediatedResult.failure(MediatedResult.Failure.AUTHENTICATION_CANCELLED, access.detail());
+            case FAILED:
+            default:
+                return MediatedResult.failure(MediatedResult.Failure.AUTHENTICATION_FAILED, access.detail());
+        }
+    }
+
+    private static <T> MediatedResult<T> acquireWith(AcquisitionCapability capability,
+                                                     ResourceAccessDecision decision,
+                                                     Acquisition<T> acquisition) {
+        try {
+            return MediatedResult.success(acquisition.acquire(capability), decision);
+        } catch (IOException e) {
+            return MediatedResult.error("Acquisition failed: " + e.getMessage());
+        }
+    }
+
+    /** One acquisition through the internal port that also fills the matching cache. */
+    private interface Acquisition<T> {
+        T acquire(AcquisitionCapability capability) throws IOException;
     }
 }
