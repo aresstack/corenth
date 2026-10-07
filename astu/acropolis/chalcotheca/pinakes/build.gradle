@@ -1,1 +1,17 @@
-description = 'Semantic catalog for embeddings and reranking preparation.'
+plugins {
+    id 'java-test-fixtures'
+}
+
+description = 'Semantic register: embedding, semantic index, reranking and hybrid retrieval ports.'
+
+dependencies {
+    api project(':astu')
+    api project(':astu:acropolis:chalcotheca:anagraphai')
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}

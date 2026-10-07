@@ -1,6 +1,6 @@
 # MainframeMate → Corenth — Master-Migrationsinventar
 
-**Stand:** Codeprüfung 2026-07-19 gegen `main` @ `122f999` ("Add trusted MVS session auth adapter", 2026-06-17); Tracker-, Headless- und Lückenbereinigung aktualisiert am 2026-07-19; Session 0 (2026-10-06): #10 Slice 1 umgesetzt, ADR-0001, Produktionsreife-Aussagen zu KeePassRPC, FTP/MVS und CI präzisiert; Nachtintegration 2026-10-07 (lokaler Branch `night/integration`, nicht gemergt): #33, #5, #10 Slices 2–5, #42, #43
+**Stand:** Codeprüfung 2026-07-19 gegen `main` @ `122f999` ("Add trusted MVS session auth adapter", 2026-06-17); Tracker-, Headless- und Lückenbereinigung aktualisiert am 2026-07-19; Session 0 (2026-10-06): #10 Slice 1 umgesetzt, ADR-0001, Produktionsreife-Aussagen zu KeePassRPC, FTP/MVS und CI präzisiert; Nachtintegration 2026-10-07 (lokaler Branch `night/integration`, nicht gemergt): #33, #5, #10 Slices 2–5, #42, #43, #7
 **Zweck:** Eine einzige, laufend pflegbare Landkarte: Welcher MainframeMate-Referenzbestand (`research/`, ~1.400 Java-Dateien) ist in welcher Form in der Corenth-Zielarchitektur angekommen, was ist bewusst ausgeschlossen, was steht aus. Ergänzt die modulspezifischen Inventare, ersetzt sie nicht.
 
 Leitprinzip aus [mainframemate-migration.md](mainframemate-migration.md):
@@ -87,7 +87,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | research/-Quelle | Umfang | Corenth-Ziel | Status | Issue | Detailinventar |
 | --- | --- | --- | --- | --- | --- |
 | `rag` lexikalisch (LuceneLexicalIndex, Chunk, PR-#51-Chunking) | ~10 | `anagraphai` (+`chunking`) | ✅ migriert | #6/#21, #24/#25 ✔ | [anagraphai-inventory](mainframemate-anagraphai-inventory.md) |
-| `rag` semantisch (SemanticIndex, EmbeddingClient, HybridRetriever, Reranker) | ~10 | `pinakes` (ports-first) | ⬜ offen (0 Klassen) | #7 | [Plan PR 7](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
+| `rag` semantisch (SemanticIndex, EmbeddingClient, HybridRetriever, Reranker) | ~10 | `pinakes` (ports-first) | 🟡 teilweise — Ports, Werte, deterministischer In-Memory-Referenzindex, RRF und Hybrid Retrieval mit getrennt schaltbaren Stufen (lokal integriert, ArchUnit-Regel `PINAKES_MUST_STAY_SEMANTIC_REGISTER`); reale Embedding/Rerank-Runtime, persistenter Index und Lifecycle-Verdrahtung offen | #7 | [Plan PR 7](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
 | `jcl` (ANTLR-Grammatiken), `service/codeanalytics` (Natural/COBOL/DDM-Parser, CallExtractor) | ~15 | `propylaea` (Model-first, Parser als Adapter) | ⬜ offen (0 Klassen) | #3 | [Plan PR 8](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
 | `mcp`, `runtime`, `plugins` (ToolSpec, ToolRegistry, PluginManager) | ~35 | `katagogion` (ports-first, Tools nur über Mediated Ports) | ⬜ offen (0 Klassen) | #12 | [Plan PR 9](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
 

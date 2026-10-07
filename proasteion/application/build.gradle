@@ -15,6 +15,9 @@ dependencies {
     // Fixture generation for the PDF and Office acceptance tests; no binary fixtures are checked in.
     testImplementation 'org.apache.pdfbox:pdfbox:2.0.37'
     testImplementation 'org.apache.poi:poi-ooxml:5.2.5'
+    // Bounded retrieval check over the composed lexical index (#7); Pinakes is not wired into the host yet.
+    testImplementation project(':astu:acropolis:chalcotheca:pinakes')
+    testImplementation testFixtures(project(':astu:acropolis:chalcotheca:pinakes'))
 }
 
 tasks.named('test') {
