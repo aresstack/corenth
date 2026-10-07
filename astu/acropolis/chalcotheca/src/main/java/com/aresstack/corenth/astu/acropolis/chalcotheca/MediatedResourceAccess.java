@@ -1,5 +1,6 @@
 package com.aresstack.corenth.astu.acropolis.chalcotheca;
 
+import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
 
 /**
@@ -36,4 +37,42 @@ public interface MediatedResourceAccess {
      * @return the mediated result; never {@code null}
      */
     MediatedResult<BronzeListing> listChildren(ResourceAccessRequest request);
+
+    /**
+     * Reads the content of a resource and refreshes it from the source when Tamias permits
+     * (#10 Slice 5).
+     *
+     * <p>The request carries {@code READ_CONTENT}. The counter evaluates it, then asks Tamias for
+     * {@code REFRESH_EXTERNAL}: on {@code ALLOW} or {@code REQUIRE_AUTH} it acquires the payload
+     * again (with access preparation) and replaces its cached payload; otherwise it behaves like
+     * {@link #readContent(ResourceAccessRequest)}. A confirmed absence at the source is the typed
+     * failure {@link MediatedResult.Failure#SOURCE_ABSENT}.
+     *
+     * @param request access request carrying actor, target and {@code READ_CONTENT}
+     * @return the mediated result; never {@code null}
+     */
+    MediatedResult<BronzeContent> refreshContent(ResourceAccessRequest request);
+
+    /**
+     * Reads source metadata without acquiring the payload, mediated by Tamias (#10 Slice 5).
+     *
+     * <p>The request carries {@code READ_METADATA}; the source access is gated like a content
+     * acquisition by {@code FETCH_EXTERNAL}. Sources without metadata yield
+     * {@link MediatedResult.Failure#METADATA_UNAVAILABLE}; a confirmed absence yields
+     * {@link MediatedResult.Failure#SOURCE_ABSENT}.
+     *
+     * @param request access request carrying actor, target and {@code READ_METADATA}
+     * @return the mediated result; never {@code null}
+     */
+    MediatedResult<BronzeMetadata> readMetadata(ResourceAccessRequest request);
+
+    /**
+     * Drops the counter's cached payloads (content, listing, metadata) for a resource.
+     *
+     * <p>This executes a Tamias cache disposition ({@code INVALIDATE}, or a rejected payload that
+     * must not stay cached); it exposes nothing and leaves the resource records untouched.
+     *
+     * @param uri the resource whose cached payloads to drop
+     */
+    void invalidatePayload(BookmarkUri uri);
 }

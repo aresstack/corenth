@@ -37,9 +37,11 @@ file: URI
 
 ### Decision semantics
 
-- A `tamias` indexing-rule `DENY` is a lifecycle decision for the resource: it yields `DENIED` and removes stale index entries and the snapshot.
-- A `tamias` access decision that withholds the content (`DENY`, `ALLOW_CACHED_ONLY` without cached content on either evaluation, `REQUIRE_AUTH` without a station, `REQUIRE_SOURCE_CHECK`) yields `DENIED` with the decision in the message. Access denials are never lifecycle decisions and never delete derived state, including resource-level reason codes such as `BLACKLISTED`; withdrawing an already indexed resource is decided by Tamias (#5) and executed by the lifecycle (#10) on top of the #33 resource records (`knownGap_blacklisted…` test).
-- Authentication outcomes stay distinct (#10 Slice 3): cancellation `CANCELLED`, missing credential and failed authentication `FAILED` with their own reason codes. An acquisition error yields `FAILED`.
+- A `tamias` indexing-rule `DENY` is a lifecycle decision for the resource: it yields `DENIED`, removes stale index entries and withdraws the indexed-version fact; the record history stays. A known size above the limit is denied from source metadata before any payload is acquired; without metadata the payload is acquired, rejected and invalidated in the counter (bounded acquisition is still open).
+- Change and derivative decisions come from Tamias (#5): the lifecycle maps the #33 record to `ResourceRecordFacts`, compares digests with `ResourceDigest.equals`, runs `DigestChangeDetection` and `DerivativeDispositionPolicy`, and executes the result (refresh happens in the counter when Tamias permits `REFRESH_EXTERNAL`; `RETAIN` yields `UNCHANGED` without extraction or index write; `REINDEX`/`INDEX` re-index; `INVALIDATE`/`WITHDRAW` drop the payload and the index entry).
+- A source that confirms the resource is absent yields `REMOVED`: the record observes the removal, the payload is invalidated, an indexed version is withdrawn, and the history stays.
+- A `tamias` access decision that withholds the content (`DENY`, `ALLOW_CACHED_ONLY` without cached content, `REQUIRE_AUTH` without a station, `REQUIRE_SOURCE_CHECK`) yields `DENIED`. An access denial alone never deletes derived state, including `BLACKLISTED`; only an explicit removal in the record (tombstone, e.g. `deleteEntry`) makes the next run withdraw the index entry.
+- Authentication outcomes stay distinct (#10 Slice 3, #43): cancellation `CANCELLED`, refused secret release `DENIED`, missing credential and failed authentication `FAILED` with their own reason codes. An acquisition error yields `FAILED`.
 
 ### Composition
 
@@ -48,11 +50,11 @@ file: URI
 - **Contract:** `MediatedResourceAccess` (chalcotheca), implemented by `MediatedResourceService`.
 - **Test composition with real adapters:** `WalkingSkeletonIntegrationTest` and `MediatedAccessWalkingSkeletonTest` wire `HolkasAcquisitionPort` over `FileSystemResourceConnector` behind an anonymous permit-all `ResourceAccessPolicy`; the first also builds the `ContentInspector` from real deigma extractors.
 - **Fakes only:** `MediatedLifecycleCoordinatorTest` (`RecordingMediatedAccess`, `CountingAcquisitionPort`, recording index) proves the contract shape and the decision mapping, not any integration.
+- **Production acceptance:** `LocalCorePathAcceptanceTest` in `proasteion:application` runs local text, Markdown, HTML, PDF, DOCX and XLSX files through the composition into lexical search, including unchanged, changed, deleted, excluded and oversized cases.
 
 ### Known gaps (left to later slices)
 
-- No pre-acquisition size probe: before Slice 1 the skeleton denied oversized files before fetching them. The mediated contract offers no metadata operation yet, so the indexing policy is evaluated first with `ResourcePolicy.SIZE_UNKNOWN` (scheme and patterns only), the counter acquires the content, and size limits are enforced afterwards. Oversized content is therefore acquired and retained in `MediatedResourceService.contentCache` for the lifetime of the service instance; the lifecycle cannot evict it (`knownGap_oversizedFile…` test). Restoring the pre-acquisition check needs a `READ_METADATA` operation on `MediatedResourceAccess` and `AcquisitionPort` (#5/#10).
-- The counter's bronze caches have no invalidation: before Slice 1 every run re-read the source and a changed file was re-indexed; now a changed source is served from the cache within one `MediatedResourceService` instance and reported as `UNCHANGED` (`knownGap_changedSourceContent…` test in `WalkingSkeletonIntegrationTest`). #33 records the facts (observed versions, indexed version); deciding invalidation is #5 and executing it is #10.
+- A source without metadata is acquired completely before the size limit applies; the rejected payload is invalidated afterwards, but there is no bounded acquisition yet.
 - Bronze content carries no name yet; the filename hint for extraction is derived from the last path segment of the `BookmarkUri`. The #33 resource records deliberately carry no name metadata yet; stable resource metadata is a follow-up.
 
 ### Running the walking skeleton

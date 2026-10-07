@@ -43,4 +43,16 @@ public interface ResourceConnector {
      * @throws IOException if the resource cannot be listed
      */
     ResourceListing list(VirtualResourceRef ref) throws IOException;
+
+    /**
+     * Reads the metadata of a resource without fetching its payload (#10 Slice 5).
+     *
+     * <p>The default reports that the connector offers no metadata by returning {@code null}.
+     *
+     * @throws ResourceNotFoundException if the source confirms that the resource does not exist
+     * @throws IOException if reading the metadata fails
+     */
+    default RawResourceMetadata metadata(VirtualResourceRef ref) throws IOException {
+        return null;
+    }
 }

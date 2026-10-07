@@ -6,6 +6,7 @@ import com.aresstack.corenth.adyton.AccessHandle;
 import com.aresstack.corenth.adyton.AccessRequest;
 import com.aresstack.corenth.adyton.AuthCancelledException;
 import com.aresstack.corenth.adyton.AuthenticationStrategy;
+import com.aresstack.corenth.adyton.SecretReleaseDeniedException;
 import com.aresstack.corenth.adyton.SecretUnavailableException;
 import com.aresstack.corenth.astu.ResourceScheme;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionAccess;
@@ -61,6 +62,8 @@ public final class BrokeredAcquisitionAccess implements AcquisitionAccessPort {
             return AcquisitionAccess.granted(new HandleCapability(handle));
         } catch (AuthCancelledException e) {
             return AcquisitionAccess.cancelled("Credential request cancelled for " + source.targetSystem());
+        } catch (SecretReleaseDeniedException e) {
+            return AcquisitionAccess.denied("Credential release denied for " + source.targetSystem());
         } catch (SecretUnavailableException e) {
             return AcquisitionAccess.unavailable("No credential available for " + source.targetSystem());
         } catch (AccessException e) {

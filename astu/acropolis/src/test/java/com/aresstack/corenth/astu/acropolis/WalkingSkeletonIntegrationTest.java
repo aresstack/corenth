@@ -24,6 +24,7 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PatternResourcePo
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessDecision;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessPolicy;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceOperation;
 import com.aresstack.corenth.proasteion.emporion.deigma.DetectedContentType;
 import com.aresstack.corenth.proasteion.emporion.deigma.ExtractedBlock;
 import com.aresstack.corenth.proasteion.emporion.deigma.ExtractionRegistry;
@@ -227,14 +228,12 @@ public class WalkingSkeletonIntegrationTest {
     }
 
     /**
-     * Documents a guarantee weakened by #10 Slice 1: before the slice the skeleton denied
-     * oversized files before fetching them (size probe on the direct provider). The mediated
-     * contract has no size probe, so the counter acquires and retains the content and the
-     * lifecycle denies it only afterwards. When a {@code READ_METADATA} operation exists
-     * (#5/#10), this test must be inverted (expect no cached content).
+     * Regression for the former {@code knownGap_oversizedFile_isAcquiredAndRetainedByCounterBeforeDenial}
+     * (#10 Slice 5): the counter reads the source metadata, the lifecycle applies the size limit
+     * before any payload is acquired, and no oversized bytes are cached.
      */
     @Test
-    public void knownGap_oversizedFile_isAcquiredAndRetainedByCounterBeforeDenial() throws IOException {
+    public void oversizedFile_isDeniedFromSourceMetadata_beforeAnyPayloadIsAcquired() throws IOException {
         IndexingRule tinyRule = new IndexingRule(
                 "tiny-rule",
                 Arrays.asList("file"),
@@ -256,8 +255,12 @@ public class WalkingSkeletonIntegrationTest {
         ProcessingResult result = tinyCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.DENIED, result.status());
         assertTrue(result.message().contains("maxBytes"));
-        assertTrue("size is only known after the counter acquired the content, which it retains",
+        assertFalse("the size is known from metadata, so no payload is acquired or cached",
                 tinyCounter.hasCachedContent(ref.uri()));
+        for (ResourceProcessingStep step : result.steps()) {
+            assertNotEquals(ResourceProcessingStepType.MEDIATED_ACQUISITION, step.type());
+        }
+        assertNull("a denied resource gets no record", archive.records().findByRef(ref));
     }
 
     @Test
@@ -319,8 +322,8 @@ public class WalkingSkeletonIntegrationTest {
         assertFalse(record.isIndexed());
         assertEquals(1, record.versions().size());
 
-        // Step 3: Re-accept the same unchanged file — without an indexed fact hasChanged is
-        // true, so it is re-indexed (not UNCHANGED) and no new version is created
+        // Step 3: Re-accept the same unchanged file — without an indexed fact Tamias decides
+        // INDEXED_FACT_MISSING, so it is re-indexed (not UNCHANGED) and no new version is created
         ProcessingResult reindexed = acceptCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.INDEXED, reindexed.status());
         assertFalse(searchCoordinator.search("reacceptable", 10).isEmpty());
@@ -344,15 +347,13 @@ public class WalkingSkeletonIntegrationTest {
     }
 
     /**
-     * Documents a guarantee lost in #10 Slice 1 and tracked by #5/#10: before the slice the
-     * direct provider path re-read the source on every run, so a rewritten file produced a new
-     * digest and was re-indexed. The archive counter caches bronze content without
-     * invalidation, so a changed source is now served from the cache within one service
-     * instance and the lifecycle reports {@code UNCHANGED}. When invalidation exists, this
-     * test must be inverted (expect {@code INDEXED} and the new term to be searchable).
+     * Regression for the former
+     * {@code knownGap_changedSourceContent_isServedFromCounterCacheUntilInvalidationExists}
+     * (#10 Slice 5): Tamias permits {@code REFRESH_EXTERNAL}, so the counter re-acquires the
+     * changed source; the record observes version 2 and the index serves the new content only.
      */
     @Test
-    public void knownGap_changedSourceContent_isServedFromCounterCacheUntilInvalidationExists() throws IOException {
+    public void changedSourceContent_isReacquiredAndReindexed_whenTamiasPermitsRefresh() throws IOException {
         File txtFile = tempFolder.newFile("mutable.txt");
         writeFile(txtFile, "original mutable content");
         VirtualResourceRef ref = fileRef(txtFile);
@@ -360,10 +361,70 @@ public class WalkingSkeletonIntegrationTest {
 
         writeFile(txtFile, "replacement mutable content");
         ProcessingResult second = coordinator.process(ref);
-        assertEquals(ProcessingResult.Status.UNCHANGED, second.status());
-        assertTrue("the stale bytes come from the counter cache", counter.hasCachedContent(ref.uri()));
-        assertTrue("stale bronze cache: new content is not visible yet",
-                searchCoordinator.search("replacement", 10).isEmpty());
+
+        assertEquals(ProcessingResult.Status.INDEXED, second.status());
+        assertFalse(searchCoordinator.search("replacement", 10).isEmpty());
+        assertTrue("the old content is no longer searchable", searchCoordinator.search("original", 10).isEmpty());
+    }
+
+    /**
+     * Without refresh permission the counter serves its cached payload: the changed source stays
+     * invisible by Tamias decision, not by a missing path.
+     */
+    @Test
+    public void changedSourceContent_staysCached_whenTamiasDoesNotPermitRefresh() throws IOException {
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        MediatedResourceService cachedCounter = new MediatedResourceService(new ResourceAccessPolicy() {
+            @Override
+            public ResourceAccessDecision evaluate(ResourceAccessRequest request) {
+                return request.operation() == ResourceOperation.REFRESH_EXTERNAL
+                        ? ResourceAccessDecision.cachedOnly("refresh not configured")
+                        : ResourceAccessDecision.allow();
+            }
+        }, new HolkasAcquisitionPort(DefaultResourceConnectorRegistry.of(new FileSystemResourceConnector())), archive);
+        ResourceLifecycleCoordinator cachedCoordinator = new ResourceLifecycleCoordinator(
+                cachedCounter, LIFECYCLE_ACTOR, createDeigmaInspector(), allowTextRule(), archive, lexicalIndex);
+
+        File txtFile = tempFolder.newFile("cached.txt");
+        writeFile(txtFile, "cachedoriginal content");
+        VirtualResourceRef ref = fileRef(txtFile);
+        assertEquals(ProcessingResult.Status.INDEXED, cachedCoordinator.process(ref).status());
+
+        writeFile(txtFile, "cachedreplacement content");
+        assertEquals(ProcessingResult.Status.UNCHANGED, cachedCoordinator.process(ref).status());
+        assertTrue(searchCoordinator.search("cachedreplacement", 10).isEmpty());
+        assertEquals(1, archive.records().findByRef(ref).versions().size());
+    }
+
+    @Test
+    public void deletedSourceFile_isWithdrawnFromTheIndex_andKeepsItsHistory() throws IOException {
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
+        MediatedResourceService fileCounter = mediatedFileAccess(archive);
+        ResourceLifecycleCoordinator lifecycle = new ResourceLifecycleCoordinator(
+                fileCounter, LIFECYCLE_ACTOR, createDeigmaInspector(), allowTextRule(), archive, lexicalIndex);
+        File txtFile = tempFolder.newFile("vanishing.txt");
+        writeFile(txtFile, "vanishing unique content");
+        VirtualResourceRef ref = fileRef(txtFile);
+        assertEquals(ProcessingResult.Status.INDEXED, lifecycle.process(ref).status());
+
+        assertTrue(txtFile.delete());
+        ProcessingResult removed = lifecycle.process(ref);
+
+        assertEquals(ProcessingResult.Status.REMOVED, removed.status());
+        assertTrue(searchCoordinator.search("vanishing", 10).isEmpty());
+        assertFalse("the payload is invalidated", fileCounter.hasCachedContent(ref.uri()));
+        ArchivedResource record = archive.records().findByRef(ref);
+        assertTrue(record.isRemovedAtSource());
+        assertFalse(record.isIndexed());
+        assertEquals("#33: the history stays", 1, record.versions().size());
+
+        writeFile(txtFile, "vanishing unique content");
+        ProcessingResult reappeared = lifecycle.process(ref);
+        assertEquals(ProcessingResult.Status.INDEXED, reappeared.status());
+        assertFalse(searchCoordinator.search("vanishing", 10).isEmpty());
+        record = archive.records().findByRef(ref);
+        assertFalse(record.isRemovedAtSource());
+        assertEquals(1, record.versions().size());
     }
 
     @Test
@@ -452,11 +513,12 @@ public class WalkingSkeletonIntegrationTest {
         assertEquals(ProcessingResult.Status.FAILED, noText.status());
         assertTrue(searchCoordinator.search("notext", 10).isEmpty());
         assertNull(sharedArchive.find(ref));
-        assertEquals("#33: cleanup withdraws the indexed fact but keeps the observed history",
-                1, sharedArchive.records().findByRef(ref).versions().size());
+        assertEquals("#33: cleanup withdraws the indexed fact but keeps both observed versions",
+                2, sharedArchive.records().findByRef(ref).versions().size());
 
         // Step 3: Re-process the same, unchanged file with the normal inspector — the indexed fact
-        // was withdrawn during cleanup, so hasChanged returns true and the file is re-indexed
+        // was withdrawn during cleanup, so Tamias decides INDEXED_FACT_MISSING and the file is
+        // re-indexed
         ProcessingResult reindexed = normalCoordinator.process(ref);
         assertEquals(ProcessingResult.Status.INDEXED, reindexed.status());
         assertFalse(searchCoordinator.search("notext", 10).isEmpty());
