@@ -1,0 +1,6 @@
+# Test providers for ServiceLoaderPluginDiscoveryTest; order is intentionally not sorted.
+com.aresstack.corenth.proasteion.katagogion.discovery.DiscoveryTestPlugins$Beta
+com.aresstack.corenth.proasteion.katagogion.discovery.DiscoveryTestPlugins$Broken
+com.aresstack.corenth.proasteion.katagogion.discovery.MissingPlugin
+com.aresstack.corenth.proasteion.katagogion.discovery.DiscoveryTestPlugins$Alpha
+com.aresstack.corenth.proasteion.katagogion.discovery.DiscoveryTestPlugins$AlphaImpostor
