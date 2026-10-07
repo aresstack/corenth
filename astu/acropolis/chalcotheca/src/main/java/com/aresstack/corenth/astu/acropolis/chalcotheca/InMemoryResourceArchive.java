@@ -3,73 +3,63 @@ package com.aresstack.corenth.astu.acropolis.chalcotheca;
 import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.Map;
+import java.time.Clock;
 
 /**
- * In-memory implementation of {@link ResourceArchive}.
+ * In-memory {@link ResourceArchive}: the {@link RecordBackedResourceArchive} facade over an
+ * {@link InMemoryResourceArchiveRepository}.
  *
- * <p>Suitable for tests and the walking skeleton. A filesystem-backed
- * implementation can be added later without changing the interface contract.
+ * <p>Suitable for tests and the walking skeleton. The snapshots it returns are views of the
+ * resource records exposed by {@link #records()}; nothing is stored twice.
  */
 public final class InMemoryResourceArchive implements ResourceArchive {
 
-    private final Map<VirtualResourceRef, ResourceSnapshot> snapshots =
-            new HashMap<VirtualResourceRef, ResourceSnapshot>();
+    private final InMemoryResourceArchiveRepository records = new InMemoryResourceArchiveRepository();
+    private final RecordBackedResourceArchive archive;
+
+    public InMemoryResourceArchive() {
+        this(Clock.systemUTC());
+    }
+
+    /**
+     * @param clock the clock used for removal observations
+     */
+    public InMemoryResourceArchive(Clock clock) {
+        this.archive = new RecordBackedResourceArchive(records, clock);
+    }
+
+    /** Returns the authoritative records behind this archive. */
+    public ResourceArchiveRepository records() {
+        return records;
+    }
 
     @Override
     public void store(ResourceSnapshot snapshot) {
-        if (snapshot == null) {
-            throw new IllegalArgumentException("snapshot must not be null");
-        }
-        snapshots.put(snapshot.ref(), snapshot);
+        archive.store(snapshot);
     }
 
     @Override
     public ResourceSnapshot find(VirtualResourceRef ref) {
-        if (ref == null) {
-            return null;
-        }
-        return snapshots.get(ref);
+        return archive.find(ref);
     }
 
     @Override
     public boolean hasChanged(VirtualResourceRef ref, ResourceDigest digest) {
-        ResourceSnapshot existing = find(ref);
-        if (existing == null) {
-            return true; // never seen before
-        }
-        return !existing.digest().equals(digest);
+        return archive.hasChanged(ref, digest);
     }
 
     @Override
     public boolean remove(VirtualResourceRef ref) {
-        return snapshots.remove(ref) != null;
+        return archive.remove(ref);
     }
 
     @Override
     public boolean removeByUri(BookmarkUri uri) {
-        if (uri == null) return false;
-        boolean removed = false;
-        Iterator<Map.Entry<VirtualResourceRef, ResourceSnapshot>> it = snapshots.entrySet().iterator();
-        while (it.hasNext()) {
-            if (uri.equals(it.next().getKey().uri())) {
-                it.remove();
-                removed = true;
-            }
-        }
-        return removed;
+        return archive.removeByUri(uri);
     }
 
     @Override
     public ResourceSnapshot findByUri(BookmarkUri uri) {
-        if (uri == null) return null;
-        for (Map.Entry<VirtualResourceRef, ResourceSnapshot> entry : snapshots.entrySet()) {
-            if (uri.equals(entry.getKey().uri())) {
-                return entry.getValue();
-            }
-        }
-        return null;
+        return archive.findByUri(uri);
     }
 }

@@ -33,13 +33,15 @@ import java.util.concurrent.ConcurrentHashMap;
  * service implements, not on this class, so that the composition point decides how the
  * counter is assembled.
  *
- * <p><strong>Known limitation (tracked by #33 and #5):</strong> the three in-memory stores
- * below have no invalidation and no TTL. Content or listings read once are served from the
- * cache until {@link #deleteEntry(ResourceAccessRequest)} removes them, so a changed source
- * is not re-acquired within the lifetime of a service instance. They also exist next to the
- * {@link ResourceArchive} snapshots, i.e. there are currently two bronze truths. #33 makes
- * the archive the authoritative record and #5 adds change detection and invalidation; the
- * stores are consolidated against those contracts, not replaced ad hoc here.
+ * <p><strong>Known limitation (tracked by #5 and #10):</strong> the three in-memory stores
+ * below are payload caches without invalidation and without TTL. Content or listings read
+ * once are served from the cache until {@link #deleteEntry(ResourceAccessRequest)} removes
+ * them, so a changed source is not re-acquired within the lifetime of a service instance.
+ * Since #33 the {@link ResourceArchive} is a facade over the authoritative resource records
+ * (versions, indexed-version fact, removal at source); those records hold facts about
+ * payloads, not the payloads, and they do not record cache presence. Deciding when a cached
+ * payload is invalid is Tamias (#5); consolidating the stores against the records is #10
+ * Slice 5. They are not replaced ad hoc here.
  */
 public final class MediatedResourceService implements MediatedResourceAccess {
 
@@ -200,7 +202,10 @@ public final class MediatedResourceService implements MediatedResourceAccess {
      * Deletes a bronze archive entry (tombstones it).
      *
      * <p>The request must carry {@link ResourceOperation#DELETE_ARCHIVE_ENTRY}.
-     * This removes the cached state and the archive snapshot (URI-based, type-agnostic).
+     * This removes the cached payload state and records a removal at the source for every
+     * archive record with the URI (type-agnostic). The records' version histories are kept,
+     * and an indexed-version fact is not withdrawn: derived indexes are untouched here, and
+     * withdrawing them is decided by Tamias (#5) and executed by Acropolis (#10).
      * User-specific denial does NOT call this method — only explicit
      * blacklist/tombstone policy does.
      *
@@ -229,7 +234,7 @@ public final class MediatedResourceService implements MediatedResourceAccess {
         contentCache.remove(uri);
         metadataCache.remove(uri);
 
-        // Fix 5: Remove from archive by URI (type-agnostic)
+        // Fix 5: Tombstone the archive records by URI (type-agnostic)
         archive.removeByUri(uri);
 
         return MediatedResult.success(null, decision);

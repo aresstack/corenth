@@ -1,54 +1,45 @@
 package com.aresstack.corenth.astu.acropolis.chalcotheca;
 
+import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 
 import java.util.List;
 
 /**
- * Persistence port for {@link ArchivedResource} lifecycle records.
+ * Persistence port for the authoritative {@link ArchivedResource} records.
  *
- * <p>This interface abstracts how archived resources are stored. Implementations
- * may use in-memory maps, filesystem JSON, relational databases, or any other
- * backend — the chalcotheca core does not prescribe a specific technology.
+ * <p>This is the single Chalcotheca port for resource records and their version histories.
+ * It stores immutable records as a whole and makes no decisions: version assignment and the
+ * other fact transitions live in {@link ArchivedResource}. Implementations may use in-memory
+ * maps, relational databases or any other backend; the chalcotheca core does not prescribe a
+ * technology. Records are never hard-deleted through this port, so histories are retained.
  *
- * <p>Unlike {@link ResourceArchive} (which focuses on snapshot-level change
- * detection), this repository manages the full lifecycle of archived resources
- * including state transitions and tombstoning.
+ * <p>{@link ResourceArchive} is a compatibility facade on top of this port
+ * ({@link RecordBackedResourceArchive}).
  */
 public interface ResourceArchiveRepository {
 
     /**
-     * Saves or updates an archived resource record.
+     * Saves a record, replacing any record stored for the same reference.
      *
-     * @param resource the resource to persist
+     * @param resource the record to persist
      */
     void save(ArchivedResource resource);
 
     /**
-     * Retrieves the archived resource for the given reference, or {@code null}
-     * if not tracked.
+     * Retrieves the record for the given reference.
      *
      * @param ref the resource reference
-     * @return the archived resource, or {@code null}
+     * @return the record, or {@code null} if the resource is unknown
      */
     ArchivedResource findByRef(VirtualResourceRef ref);
 
     /**
-     * Returns all resources currently in the given lifecycle state.
+     * Returns all records whose reference has the given URI, regardless of resource kind.
      *
-     * @param state the lifecycle state to filter by
-     * @return a list of matching resources (never {@code null})
+     * @param uri the bookmark URI
+     * @return the matching records in the order in which they were first saved
+     *         (never {@code null})
      */
-    List<ArchivedResource> findByState(ResourceLifecycleState state);
-
-    /**
-     * Removes the archived resource record entirely.
-     *
-     * <p>Use {@link ArchivedResource#tombstone(long)} for soft-delete semantics;
-     * this method performs a hard delete from the repository.
-     *
-     * @param ref the resource reference to remove
-     * @return {@code true} if a record was removed, {@code false} if not found
-     */
-    boolean remove(VirtualResourceRef ref);
+    List<ArchivedResource> findByUri(BookmarkUri uri);
 }

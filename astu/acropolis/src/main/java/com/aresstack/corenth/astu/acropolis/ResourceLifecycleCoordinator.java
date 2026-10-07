@@ -53,12 +53,14 @@ import java.util.List;
  *       in the message. Access denials are never lifecycle decisions: they do <em>not</em>
  *       remove derived state (lexical index, lifecycle snapshot), not even for resource-level
  *       reason codes such as {@code BLACKLISTED}. Withdrawing an already indexed resource is
- *       an explicit archive operation that is integrated with #33/#5; {@code REQUIRE_AUTH}
- *       becomes an Adyton-backed preparation step in #10 Slice 3;</li>
+ *       an explicit operation decided by Tamias (#5) and executed by the lifecycle (#10) on
+ *       top of the #33 resource records; {@code REQUIRE_AUTH} becomes an Adyton-backed
+ *       preparation step in #10 Slice 3;</li>
  *   <li>acquisition error (no decision): {@code FAILED}.</li>
  * </ul>
  * In contrast, an indexing-policy {@code DENY} is a lifecycle decision for this resource and
- * removes stale index entries and snapshots, as before.
+ * removes stale index entries and withdraws the archive's indexed-version fact (the resource
+ * record and its version history are kept, #33).
  *
  * <p>Known gaps that are deliberately left to later slices:
  * <ul>
@@ -69,11 +71,12 @@ import java.util.List;
  *       therefore acquired and retained in the counter's cache for the lifetime of the service
  *       instance; the lifecycle cannot evict it ({@code deleteEntry} is not on the contract).
  *       A {@code READ_METADATA} operation on the contract and the acquisition port belongs to
- *       #5/#33.</li>
+ *       #5/#10 (#33 already records the facts; the policy is #5, contract wiring and execution
+ *       are #10).</li>
  *   <li>The counter's bronze caches have no invalidation. Before Slice 1 every run re-read the
  *       source and a changed file was re-indexed; through the counter a changed source is
  *       served from the cache within one service instance and reported as {@code UNCHANGED}
- *       until #5/#33 add invalidation.</li>
+ *       until #5 decides invalidation and #10 executes it (#33 only records the facts).</li>
  * </ul>
  */
 public final class ResourceLifecycleCoordinator {
