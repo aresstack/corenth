@@ -31,6 +31,34 @@ while IFS= read -r source_file; do
     fi
 done < "$SOURCE_LIST.all"
 
+# Skip, until nothing changes, every file that imports a class of an already skipped file:
+# such a file cannot compile without the external libraries either (e.g. the composition root).
+fqn_of() {
+    local package_name
+    package_name="$(sed -n 's/^package \([A-Za-z0-9_.]*\);.*/\1/p' "$1" | head -n 1)"
+    printf '%s.%s\n' "$package_name" "$(basename "$1" .java)"
+}
+while :; do
+    : > "$SOURCE_LIST.skipped-classes"
+    while IFS= read -r skipped_file; do
+        fqn_of "$ROOT_DIR/$skipped_file" >> "$SOURCE_LIST.skipped-classes"
+    done < "$SKIPPED_LIST"
+    : > "$SOURCE_LIST.next"
+    moved=0
+    while IFS= read -r source_file; do
+        if grep -Eq '^import ' "$source_file" \
+                && sed -n 's/^import \([A-Za-z0-9_.]*\);.*/\1/p' "$source_file" \
+                    | grep -Fxq -f "$SOURCE_LIST.skipped-classes"; then
+            printf '%s\n' "${source_file#$ROOT_DIR/}" >> "$SKIPPED_LIST"
+            moved=1
+        else
+            printf '%s\n' "$source_file" >> "$SOURCE_LIST.next"
+        fi
+    done < "$SOURCE_LIST"
+    mv "$SOURCE_LIST.next" "$SOURCE_LIST"
+    [ "$moved" = "1" ] || break
+done
+
 if [ ! -s "$SOURCE_LIST" ]; then
     echo "No dependency-free Java production files found." >&2
     exit 1

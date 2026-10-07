@@ -23,6 +23,7 @@ public final class ApplicationSettings {
     private final List<String> excludedPatterns;
     private final long maxIndexedBytes;
     private final String lifecycleActorId;
+    private final boolean sourceRefresh;
 
     private ApplicationSettings(Builder builder) {
         this.indexDirectory = builder.indexDirectory;
@@ -31,6 +32,7 @@ public final class ApplicationSettings {
         this.excludedPatterns = Collections.unmodifiableList(new ArrayList<String>(builder.excludedPatterns));
         this.maxIndexedBytes = builder.maxIndexedBytes;
         this.lifecycleActorId = builder.lifecycleActorId;
+        this.sourceRefresh = builder.sourceRefresh;
     }
 
     public static Builder builder() {
@@ -67,6 +69,16 @@ public final class ApplicationSettings {
         return lifecycleActorId;
     }
 
+    /**
+     * Returns whether the lifecycle may re-read a local source whose payload the archive counter
+     * already holds (Tamias {@code REFRESH_EXTERNAL}, #10 Slice 5). Defaults to {@code true}, so
+     * changed local files are picked up; {@code false} serves cached payloads until they are
+     * invalidated.
+     */
+    public boolean sourceRefresh() {
+        return sourceRefresh;
+    }
+
     public static final class Builder {
         private Path indexDirectory;
         private final List<Path> accessibleRoots = new ArrayList<Path>();
@@ -74,6 +86,7 @@ public final class ApplicationSettings {
         private final List<String> excludedPatterns = new ArrayList<String>();
         private long maxIndexedBytes;
         private String lifecycleActorId = DEFAULT_LIFECYCLE_ACTOR_ID;
+        private boolean sourceRefresh = true;
 
         private Builder() {}
 
@@ -110,6 +123,12 @@ public final class ApplicationSettings {
 
         public Builder lifecycleActorId(String lifecycleActorId) {
             this.lifecycleActorId = requireText(lifecycleActorId, "lifecycle actor id");
+            return this;
+        }
+
+        /** Grants or withholds source refresh for local files (#10 Slice 5); default {@code true}. */
+        public Builder sourceRefresh(boolean sourceRefresh) {
+            this.sourceRefresh = sourceRefresh;
             return this;
         }
 

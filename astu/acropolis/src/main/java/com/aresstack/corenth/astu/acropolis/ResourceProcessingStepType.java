@@ -10,11 +10,13 @@ package com.aresstack.corenth.astu.acropolis;
 public enum ResourceProcessingStepType {
     /** Tamias indexing rules on scheme and patterns before any acquisition (size unknown). */
     INDEXING_POLICY_BEFORE_ACQUISITION,
+    /** Mediated metadata read and Tamias size rules before the payload is acquired (#10 Slice 5). */
+    SOURCE_METADATA,
     /** Mediated read through the archive counter, including access preparation. */
     MEDIATED_ACQUISITION,
     /** Tamias indexing rules with the acquired size. */
     INDEXING_POLICY_WITH_SIZE,
-    /** Comparison of the acquired version with the recorded facts. */
+    /** Tamias change detection and derivative disposition against the resource record (#5, #33). */
     CHANGE_DETECTION,
     /** Detection and extraction of textual content. */
     CONTENT_INSPECTION,

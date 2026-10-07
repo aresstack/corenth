@@ -4,6 +4,8 @@ import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceKind;
 import com.aresstack.corenth.astu.VirtualResourceRef;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeContent;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceOperation;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeMetadata;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeListing;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ContentHasher;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.InMemoryResourceArchive;
@@ -53,7 +55,7 @@ public class LifecycleRunRecordingTest {
         ProcessingResult result = fixture.lifecycle.process(ref("a.txt"));
 
         assertEquals(ResourceProcessingOutcome.INDEXED, result.outcome());
-        assertEquals(Arrays.asList(INDEXING_POLICY_BEFORE_ACQUISITION, MEDIATED_ACQUISITION,
+        assertEquals(Arrays.asList(INDEXING_POLICY_BEFORE_ACQUISITION, SOURCE_METADATA, MEDIATED_ACQUISITION,
                 INDEXING_POLICY_WITH_SIZE, CHANGE_DETECTION, CONTENT_INSPECTION, LEXICAL_INDEXING, RECORD_UPDATE),
                 types(result));
         assertTrue(ResourceProcessingPlan.standard().accepts(result.steps()));
@@ -95,7 +97,8 @@ public class LifecycleRunRecordingTest {
         ProcessingResult result = fixture.lifecycle.process(ref("a.txt"));
 
         assertEquals(ResourceProcessingOutcome.DENIED, result.outcome());
-        assertEquals(Arrays.asList(INDEXING_POLICY_BEFORE_ACQUISITION, MEDIATED_ACQUISITION), types(result));
+        assertEquals(Arrays.asList(INDEXING_POLICY_BEFORE_ACQUISITION, SOURCE_METADATA, MEDIATED_ACQUISITION),
+                types(result));
     }
 
     @Test
@@ -241,6 +244,21 @@ public class LifecycleRunRecordingTest {
         @Override
         public MediatedResult<BronzeListing> listChildren(ResourceAccessRequest request) {
             return MediatedResult.error("unused");
+        }
+
+        @Override
+        public MediatedResult<BronzeContent> refreshContent(ResourceAccessRequest request) {
+            return readContent(new ResourceAccessRequest(request.actor(), request.target(),
+                    ResourceOperation.READ_CONTENT, request.purpose()));
+        }
+
+        @Override
+        public MediatedResult<BronzeMetadata> readMetadata(ResourceAccessRequest request) {
+            return MediatedResult.failure(MediatedResult.Failure.METADATA_UNAVAILABLE, "no metadata in this fake");
+        }
+
+        @Override
+        public void invalidatePayload(BookmarkUri uri) {
         }
     }
 

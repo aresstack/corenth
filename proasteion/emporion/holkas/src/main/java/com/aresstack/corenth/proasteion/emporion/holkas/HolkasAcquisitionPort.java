@@ -8,7 +8,9 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionCapability;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeContent;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeListing;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeMetadata;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ContentHasher;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.SourceAbsentException;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -38,7 +40,12 @@ public final class HolkasAcquisitionPort implements AcquisitionPort {
         }
         VirtualResourceRef ref = new VirtualResourceRef(uri, VirtualResourceKind.FILE);
         ResourceConnector connector = connectorRegistry.require(uri.scheme());
-        RawResource raw = connector.fetch(ref);
+        RawResource raw;
+        try {
+            raw = connector.fetch(ref);
+        } catch (ResourceNotFoundException e) {
+            throw absent(e);
+        }
         byte[] bytes = raw.content().bytes();
         return new BronzeContent(uri, bytes, ContentHasher.digest(bytes), System.currentTimeMillis());
     }
@@ -68,7 +75,12 @@ public final class HolkasAcquisitionPort implements AcquisitionPort {
             throw new IllegalArgumentException("uri must not be null");
         }
         VirtualResourceRef ref = new VirtualResourceRef(uri, VirtualResourceKind.FILE);
-        RawResource raw = authenticated(uri).fetchWith(ref, capability);
+        RawResource raw;
+        try {
+            raw = authenticated(uri).fetchWith(ref, capability);
+        } catch (ResourceNotFoundException e) {
+            throw absent(e);
+        }
         byte[] bytes = raw.content().bytes();
         return new BronzeContent(uri, bytes, ContentHasher.digest(bytes), System.currentTimeMillis());
     }
@@ -88,6 +100,49 @@ public final class HolkasAcquisitionPort implements AcquisitionPort {
         }
         VirtualResourceRef ref = new VirtualResourceRef(uri, VirtualResourceKind.DIRECTORY);
         return toBronze(uri, authenticated(uri).listWith(ref, capability));
+    }
+
+    /**
+     * Offers metadata for registered connectors that read without prepared access. Authenticated
+     * connectors offer none yet, so the counter never prepares access for a metadata read.
+     */
+    @Override
+    public boolean offersMetadata(BookmarkUri uri) {
+        if (uri == null) {
+            return false;
+        }
+        ResourceConnector connector = connectorRegistry.find(uri.scheme());
+        return connector != null && !(connector instanceof AuthenticatedResourceConnector);
+    }
+
+    /**
+     * Reads source metadata through the connector without fetching the payload (#10 Slice 5).
+     * Authenticated connectors offer no metadata yet; the method then returns {@code null}.
+     */
+    @Override
+    public BronzeMetadata fetchMetadata(BookmarkUri uri, AcquisitionCapability capability) throws IOException {
+        if (uri == null) {
+            throw new IllegalArgumentException("uri must not be null");
+        }
+        if (capability != null) {
+            return null;
+        }
+        VirtualResourceRef ref = new VirtualResourceRef(uri, VirtualResourceKind.FILE);
+        RawResourceMetadata metadata;
+        try {
+            metadata = connectorRegistry.require(uri.scheme()).metadata(ref);
+        } catch (ResourceNotFoundException e) {
+            throw absent(e);
+        }
+        if (metadata == null) {
+            return null;
+        }
+        return new BronzeMetadata(uri, metadata.name(), metadata.contentType(), metadata.sizeBytes(),
+                metadata.modifiedAtMillis(), metadata.observedAtMillis());
+    }
+
+    private static SourceAbsentException absent(ResourceNotFoundException e) {
+        return new SourceAbsentException(e.getMessage(), e);
     }
 
     private AuthenticatedCall authenticated(BookmarkUri uri) throws IOException {

@@ -23,7 +23,11 @@ public final class MediatedResult<T> {
         /** The user cancelled the credential request. */
         AUTHENTICATION_CANCELLED,
         /** Authentication was attempted and failed. */
-        AUTHENTICATION_FAILED
+        AUTHENTICATION_FAILED,
+        /** The source confirmed that the resource does not exist (#10 Slice 5). */
+        SOURCE_ABSENT,
+        /** The source offers no metadata for the resource (#10 Slice 5). */
+        METADATA_UNAVAILABLE
     }
 
     private final T value;

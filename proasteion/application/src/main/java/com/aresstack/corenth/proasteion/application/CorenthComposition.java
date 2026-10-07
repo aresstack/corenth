@@ -8,7 +8,6 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.InMemoryResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceAccess;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceService;
-import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndex;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndexConfig;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LuceneLexicalIndex;
@@ -24,16 +23,23 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.LocalFileRootsAcc
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.PatternResourcePolicy;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessPolicy;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.DigestChangeDetection;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.disposition.DerivativeDispositionPolicy;
 import com.aresstack.corenth.proasteion.emporion.deigma.ExtractionRegistry;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.MarkdownTextExtractor;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.PlainTextExtractor;
+import com.aresstack.corenth.proasteion.emporion.deigma.html.HtmlDocumentExtractor;
 import com.aresstack.corenth.proasteion.emporion.deigma.impl.SimpleContentDetector;
+import com.aresstack.corenth.proasteion.emporion.deigma.office.DocxDocumentExtractor;
+import com.aresstack.corenth.proasteion.emporion.deigma.office.XlsxDocumentExtractor;
+import com.aresstack.corenth.proasteion.emporion.deigma.pdf.PdfDocumentExtractor;
 import com.aresstack.corenth.proasteion.emporion.holkas.DefaultResourceConnectorRegistry;
 import com.aresstack.corenth.proasteion.emporion.holkas.FileSystemResourceConnector;
 import com.aresstack.corenth.proasteion.emporion.holkas.HolkasAcquisitionPort;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -46,9 +52,10 @@ import java.util.List;
  * Tamias LocalFileRootsAccessPolicy
  *   → Chalcotheca MediatedResourceService (archive counter, implements MediatedResourceAccess)
  *   → AcquisitionPort ← HolkasAcquisitionPort ← FileSystemResourceConnector
- *   → ContentInspector ← Deigma (SimpleContentDetector, PlainText/Markdown extractors)
+ *   → ContentInspector ← Deigma (SimpleContentDetector; text, Markdown, HTML, PDF, DOCX, XLSX)
  *   → Anagraphai LuceneLexicalIndex + NlpTextChunker
- *   → Acropolis ResourceLifecycleCoordinator and SearchCoordinator
+ *   → Acropolis ResourceLifecycleCoordinator (Tamias change detection and disposition on the
+ *     #33 records) and SearchCoordinator
  * </pre>
  *
  * <p>The class only instantiates and connects; it holds no state, makes no access or indexing
@@ -56,9 +63,10 @@ import java.util.List;
  * {@link #composeLocal(ApplicationSettings)} builds an independent object graph. Policies come
  * from Tamias; the host settings only parameterise them.
  *
- * <p>The archive is the existing {@link ResourceArchive} contract, used as a compatibility facade
- * while #33 introduces the record/history repository; one instance is shared by the counter and
- * the lifecycle so that snapshots and tombstones stay consistent.
+ * <p>One in-memory archive is shared by the counter and the lifecycle: the counter tombstones
+ * through its {@code ResourceArchive} facade, the lifecycle reads and writes the authoritative
+ * resource records behind it (#33), so there is a single truth about versions, the indexed
+ * version and removals at the source. Tamias decides about changes and derivative state (#5).
  */
 public final class CorenthComposition {
 
@@ -76,7 +84,7 @@ public final class CorenthComposition {
         if (settings == null) {
             throw new IllegalArgumentException("settings must not be null");
         }
-        ResourceArchive archive = new InMemoryResourceArchive();
+        InMemoryResourceArchive archive = new InMemoryResourceArchive();
         MediatedResourceAccess counter = archiveCounter(settings, archive);
         ContentInspector inspector = deigmaInspector();
         ResourcePolicy indexingPolicy = indexingPolicy(settings);
@@ -107,9 +115,12 @@ public final class CorenthComposition {
                 new ActorIdentity(settings.lifecycleActorId(), ActorType.SERVICE),
                 inspector,
                 indexingPolicy,
-                archive,
+                archive.records(),
                 lexicalIndex,
-                chunker);
+                chunker,
+                new DigestChangeDetection(),
+                new DerivativeDispositionPolicy(),
+                Clock.systemUTC());
 
         List<Closeable> ownedResources = new ArrayList<Closeable>();
         ownedResources.add(tokenCounterResource);
@@ -118,8 +129,8 @@ public final class CorenthComposition {
     }
 
     /** Chalcotheca counter: Tamias decides, Holkas acquires behind the internal port. */
-    private static MediatedResourceAccess archiveCounter(ApplicationSettings settings, ResourceArchive archive) {
-        ResourceAccessPolicy accessPolicy = new LocalFileRootsAccessPolicy(settings.accessibleRoots());
+    private static MediatedResourceAccess archiveCounter(ApplicationSettings settings, InMemoryResourceArchive archive) {
+        ResourceAccessPolicy accessPolicy = new LocalFileRootsAccessPolicy(settings.accessibleRoots(), settings.sourceRefresh());
         AcquisitionPort acquisition = new HolkasAcquisitionPort(
                 DefaultResourceConnectorRegistry.of(new FileSystemResourceConnector()));
         // The local composition has no authenticated source: the access station never needs the vault.
@@ -127,11 +138,15 @@ public final class CorenthComposition {
         return new MediatedResourceService(accessPolicy, acquisition, archive, AcquisitionAccessPort.unauthenticated());
     }
 
-    /** Deigma detection and the shallow extractors that exist on main, behind the lifecycle port. */
+    /** Deigma detection and the registered extractors (#42), behind the lifecycle port. */
     private static ContentInspector deigmaInspector() {
         ExtractionRegistry extractors = new ExtractionRegistry();
         extractors.register(new PlainTextExtractor());
         extractors.register(new MarkdownTextExtractor());
+        extractors.register(new HtmlDocumentExtractor());
+        extractors.register(new PdfDocumentExtractor());
+        extractors.register(new DocxDocumentExtractor());
+        extractors.register(new XlsxDocumentExtractor());
         return new DeigmaContentInspector(new SimpleContentDetector(), extractors);
     }
 

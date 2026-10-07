@@ -2,12 +2,14 @@ package com.aresstack.corenth.astu.acropolis;
 
 import com.aresstack.corenth.astu.BookmarkUri;
 import com.aresstack.corenth.astu.VirtualResourceRef;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.ArchivedResource;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeContent;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeMetadata;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.InMemoryResourceArchive;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceAccess;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResult;
-import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceArchive;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceArchiveRepository;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceDigest;
-import com.aresstack.corenth.astu.acropolis.chalcotheca.ResourceSnapshot;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalChunk;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalDocument;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.anagraphai.LexicalIndex;
@@ -19,9 +21,20 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessDec
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceOperation;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.ChangeDecision;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.ChangeDetectionStrategy;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.ChangeReasonCode;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.ContentComparison;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.DigestChangeDetection;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.ResourceRecordFacts;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.change.SourceObservation;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.disposition.CacheAction;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.disposition.DerivativeDisposition;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.disposition.DerivativeDispositionPolicy;
 
 import java.io.IOException;
 import java.net.URI;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -32,61 +45,58 @@ import java.util.List;
  * ({@link MediatedResourceAccess}, implemented by Chalcotheca's {@code MediatedResourceService}).
  * The coordinator never sees connectors, the acquisition port or secrets; Tamias decides for
  * every read whether the lifecycle actor may receive the content and whether external
- * acquisition is permitted. There is no direct provider or connector path (#10 Slice 1).
+ * acquisition or a refresh is permitted. There is no direct provider or connector path
+ * (#10 Slice 1).
  *
- * <p>Pipeline:
+ * <p>Pipeline ({@link ResourceProcessingPlan#standard()}):
  * <ol>
- *   <li>{@code tamias} {@link ResourcePolicy} — indexing rules before acquisition (size unknown)</li>
- *   <li>{@link MediatedResourceAccess} — mediated read: Tamias access decision, cached or
- *       acquired bronze content</li>
- *   <li>{@code tamias} {@link ResourcePolicy} — indexing rules with the actual size</li>
- *   <li>{@code chalcotheca} — change detection against the indexed version; unchanged content
- *       is neither extracted nor indexed again</li>
- *   <li>{@link ContentInspector} — detect and extract</li>
- *   <li>{@code anagraphai} — lexical indexing</li>
- *   <li>{@code chalcotheca} — record the indexed version</li>
+ *   <li>{@code tamias} {@link ResourcePolicy}: indexing rules before acquisition (size unknown);</li>
+ *   <li>source metadata through the counter; a known size is checked against the indexing rules
+ *       before any payload is acquired (#10 Slice 5);</li>
+ *   <li>{@link MediatedResourceAccess#refreshContent(ResourceAccessRequest)}: mediated read that
+ *       re-acquires the payload when Tamias permits {@code REFRESH_EXTERNAL};</li>
+ *   <li>{@code tamias} {@link ResourcePolicy}: indexing rules with the actual size; a rejected
+ *       payload is invalidated in the counter so that it does not stay cached;</li>
+ *   <li>change detection and derivative disposition by Tamias (#5) on a projection of the
+ *       resource record (#33); the record observes the version, unchanged content whose
+ *       indexed version is current is neither extracted nor indexed again;</li>
+ *   <li>{@link ContentInspector}: detect and extract;</li>
+ *   <li>{@code anagraphai}: lexical indexing;</li>
+ *   <li>record update: the indexed version is recorded in the resource record.</li>
  * </ol>
  *
- * <p>Every call records the executed steps in {@link ResourceProcessingPlan#standard()} order,
- * the {@link ResourceProcessingOutcome} and a typed {@link ResourceProcessingFailure}
- * (#10 Slice 4); {@link ResourceProcessingRunner} records runs over several resources.
- * Authentication cancellation is {@code CANCELLED}, missing credentials and authentication
- * failure are {@code FAILED} with their own reason codes (#10 Slice 3).
+ * <p>The resource records ({@link ResourceArchiveRepository}) are the only truth about versions,
+ * the indexed version and removals at the source. The coordinator maps a record to
+ * {@link ResourceRecordFacts} and compares digests with {@link ResourceDigest#equals(Object)};
+ * Tamias decides, the coordinator executes. A run never writes a failure or denial state into
+ * a record.
  *
- * <p>Outcome semantics for the mediated read:
- * <ul>
- *   <li>allowed, content present (fresh or cached): processing continues;</li>
- *   <li>Tamias withholds the content, i.e. the result carries a decision but no payload
- *       ({@code DENY}, {@code ALLOW_CACHED_ONLY} without cached content on either evaluation,
- *       {@code REQUIRE_AUTH}, {@code REQUIRE_SOURCE_CHECK}): {@code DENIED} with the decision
- *       in the message. Access denials are never lifecycle decisions: they do <em>not</em>
- *       remove derived state (lexical index, lifecycle snapshot), not even for resource-level
- *       reason codes such as {@code BLACKLISTED}. Withdrawing an already indexed resource is
- *       an explicit operation decided by Tamias (#5) and executed by the lifecycle (#10) on
- *       top of the #33 resource records; {@code REQUIRE_AUTH} becomes an Adyton-backed
- *       preparation step in #10 Slice 3;</li>
- *   <li>acquisition error (no decision): {@code FAILED}.</li>
- * </ul>
- * In contrast, an indexing-policy {@code DENY} is a lifecycle decision for this resource and
- * removes stale index entries and withdraws the archive's indexed-version fact (the resource
- * record and its version history are kept, #33).
+ * <p>Every call records the executed steps, the {@link ResourceProcessingOutcome} and a typed
+ * {@link ResourceProcessingFailure} (#10 Slice 4); {@link ResourceProcessingRunner} records runs
+ * over several resources. Authentication cancellation is {@code CANCELLED}, missing credentials
+ * and authentication failure are {@code FAILED} with their own reason codes (#10 Slice 3).
  *
- * <p>Known gaps that are deliberately left to later slices:
+ * <p>Outcome semantics:
  * <ul>
- *   <li>No pre-acquisition size probe exists on the mediated contract. Before Slice 1 the
- *       skeleton denied oversized files before fetching; now the indexing policy is evaluated
- *       first with {@link ResourcePolicy#SIZE_UNKNOWN} (scheme and patterns only), the counter
- *       acquires the content, and size limits are enforced afterwards. Oversized content is
- *       therefore acquired and retained in the counter's cache for the lifetime of the service
- *       instance; the lifecycle cannot evict it ({@code deleteEntry} is not on the contract).
- *       A {@code READ_METADATA} operation on the contract and the acquisition port belongs to
- *       #5/#10 (#33 already records the facts; the policy is #5, contract wiring and execution
- *       are #10).</li>
- *   <li>The counter's bronze caches have no invalidation. Before Slice 1 every run re-read the
- *       source and a changed file was re-indexed; through the counter a changed source is
- *       served from the cache within one service instance and reported as {@code UNCHANGED}
- *       until #5 decides invalidation and #10 executes it (#33 only records the facts).</li>
+ *   <li>Tamias withholds the content ({@code DENY}, {@code ALLOW_CACHED_ONLY} without cached
+ *       content, {@code REQUIRE_AUTH} without a station, {@code REQUIRE_SOURCE_CHECK}):
+ *       {@code DENIED}. An actor-scoped access denial alone never removes derived state, not
+ *       even for {@code BLACKLISTED}. Only when the record carries an explicit removal
+ *       (tombstone, e.g. from {@code deleteEntry}) does the lifecycle execute the Tamias
+ *       disposition for the removal and withdraw the index entry; the history stays.</li>
+ *   <li>The source confirms the resource is absent: the record observes the removal, the
+ *       counter's payload is invalidated and an indexed version is withdrawn: {@code REMOVED}.
+ *       A cached payload fetched before a recorded removal is no proof that the resource exists
+ *       again and is treated as absent.</li>
+ *   <li>An indexing-policy {@code DENY} or a payload without indexable text is a lifecycle
+ *       decision for this resource: stale index entries are removed and the indexed-version
+ *       fact is withdrawn (the record and its history are kept, #33).</li>
+ *   <li>Acquisition errors: {@code FAILED} with a typed reason.</li>
  * </ul>
+ *
+ * <p>Open gap: a source without metadata still has its payload acquired completely before the
+ * size limit applies. The rejected payload is invalidated afterwards, but a bounded acquisition
+ * for unknown sizes does not exist yet.
  */
 public final class ResourceLifecycleCoordinator {
 
@@ -97,50 +107,92 @@ public final class ResourceLifecycleCoordinator {
     private final ActorIdentity actor;
     private final ContentInspector contentInspector;
     private final ResourcePolicy policy;
-    private final ResourceArchive archive;
+    private final ResourceArchiveRepository records;
     private final LexicalIndex lexicalIndex;
     private final LexicalChunker lexicalChunker;
-
-    public ResourceLifecycleCoordinator(MediatedResourceAccess mediatedAccess,
-                                         ActorIdentity actor,
-                                         ContentInspector contentInspector,
-                                         ResourcePolicy policy,
-                                         ResourceArchive archive,
-                                         LexicalIndex lexicalIndex) {
-        this(mediatedAccess, actor, contentInspector, policy, archive, lexicalIndex, null);
-    }
+    private final ChangeDetectionStrategy changeDetection;
+    private final DerivativeDispositionPolicy dispositionPolicy;
+    private final Clock clock;
 
     /**
-     * Creates a coordinator with optional lexical chunking support.
+     * Creates a coordinator over the records of an in-memory archive, without chunking.
      *
-     * @param mediatedAccess the mediated bronze access contract (archive counter)
-     * @param actor the identity under which this lifecycle requests resources
-     * @param contentInspector content inspector port
-     * @param policy indexing policy
-     * @param archive lifecycle snapshot archive
-     * @param lexicalIndex lexical index
-     * @param lexicalChunker optional chunker; if non-null, text blocks are chunked before indexing
+     * @see #ResourceLifecycleCoordinator(MediatedResourceAccess, ActorIdentity, ContentInspector,
+     *      ResourcePolicy, ResourceArchiveRepository, LexicalIndex, LexicalChunker,
+     *      ChangeDetectionStrategy, DerivativeDispositionPolicy, Clock)
      */
     public ResourceLifecycleCoordinator(MediatedResourceAccess mediatedAccess,
                                          ActorIdentity actor,
                                          ContentInspector contentInspector,
                                          ResourcePolicy policy,
-                                         ResourceArchive archive,
+                                         InMemoryResourceArchive archive,
+                                         LexicalIndex lexicalIndex) {
+        this(mediatedAccess, actor, contentInspector, policy, archive, lexicalIndex, null);
+    }
+
+    /**
+     * Creates a coordinator over the records of an in-memory archive with optional chunking,
+     * the Tamias digest change detection, the Tamias disposition policy and the UTC clock.
+     */
+    public ResourceLifecycleCoordinator(MediatedResourceAccess mediatedAccess,
+                                         ActorIdentity actor,
+                                         ContentInspector contentInspector,
+                                         ResourcePolicy policy,
+                                         InMemoryResourceArchive archive,
                                          LexicalIndex lexicalIndex,
                                          LexicalChunker lexicalChunker) {
+        this(mediatedAccess, actor, contentInspector, policy, recordsOf(archive), lexicalIndex, lexicalChunker,
+                new DigestChangeDetection(), new DerivativeDispositionPolicy(), Clock.systemUTC());
+    }
+
+    /**
+     * Creates a coordinator.
+     *
+     * @param mediatedAccess    the mediated bronze access contract (archive counter)
+     * @param actor             the identity under which this lifecycle requests resources
+     * @param contentInspector  content inspector port
+     * @param policy            indexing policy
+     * @param records           the resource records (#33), the only truth about versions
+     * @param lexicalIndex      lexical index
+     * @param lexicalChunker    optional chunker; if non-null, text blocks are chunked before indexing
+     * @param changeDetection   Tamias change detection (#5)
+     * @param dispositionPolicy Tamias derivative disposition (#5)
+     * @param clock             clock for indexing and removal times
+     */
+    public ResourceLifecycleCoordinator(MediatedResourceAccess mediatedAccess,
+                                         ActorIdentity actor,
+                                         ContentInspector contentInspector,
+                                         ResourcePolicy policy,
+                                         ResourceArchiveRepository records,
+                                         LexicalIndex lexicalIndex,
+                                         LexicalChunker lexicalChunker,
+                                         ChangeDetectionStrategy changeDetection,
+                                         DerivativeDispositionPolicy dispositionPolicy,
+                                         Clock clock) {
         if (mediatedAccess == null) throw new IllegalArgumentException("mediatedAccess must not be null");
         if (actor == null) throw new IllegalArgumentException("actor must not be null");
         if (contentInspector == null) throw new IllegalArgumentException("contentInspector must not be null");
         if (policy == null) throw new IllegalArgumentException("policy must not be null");
-        if (archive == null) throw new IllegalArgumentException("archive must not be null");
+        if (records == null) throw new IllegalArgumentException("records must not be null");
         if (lexicalIndex == null) throw new IllegalArgumentException("lexicalIndex must not be null");
+        if (changeDetection == null) throw new IllegalArgumentException("changeDetection must not be null");
+        if (dispositionPolicy == null) throw new IllegalArgumentException("dispositionPolicy must not be null");
+        if (clock == null) throw new IllegalArgumentException("clock must not be null");
         this.mediatedAccess = mediatedAccess;
         this.actor = actor;
         this.contentInspector = contentInspector;
         this.policy = policy;
-        this.archive = archive;
+        this.records = records;
         this.lexicalIndex = lexicalIndex;
         this.lexicalChunker = lexicalChunker;
+        this.changeDetection = changeDetection;
+        this.dispositionPolicy = dispositionPolicy;
+        this.clock = clock;
+    }
+
+    private static ResourceArchiveRepository recordsOf(InMemoryResourceArchive archive) {
+        if (archive == null) throw new IllegalArgumentException("archive must not be null");
+        return archive.records();
     }
 
     /**
@@ -156,8 +208,7 @@ public final class ResourceLifecycleCoordinator {
             return run.fail(ResourceProcessingFailure.Reason.INVALID_REQUEST, "Resource reference must not be null");
         }
 
-        // 1. Indexing policy before acquisition (scheme, include/exclude patterns).
-        //    The size is unknown at this point; size limits are enforced again after acquisition.
+        // 1. Indexing policy before acquisition (scheme, include/exclude patterns, size unknown)
         PolicyReason preAcquisition = policy.evaluate(ref, ResourcePolicy.SIZE_UNKNOWN);
         if (preAcquisition.decision() == AcceptanceDecision.DENY) {
             run.stopped(ResourceProcessingStepType.INDEXING_POLICY_BEFORE_ACQUISITION, preAcquisition.reason());
@@ -165,12 +216,39 @@ public final class ResourceLifecycleCoordinator {
         }
         run.completed(ResourceProcessingStepType.INDEXING_POLICY_BEFORE_ACQUISITION, preAcquisition.reason());
 
-        // 2. Mediated acquisition through the archive counter (Tamias decides, Holkas stays hidden)
+        // 2. Source metadata: reject a known oversized resource before its payload is acquired
+        run.at(ResourceProcessingStepType.SOURCE_METADATA);
+        MediatedResult<BronzeMetadata> metadata;
+        try {
+            metadata = mediatedAccess.readMetadata(request(ref, ResourceOperation.READ_METADATA));
+        } catch (RuntimeException e) {
+            return run.fail(ResourceProcessingFailure.Reason.MEDIATED_ACCESS_ERROR,
+                    "Mediated metadata read failed: " + e.getMessage());
+        }
+        if (metadata != null && metadata.isSuccess() && metadata.value() != null
+                && metadata.value().sizeBytes() >= 0) {
+            long size = metadata.value().sizeBytes();
+            run.completed(ResourceProcessingStepType.SOURCE_METADATA, "size " + size);
+            PolicyReason sizeCheck = policy.evaluate(ref, size);
+            if (sizeCheck.decision() == AcceptanceDecision.DENY) {
+                run.stopped(ResourceProcessingStepType.INDEXING_POLICY_WITH_SIZE, sizeCheck.reason());
+                mediatedAccess.invalidatePayload(ref.uri());
+                return cleanupAfterStop(run, ResourceProcessingOutcome.DENIED, sizeCheck.reason(), null);
+            }
+        } else if (failureOf(metadata) == MediatedResult.Failure.SOURCE_ABSENT) {
+            run.stopped(ResourceProcessingStepType.SOURCE_METADATA, "source reports the resource absent");
+            return sourceAbsent(run, records.findByRef(ref));
+        } else if (failureOf(metadata) == MediatedResult.Failure.AUTHENTICATION_CANCELLED) {
+            return failedAcquisition(run, ResourceProcessingStepType.SOURCE_METADATA, metadata);
+        } else {
+            run.completed(ResourceProcessingStepType.SOURCE_METADATA, "size unknown");
+        }
+
+        // 3. Mediated read; the counter refreshes from the source when Tamias permits it
         run.at(ResourceProcessingStepType.MEDIATED_ACQUISITION);
         MediatedResult<BronzeContent> access;
         try {
-            access = mediatedAccess.readContent(new ResourceAccessRequest(
-                    actor, ref.uri(), ResourceOperation.READ_CONTENT, LIFECYCLE_PURPOSE));
+            access = mediatedAccess.refreshContent(request(ref, ResourceOperation.READ_CONTENT));
         } catch (RuntimeException e) {
             return run.fail(ResourceProcessingFailure.Reason.MEDIATED_ACCESS_ERROR,
                     "Mediated access failed: " + e.getMessage());
@@ -185,9 +263,13 @@ public final class ResourceLifecycleCoordinator {
             if (access.decision() != null) {
                 String reason = describe(access.decision());
                 run.stopped(ResourceProcessingStepType.MEDIATED_ACQUISITION, reason);
-                return run.finish(ResourceProcessingOutcome.DENIED, reason, null);
+                return accessWithheld(run, reason);
             }
-            return failedAcquisition(run, access);
+            if (failureOf(access) == MediatedResult.Failure.SOURCE_ABSENT) {
+                run.stopped(ResourceProcessingStepType.MEDIATED_ACQUISITION, "source reports the resource absent");
+                return sourceAbsent(run, records.findByRef(ref));
+            }
+            return failedAcquisition(run, ResourceProcessingStepType.MEDIATED_ACQUISITION, access);
         }
         BronzeContent bronze = access.value();
         if (bronze == null) {
@@ -197,23 +279,44 @@ public final class ResourceLifecycleCoordinator {
 
         byte[] bytes = bronze.content();
 
-        // 3. Indexing policy with the actual size (tamias)
+        // 4. Indexing policy with the actual size; a rejected payload must not stay cached
         PolicyReason policyResult = policy.evaluate(ref, bytes.length);
         if (policyResult.decision() == AcceptanceDecision.DENY) {
             run.stopped(ResourceProcessingStepType.INDEXING_POLICY_WITH_SIZE, policyResult.reason());
+            mediatedAccess.invalidatePayload(ref.uri());
             return cleanupAfterStop(run, ResourceProcessingOutcome.DENIED, policyResult.reason(), null);
         }
         run.completed(ResourceProcessingStepType.INDEXING_POLICY_WITH_SIZE, policyResult.reason());
 
-        // 4. Unchanged content needs neither extraction nor an index write (chalcotheca facts)
+        // 5. Tamias change detection and disposition on the record projection (#5, #33)
+        ArchivedResource record = records.findByRef(ref);
+        if (record != null && record.isRemovedAtSource()
+                && bronze.fetchedAtMillis() < record.sourceRemoval().observedAtMillis()) {
+            // A payload fetched before the recorded removal does not prove that the resource exists
+            // again, so the recorded removal stands
+            return sourceAbsent(run, record);
+        }
         ResourceDigest digest = bronze.digest();
-        if (!archive.hasChanged(ref, digest)) {
-            run.stopped(ResourceProcessingStepType.CHANGE_DETECTION, "indexed version is current");
+        SourceObservation observation = record == null
+                ? SourceObservation.presentWithoutRecord()
+                : SourceObservation.present(record.latestObservedVersion().digest().equals(digest)
+                        ? ContentComparison.SAME_AS_LATEST_OBSERVED
+                        : ContentComparison.DIFFERS_FROM_LATEST_OBSERVED);
+        DerivativeDisposition disposition = dispositionPolicy.decide(
+                changeDetection.detect(factsOf(record), observation));
+        ArchivedResource observed = record == null
+                ? ArchivedResource.firstObservation(ref, digest, bronze.fetchedAtMillis())
+                : record.observe(digest, bronze.fetchedAtMillis());
+        if (observed != record) {
+            records.save(observed);
+        }
+        if (!disposition.requiresIndexing()) {
+            run.stopped(ResourceProcessingStepType.CHANGE_DETECTION, describe(disposition));
             return run.finish(ResourceProcessingOutcome.UNCHANGED, "content unchanged", null);
         }
-        run.completed(ResourceProcessingStepType.CHANGE_DETECTION, "indexing required");
+        run.completed(ResourceProcessingStepType.CHANGE_DETECTION, describe(disposition));
 
-        // 5. Detect and extract content
+        // 6. Detect and extract content
         String filenameHint = filenameHint(ref.uri());
         run.at(ResourceProcessingStepType.CONTENT_INSPECTION);
         InspectionResult inspection = contentInspector.inspect(ref, bytes, filenameHint);
@@ -230,7 +333,7 @@ public final class ResourceLifecycleCoordinator {
         }
         run.completed(ResourceProcessingStepType.CONTENT_INSPECTION, inspection.mimeType());
 
-        // 6. Index via anagraphai
+        // 7. Index via anagraphai
         run.at(ResourceProcessingStepType.LEXICAL_INDEXING);
         try {
             lexicalIndex.index(document);
@@ -240,11 +343,89 @@ public final class ResourceLifecycleCoordinator {
         }
         run.completed(ResourceProcessingStepType.LEXICAL_INDEXING, null);
 
-        // 7. Record the indexed version in the resource record
-        archive.store(new ResourceSnapshot(ref, digest, System.currentTimeMillis()));
-        run.completed(ResourceProcessingStepType.RECORD_UPDATE, null);
+        // 8. Record the indexed version in the resource record
+        records.save(observed.markIndexed(observed.latestObservedVersion(), clock.millis()));
+        run.completed(ResourceProcessingStepType.RECORD_UPDATE,
+                "indexed version #" + observed.latestObservedVersion().sequence());
 
         return run.finish(ResourceProcessingOutcome.INDEXED, "indexed successfully", null);
+    }
+
+    private ResourceAccessRequest request(VirtualResourceRef ref, ResourceOperation operation) {
+        return new ResourceAccessRequest(actor, ref.uri(), operation, LIFECYCLE_PURPOSE);
+    }
+
+    /**
+     * Maps a resource record to the Tamias fact projection (#5). Returns {@code null} for an
+     * unknown resource.
+     */
+    static ResourceRecordFacts factsOf(ArchivedResource record) {
+        if (record == null) {
+            return null;
+        }
+        long indexed = record.isIndexed()
+                ? record.indexedVersion().version().sequence()
+                : ResourceRecordFacts.NOT_INDEXED;
+        return new ResourceRecordFacts(record.latestObservedVersion().sequence(), indexed,
+                record.isRemovedAtSource());
+    }
+
+    /**
+     * Ends a run whose content Tamias withheld. Derived state stays, unless the record carries an
+     * explicit removal: then the Tamias disposition for that removal is executed.
+     */
+    private ProcessingResult accessWithheld(Execution run, String reason) {
+        ArchivedResource record = records.findByRef(run.ref);
+        if (record == null || !record.isRemovedAtSource()) {
+            return run.finish(ResourceProcessingOutcome.DENIED, reason, null);
+        }
+        DerivativeDisposition disposition = dispositionPolicy.decide(
+                changeDetection.detect(factsOf(record), SourceObservation.absent()));
+        run.completed(ResourceProcessingStepType.CHANGE_DETECTION, describe(disposition));
+        return executeRemoval(run, record, disposition, ResourceProcessingOutcome.DENIED, reason);
+    }
+
+    /** Executes the Tamias disposition for a resource the source reports as absent. */
+    private ProcessingResult sourceAbsent(Execution run, ArchivedResource record) {
+        ChangeDecision change = changeDetection.detect(factsOf(record), SourceObservation.absent());
+        DerivativeDisposition disposition = dispositionPolicy.decide(change);
+        if (record == null) {
+            if (disposition.cacheAction() == CacheAction.INVALIDATE) {
+                mediatedAccess.invalidatePayload(run.ref.uri());
+            }
+            run.completed(ResourceProcessingStepType.CHANGE_DETECTION, describe(disposition));
+            return run.finish(ResourceProcessingOutcome.FAILED, "Resource not found at its source",
+                    new ResourceProcessingFailure(ResourceProcessingFailure.Reason.SOURCE_NOT_FOUND,
+                            "Resource not found at its source"));
+        }
+        run.completed(ResourceProcessingStepType.CHANGE_DETECTION, describe(disposition));
+        ArchivedResource updated = record;
+        if (change.reasonCode() == ChangeReasonCode.REMOVAL_OBSERVED) {
+            updated = record.markRemovedAtSource(clock.millis());
+            records.save(updated);
+            run.completed(ResourceProcessingStepType.RECORD_UPDATE, "removal at source recorded");
+        }
+        return executeRemoval(run, updated, disposition, ResourceProcessingOutcome.REMOVED, "removed at source");
+    }
+
+    /** Invalidates the payload and withdraws the index entry as the disposition requires. */
+    private ProcessingResult executeRemoval(Execution run, ArchivedResource record, DerivativeDisposition disposition,
+                                            ResourceProcessingOutcome outcome, String message) {
+        if (disposition.cacheAction() == CacheAction.INVALIDATE) {
+            mediatedAccess.invalidatePayload(run.ref.uri());
+        }
+        if (!disposition.requiresWithdrawal()) {
+            return run.finish(outcome, message, null);
+        }
+        try {
+            lexicalIndex.remove(run.ref);
+            lexicalIndex.commit();
+        } catch (IOException e) {
+            return cleanupFailed(run, e);
+        }
+        records.save(record.withdrawIndexedVersion());
+        run.completed(ResourceProcessingStepType.DERIVED_STATE_CLEANUP, "index entry withdrawn");
+        return run.finish(outcome, message + "; index entry withdrawn", null);
     }
 
     /** Builds the lexical document, or returns {@code null} if no text-bearing block remains. */
@@ -272,12 +453,22 @@ public final class ResourceLifecycleCoordinator {
         return chunkIndex == 0 ? null : docBuilder.build();
     }
 
-    private static ProcessingResult failedAcquisition(Execution run, MediatedResult<BronzeContent> access) {
-        MediatedResult.Failure kind = access.failure() == null
-                ? MediatedResult.Failure.ACQUISITION_FAILED : access.failure();
+    private static MediatedResult.Failure failureOf(MediatedResult<?> result) {
+        if (result == null || result.isSuccess() || result.decision() != null) {
+            return null;
+        }
+        return result.failure() == null ? MediatedResult.Failure.ACQUISITION_FAILED : result.failure();
+    }
+
+    private static ProcessingResult failedAcquisition(Execution run, ResourceProcessingStepType step,
+                                                      MediatedResult<?> access) {
+        MediatedResult.Failure kind = failureOf(access);
+        if (kind == null) {
+            kind = MediatedResult.Failure.ACQUISITION_FAILED;
+        }
         switch (kind) {
             case AUTHENTICATION_CANCELLED:
-                run.stopped(ResourceProcessingStepType.MEDIATED_ACQUISITION, "credential request cancelled");
+                run.stopped(step, "credential request cancelled");
                 return run.finish(ResourceProcessingOutcome.CANCELLED, "Credential request cancelled",
                         new ResourceProcessingFailure(ResourceProcessingFailure.Reason.AUTHENTICATION_CANCELLED,
                                 access.errorMessage()));
@@ -304,14 +495,26 @@ public final class ResourceLifecycleCoordinator {
         try {
             lexicalIndex.remove(ref);
             lexicalIndex.commit();
-            archive.remove(ref);
         } catch (IOException e) {
-            run.failed(ResourceProcessingStepType.DERIVED_STATE_CLEANUP, e.getMessage());
-            return run.finish(ResourceProcessingOutcome.FAILED, "Index cleanup failed: " + e.getMessage(),
-                    new ResourceProcessingFailure(ResourceProcessingFailure.Reason.CLEANUP_FAILED, e.getMessage()));
+            return cleanupFailed(run, e);
+        }
+        ArchivedResource record = records.findByRef(ref);
+        if (record != null && record.isIndexed()) {
+            records.save(record.withdrawIndexedVersion());
         }
         run.completed(ResourceProcessingStepType.DERIVED_STATE_CLEANUP, null);
         return run.finish(outcome, message, failure);
+    }
+
+    private static ProcessingResult cleanupFailed(Execution run, IOException e) {
+        run.failed(ResourceProcessingStepType.DERIVED_STATE_CLEANUP, e.getMessage());
+        return run.finish(ResourceProcessingOutcome.FAILED, "Index cleanup failed: " + e.getMessage(),
+                new ResourceProcessingFailure(ResourceProcessingFailure.Reason.CLEANUP_FAILED, e.getMessage()));
+    }
+
+    private static String describe(DerivativeDisposition disposition) {
+        return disposition.change().reasonCode() + ": cache " + disposition.cacheAction()
+                + ", index " + disposition.indexAction() + " (" + disposition.indexReason() + ")";
     }
 
     /** Collects the executed steps of one resource and produces the immutable result. */

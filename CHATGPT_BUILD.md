@@ -12,7 +12,7 @@ bash chatgpt-build.sh
 
 The default mode compiles dependency-free Java 8 production files with `javac`. It avoids a Gradle Wrapper download and is intended for fast structural checks in environments without network access.
 
-The script writes generated files below `build/chatgpt/` and lists skipped sources in `build/chatgpt/skipped-external-sources.txt`.
+The script writes generated files below `build/chatgpt/` and lists skipped sources in `build/chatgpt/skipped-external-sources.txt`. A source is skipped when it imports an external library (Lucene, JUnit, OpenNLP, JSoup, PDFBox, POI and the platform bindings) or, transitively, a class of another skipped source, such as the composition root.
 
 ## Full Gradle build with a prepared cache
 

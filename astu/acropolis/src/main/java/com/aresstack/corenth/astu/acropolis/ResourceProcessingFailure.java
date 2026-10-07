@@ -16,6 +16,7 @@ public final class ResourceProcessingFailure {
         AUTHENTICATION_UNAVAILABLE,
         AUTHENTICATION_CANCELLED,
         AUTHENTICATION_FAILED,
+        SOURCE_NOT_FOUND,
         INSPECTION_FAILED,
         NO_INDEXABLE_TEXT,
         INDEXING_FAILED,

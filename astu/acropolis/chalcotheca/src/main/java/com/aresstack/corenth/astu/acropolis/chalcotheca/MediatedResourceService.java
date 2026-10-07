@@ -38,15 +38,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * service implements, not on this class, so that the composition point decides how the
  * counter is assembled.
  *
- * <p><strong>Known limitation (tracked by #5 and #10):</strong> the three in-memory stores
- * below are payload caches without invalidation and without TTL. Content or listings read
- * once are served from the cache until {@link #deleteEntry(ResourceAccessRequest)} removes
- * them, so a changed source is not re-acquired within the lifetime of a service instance.
- * Since #33 the {@link ResourceArchive} is a facade over the authoritative resource records
- * (versions, indexed-version fact, removal at source); those records hold facts about
- * payloads, not the payloads, and they do not record cache presence. Deciding when a cached
- * payload is invalid is Tamias (#5); consolidating the stores against the records is #10
- * Slice 5. They are not replaced ad hoc here.
+ * <p><strong>Payload caches (#10 Slice 5):</strong> the three in-memory stores below hold
+ * payloads without TTL. {@link #readContent(ResourceAccessRequest)} serves cached content;
+ * {@link #refreshContent(ResourceAccessRequest)} re-acquires it when Tamias permits
+ * {@code REFRESH_EXTERNAL}; {@link #invalidatePayload(BookmarkUri)} executes a Tamias cache
+ * disposition (#5) and {@link #deleteEntry(ResourceAccessRequest)} an explicit tombstone.
+ * The {@link ResourceArchive} facade and the resource records (#33) hold facts about payloads,
+ * not the payloads, and they do not record cache presence.
  */
 public final class MediatedResourceService implements MediatedResourceAccess {
 
@@ -207,6 +205,110 @@ public final class MediatedResourceService implements MediatedResourceAccess {
     }
 
     /**
+     * Reads content and refreshes it from the source when Tamias permits {@code REFRESH_EXTERNAL}
+     * (#10 Slice 5).
+     *
+     * <p>A permitted refresh bypasses the cached payload, prepares access like any acquisition and
+     * replaces the cache on success. A failed refresh keeps the previous cached payload; the caller
+     * receives the typed failure, never the stale bytes. Without refresh permission the request is
+     * served exactly like {@link #readContent(ResourceAccessRequest)}.
+     */
+    @Override
+    public MediatedResult<BronzeContent> refreshContent(ResourceAccessRequest request) {
+        if (request == null) {
+            return MediatedResult.error("request must not be null");
+        }
+        if (request.operation() != ResourceOperation.READ_CONTENT) {
+            return MediatedResult.denied(ResourceAccessDecision.deny(
+                    AccessReasonCode.INVALID_OPERATION,
+                    "Operation mismatch: refreshContent requires READ_CONTENT, got " + request.operation()));
+        }
+        ResourceAccessDecision decision = accessPolicy.evaluate(request);
+        if (!decision.isAllowed()) {
+            return MediatedResult.denied(decision);
+        }
+        if (decision.type() == AccessDecisionType.ALLOW_CACHED_ONLY) {
+            return readContent(request);
+        }
+        ResourceAccessDecision refreshDecision = evaluateSourceAccess(request, ResourceOperation.REFRESH_EXTERNAL);
+        if (!permitsSourceAccess(refreshDecision)) {
+            return readContent(request);
+        }
+        final BookmarkUri target = request.target();
+        return acquirePrepared(request, decision, refreshDecision, new Acquisition<BronzeContent>() {
+            @Override
+            public BronzeContent acquire(AcquisitionCapability capability) throws IOException {
+                BronzeContent acquired = acquisitionPort.fetchContent(target, capability);
+                contentCache.put(target, acquired);
+                return acquired;
+            }
+        });
+    }
+
+    /**
+     * Reads source metadata, mediated by Tamias (#10 Slice 5).
+     *
+     * <p>The request must carry {@link ResourceOperation#READ_METADATA}. Metadata is always read
+     * from the source (gated by {@code FETCH_EXTERNAL} and access preparation) and kept as the last
+     * known metadata of the URI until {@link #invalidatePayload(BookmarkUri)} or
+     * {@link #deleteEntry(ResourceAccessRequest)} drops it.
+     */
+    @Override
+    public MediatedResult<BronzeMetadata> readMetadata(ResourceAccessRequest request) {
+        if (request == null) {
+            return MediatedResult.error("request must not be null");
+        }
+        if (request.operation() != ResourceOperation.READ_METADATA) {
+            return MediatedResult.denied(ResourceAccessDecision.deny(
+                    AccessReasonCode.INVALID_OPERATION,
+                    "Operation mismatch: readMetadata requires READ_METADATA, got " + request.operation()));
+        }
+        ResourceAccessDecision decision = accessPolicy.evaluate(request);
+        if (!decision.isAllowed()) {
+            return MediatedResult.denied(decision);
+        }
+        final BookmarkUri target = request.target();
+        if (!acquisitionPort.offersMetadata(target)) {
+            return MediatedResult.failure(MediatedResult.Failure.METADATA_UNAVAILABLE,
+                    "The source offers no metadata");
+        }
+        if (decision.type() == AccessDecisionType.ALLOW_CACHED_ONLY) {
+            BronzeMetadata cached = metadataCache.get(target);
+            if (cached != null) {
+                return MediatedResult.success(cached, decision);
+            }
+            return MediatedResult.denied(ResourceAccessDecision.deny(
+                    AccessReasonCode.CACHE_ONLY_ALLOWED,
+                    "No cached metadata available and external fetch not permitted"));
+        }
+        return acquireExternally(request, decision, new Acquisition<BronzeMetadata>() {
+            @Override
+            public BronzeMetadata acquire(AcquisitionCapability capability) throws IOException {
+                BronzeMetadata metadata = acquisitionPort.fetchMetadata(target, capability);
+                if (metadata == null) {
+                    throw new MetadataUnavailableException();
+                }
+                metadataCache.put(target, metadata);
+                return metadata;
+            }
+        });
+    }
+
+    /**
+     * Drops the cached payloads of a URI (content, listing, metadata). The resource records stay
+     * untouched; this only executes a cache disposition.
+     */
+    @Override
+    public void invalidatePayload(BookmarkUri uri) {
+        if (uri == null) {
+            throw new IllegalArgumentException("uri must not be null");
+        }
+        listingCache.remove(uri);
+        contentCache.remove(uri);
+        metadataCache.remove(uri);
+    }
+
+    /**
      * Deletes a bronze archive entry (tombstones it).
      *
      * <p>The request must carry {@link ResourceOperation#DELETE_ARCHIVE_ENTRY}.
@@ -289,15 +391,29 @@ public final class MediatedResourceService implements MediatedResourceAccess {
     private <T> MediatedResult<T> acquireExternally(ResourceAccessRequest request,
                                                     ResourceAccessDecision decision,
                                                     Acquisition<T> acquisition) {
-        BookmarkUri uri = request.target();
-        ResourceAccessRequest fetchRequest = new ResourceAccessRequest(
-                request.actor(), uri, ResourceOperation.FETCH_EXTERNAL, request.purpose());
-        ResourceAccessDecision fetchDecision = accessPolicy.evaluate(fetchRequest);
-        if (fetchDecision.type() != AccessDecisionType.ALLOW
-                && fetchDecision.type() != AccessDecisionType.REQUIRE_AUTH) {
+        ResourceAccessDecision fetchDecision = evaluateSourceAccess(request, ResourceOperation.FETCH_EXTERNAL);
+        if (!permitsSourceAccess(fetchDecision)) {
             return MediatedResult.denied(fetchDecision);
         }
+        return acquirePrepared(request, decision, fetchDecision, acquisition);
+    }
 
+    /** Asks Tamias whether the source may be contacted for the given external operation. */
+    private ResourceAccessDecision evaluateSourceAccess(ResourceAccessRequest request, ResourceOperation operation) {
+        return accessPolicy.evaluate(new ResourceAccessRequest(
+                request.actor(), request.target(), operation, request.purpose()));
+    }
+
+    private static boolean permitsSourceAccess(ResourceAccessDecision decision) {
+        return decision.type() == AccessDecisionType.ALLOW || decision.type() == AccessDecisionType.REQUIRE_AUTH;
+    }
+
+    /** Prepares access for a permitted source contact and runs the acquisition. */
+    private <T> MediatedResult<T> acquirePrepared(ResourceAccessRequest request,
+                                                  ResourceAccessDecision decision,
+                                                  ResourceAccessDecision sourceDecision,
+                                                  Acquisition<T> acquisition) {
+        BookmarkUri uri = request.target();
         AcquisitionAccess access;
         try {
             access = accessPreparation.prepare(new AcquisitionAccessRequest(
@@ -311,9 +427,9 @@ public final class MediatedResourceService implements MediatedResourceAccess {
 
         switch (access.status()) {
             case NOT_REQUIRED:
-                if (fetchDecision.type() == AccessDecisionType.REQUIRE_AUTH) {
+                if (sourceDecision.type() == AccessDecisionType.REQUIRE_AUTH) {
                     // Tamias requires authentication, but no station can provide it for this source
-                    return MediatedResult.denied(fetchDecision);
+                    return MediatedResult.denied(sourceDecision);
                 }
                 return acquireWith(null, decision, acquisition);
             case GRANTED:
@@ -336,9 +452,26 @@ public final class MediatedResourceService implements MediatedResourceAccess {
                                                      ResourceAccessDecision decision,
                                                      Acquisition<T> acquisition) {
         try {
-            return MediatedResult.success(acquisition.acquire(capability), decision);
+            T acquired = acquisition.acquire(capability);
+            if (acquired == null) {
+                return MediatedResult.error("Acquisition returned no payload");
+            }
+            return MediatedResult.success(acquired, decision);
+        } catch (MetadataUnavailableException e) {
+            return MediatedResult.failure(MediatedResult.Failure.METADATA_UNAVAILABLE, e.getMessage());
+        } catch (SourceAbsentException e) {
+            return MediatedResult.failure(MediatedResult.Failure.SOURCE_ABSENT, e.getMessage());
         } catch (IOException e) {
             return MediatedResult.error("Acquisition failed: " + e.getMessage());
+        }
+    }
+
+    /** Signals that the acquisition port offers no metadata for the source. */
+    private static final class MetadataUnavailableException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        MetadataUnavailableException() {
+            super("The source offers no metadata");
         }
     }
 
