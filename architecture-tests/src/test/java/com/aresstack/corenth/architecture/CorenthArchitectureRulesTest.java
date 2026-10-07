@@ -231,6 +231,22 @@ public class CorenthArchitectureRulesTest {
                     ADYTON)
             .because("Exedra is a concrete Swing shell and must not own acquisition, extraction, indexing, policy, or credential flow");
 
+    private static final ArchRule KATAGOGION_TOOLS_MUST_STAY_ON_MEDIATED_CAPABILITIES = noClasses()
+            .that().resideInAnyPackage(KATAGOGION)
+            .should().dependOnClassesThat(
+                    resideInAnyPackage(
+                            "javax.swing..",
+                            "java.awt..",
+                            "javafx..",
+                            ADYTON,
+                            EMPORION,
+                            PLATFORM,
+                            EXEDRA,
+                            TAMIAS)
+                            .or(haveFullyQualifiedNames(MEDIATED_RESOURCE_SERVICE, ACQUISITION_PORT)))
+            .because("plugins and tools receive only mediated capabilities; secrets, acquisition, connectors, "
+                    + "policies and the UI stay out of the tool lodging house (#12)");
+
     private static final ArchRule APPLICATION_MUST_STAY_HEADLESS = noClasses()
             .that().resideInAnyPackage(APPLICATION)
             .should().dependOnClassesThat().resideInAnyPackage(
@@ -386,6 +402,11 @@ public class CorenthArchitectureRulesTest {
     @Test
     public void propylaeaMustStayAPureSourceGate() {
         PROPYLAEA_MUST_STAY_A_PURE_SOURCE_GATE.check(corenthClasses);
+    }
+
+    @Test
+    public void katagogionToolsMustStayOnMediatedCapabilities() {
+        KATAGOGION_TOOLS_MUST_STAY_ON_MEDIATED_CAPABILITIES.check(corenthClasses);
     }
 
     @Test

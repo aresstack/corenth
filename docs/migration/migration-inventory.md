@@ -89,7 +89,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | `rag` lexikalisch (LuceneLexicalIndex, Chunk, PR-#51-Chunking) | ~10 | `anagraphai` (+`chunking`) | ✅ migriert | #6/#21, #24/#25 ✔ | [anagraphai-inventory](mainframemate-anagraphai-inventory.md) |
 | `rag` semantisch (SemanticIndex, EmbeddingClient, HybridRetriever, Reranker) | ~10 | `pinakes` (ports-first) | 🟡 teilweise — Ports, Werte, deterministischer In-Memory-Referenzindex, RRF und Hybrid Retrieval mit getrennt schaltbaren Stufen (lokal integriert, ArchUnit-Regel `PINAKES_MUST_STAY_SEMANTIC_REGISTER`); reale Embedding/Rerank-Runtime, persistenter Index und Lifecycle-Verdrahtung offen | #7 | [Plan PR 7](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
 | `jcl` (ANTLR-Grammatiken), `service/codeanalytics` (Natural/COBOL/DDM-Parser, CallExtractor) | ~15 | `propylaea` (Model-first, Parser als Adapter) | 🟡 teilweise — sprachneutrales Strukturmodell, Parser-Port, Registry und Parser für Natural, JCL und COBOL (fixture-getestet, lokal integriert, ArchUnit `PROPYLAEA_MUST_STAY_A_PURE_SOURCE_GATE`); Application-Verdrahtung und Tests gegen echte Quellen offen | #3 | [Plan PR 8](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
-| `mcp`, `runtime`, `plugins` (ToolSpec, ToolRegistry, PluginManager) | ~35 | `katagogion` (ports-first, Tools nur über Mediated Ports) | ⬜ offen (0 Klassen) | #12 | [Plan PR 9](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
+| `mcp`, `runtime`, `plugins` (ToolSpec, ToolRegistry, PluginManager) | ~35 | `katagogion` (ports-first, Tools nur über Mediated Ports) | 🟡 teilweise — expliziter Tool-Host mit Allowlist-Zulassung, ServiceLoader-Discovery ohne Installation, Referenztools Suche/Lesen; Application bindet Suche und Mediated Access (Tamias entscheidet jeden Tool-Lesezugriff), ArchUnit `KATAGOGION_TOOLS_MUST_STAY_ON_MEDIATED_CAPABILITIES` (lokal integriert); MCP, wd4j und Prozessisolation offen | #12 | [Plan PR 9](corenth-mainframemate-backend-reimplementation-plan-2026-06-02.md) |
 
 ### 2.5 UI
 
@@ -126,7 +126,7 @@ Die Boundary-Regeln aus [architecture-notes.md](../architecture-notes.md) sind n
 | PR 4 | `tamias` IndexingPolicy/ChangeDetection/CacheInvalidation (#5) | 🟡 Scope/Traversal/Size, ChangeDetection und Derivative Disposition umgesetzt und vom Lifecycle angewandt (lokal integriert) |
 | PR 5 | `acropolis` Run/Plan/Step/Status (#10) | 🟡 Slices 1–5 umgesetzt (2–5 lokal integriert); begrenzte Beschaffung bei unbekannter Größe offen |
 | PR 6 | FTP/MVS/JES als erster echter Connector | 🟡 FTP/MVS nur als Ports, `FtpAccessHandle` und Test-Fakes modelliert, kein produktiver FTP-Transport (s. §2.3); JES separat in #35, setzt den Transport-Slice voraus |
-| PR 7–9 | `pinakes` / `propylaea` / `katagogion` ports-first (#7/#3/#12) | ⬜ offen |
+| PR 7–9 | `pinakes` / `propylaea` / `katagogion` ports-first (#7/#3/#12) | 🟡 Kerne umgesetzt und lokal integriert (Nacht 2026-10-07); reale Runtimes, Application-Verdrahtung von Propylaea/Pinakes und MCP offen |
 
 ---
 
@@ -180,7 +180,7 @@ Auffällig: Ab Juni wechselte der Workflow von Copilot-Issue+PR auf Direkt-Commi
 
 7. **Research-Disposition (#44):** §2.6 vollständig auf `MIGRATE`, `EXTERNAL` oder `DO_NOT_MIGRATE` heben; wd4j-Bezug zu #12 ausdrücklich entscheiden.
 8. **CI als Merge-Gate (#45 / #40):** PR-Lauf nachgewiesen (PR #46, Lauf 9: 394 Tests, 0 Fehler, 2 Skips); jetzt Required Check `Build and test (Java 8 target)` im Ruleset aktivieren, #41 ohne Merge schließen, #40 schließen. Keine zusätzlichen Guards an leichtgewichtigen Swing-Tests. Stand und Begründung: `docs/analysis/ci-build-test-gap.md`.
-9. **#7/#3/#12** bleiben bis nach dem tragfähigen Lifecycle und den priorisierten Adapter-Slices ports-first im Backlog.
+9. **#7/#3/#12:** Kerne liegen lokal integriert vor. Nächste kleine Pakete: Pinakes-Hook im Lifecycle (`replaceResource`/`removeResource` mit denselben `LexicalChunk`s), Propylaea gegen echte Quellen, Katagogion-MCP-Adapter erst nach #44.
 
 Branch-Aufräumarbeiten und die Exedra-CI-Verifikation sind unabhängig von #10 und können parallel erfolgen. Der zuvor angenommene Headless-Codefix entfällt als Blocker. Bei Squash-Merges darf die Löschentscheidung nicht allein auf `git branch --merged` beruhen, sondern auf PR-Merge-Status plus inhaltsbasiertem Vergleich gegen `main`.
 
