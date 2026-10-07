@@ -38,9 +38,10 @@ import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.sli
  *       fails the build configuration, so new modules must be added there deliberately (as
  *       {@code :proasteion:application} was in #10 Slice 2).</li>
  *   <li>The secret-containment rules whitelist the vault and the trusted secret adapters by
- *       package ({@link #PLATFORM_SECURITY_KEEPASSRPC}, {@link #PLATFORM_NETWORK}). Every new
- *       secret-source adapter from #43 (prompt, encrypted store, DPAPI) must be added to these
- *       whitelists explicitly; otherwise its use of {@code SecretMaterial} fails these rules.</li>
+ *       package ({@link #PLATFORM_SECURITY_KEEPASSRPC}, {@link #PLATFORM_SECURITY_PROMPT},
+ *       {@link #PLATFORM_NETWORK}). Every further secret-source adapter from #43 (encrypted store,
+ *       DPAPI) must be added to these whitelists explicitly; otherwise its use of
+ *       {@code SecretMaterial} fails these rules. All secret adapters stay UI-free.</li>
  *   <li>The outer composition root {@code proasteion.application} (ADR-0001) may depend on every
  *       adapter and on the inner city. {@link #APPLICATION_MUST_STAY_HEADLESS},
  *       {@link #ONLY_HOSTS_MAY_DEPEND_ON_APPLICATION}, {@link #APPLICATION_MUST_NOT_DECIDE_POLICIES}
@@ -78,6 +79,8 @@ public class CorenthArchitectureRulesTest {
     private static final String PROPYLAEA = "com.aresstack.corenth.astu.propylaea..";
     private static final String PLATFORM_NETWORK = "com.aresstack.corenth.proasteion.platform.network..";
     private static final String PLATFORM_SECURITY_KEEPASSRPC = "com.aresstack.corenth.proasteion.platform.security.keepassrpc..";
+    private static final String PLATFORM_SECURITY_PROMPT = "com.aresstack.corenth.proasteion.platform.security.prompt..";
+    private static final String PLATFORM_SECURITY = "com.aresstack.corenth.proasteion.platform.security..";
     private static final String MEDIATED_RESOURCE_SERVICE = "com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceService";
     private static final String ACQUISITION_PORT = "com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort";
     private static final String CONTENT_INSPECTOR = "com.aresstack.corenth.astu.acropolis.ContentInspector";
@@ -222,19 +225,28 @@ public class CorenthArchitectureRulesTest {
             .allowEmptyShould(true);
 
     private static final ArchRule RAW_SECRET_MATERIAL_MUST_STAY_INSIDE_VAULT_OR_TRUSTED_SECRET_ADAPTER = noClasses()
-            .that().resideOutsideOfPackages(ADYTON, PLATFORM_SECURITY_KEEPASSRPC)
+            .that().resideOutsideOfPackages(ADYTON, PLATFORM_SECURITY_KEEPASSRPC, PLATFORM_SECURITY_PROMPT)
             .should().dependOnClassesThat(secretMaterialTypes())
             .because("raw secret material is Adyton vault state and may only be used by trusted secret adapters");
 
     private static final ArchRule SECRET_REFERENCES_MUST_STAY_INSIDE_VAULT_OR_TRUSTED_PLATFORM_ADAPTERS = noClasses()
-            .that().resideOutsideOfPackages(ADYTON, PLATFORM_NETWORK, PLATFORM_SECURITY_KEEPASSRPC)
+            .that().resideOutsideOfPackages(ADYTON, PLATFORM_NETWORK, PLATFORM_SECURITY_KEEPASSRPC, PLATFORM_SECURITY_PROMPT)
             .should().dependOnClassesThat(secretReferenceTypes())
             .because("normal modules must receive grants, leases, handles, or mediated requests instead of secret references");
 
     private static final ArchRule SECRET_MATERIAL_PROVIDERS_MUST_LIVE_IN_VAULT_OR_TRUSTED_SECRET_ADAPTER = classes()
             .that().implement("com.aresstack.corenth.adyton.SecretMaterialProvider")
-            .should().resideInAnyPackage(ADYTON, PLATFORM_SECURITY_KEEPASSRPC)
+            .should().resideInAnyPackage(ADYTON, PLATFORM_SECURITY_KEEPASSRPC, PLATFORM_SECURITY_PROMPT)
             .because("only the vault and explicitly trusted secret adapters may resolve SecretRef values into SecretMaterial");
+
+    private static final ArchRule SECRET_ADAPTERS_MUST_STAY_UI_FREE = noClasses()
+            .that().resideInAnyPackage(PLATFORM_SECURITY)
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "javax.swing..",
+                    "java.awt..",
+                    "javafx..",
+                    EXEDRA)
+            .because("trusted secret adapters reach people only through UI-free ports such as SecretPromptPort");
 
     private static final ArchRule PRODUCTION_CODE_MUST_NOT_DECLARE_PASSWORD_GETTERS = noMethods()
             .that().haveName("getPassword")
@@ -357,6 +369,11 @@ public class CorenthArchitectureRulesTest {
     @Test
     public void secretMaterialProvidersMustLiveInVaultOrTrustedSecretAdapter() {
         SECRET_MATERIAL_PROVIDERS_MUST_LIVE_IN_VAULT_OR_TRUSTED_SECRET_ADAPTER.check(corenthClasses);
+    }
+
+    @Test
+    public void secretAdaptersMustStayUiFree() {
+        SECRET_ADAPTERS_MUST_STAY_UI_FREE.check(corenthClasses);
     }
 
     @Test
