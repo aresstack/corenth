@@ -471,7 +471,7 @@ public class MediatedResourceServiceTest {
         MediatedResult<Void> deleteResult = service.deleteEntry(deleteReq);
         assertTrue(deleteResult.isSuccess());
 
-        // Archive state is removed
+        // The transient payload cache is cleared; archive records are only tombstoned (#33)
         assertFalse(service.hasCachedContent(FILE_URI));
     }
 
