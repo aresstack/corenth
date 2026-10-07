@@ -4,6 +4,7 @@ import com.aresstack.corenth.proasteion.emporion.deigma.ContentCategory;
 import com.aresstack.corenth.proasteion.emporion.deigma.ContentDetector;
 import com.aresstack.corenth.proasteion.emporion.deigma.DetectedContentType;
 
+import java.nio.charset.Charset;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
@@ -14,13 +15,17 @@ import java.util.Set;
  * A simple content detector based on filename extensions and MIME type hints.
  *
  * <p>Does not require external dependencies (no Tika). Uses a built-in
- * mapping of common extensions and MIME types to content categories.
+ * mapping of common extensions and MIME types to content categories, and
+ * sniffs a small set of unambiguous content signatures (PDF magic bytes,
+ * leading HTML markup) when the hints are missing or inconclusive.
  */
 public final class SimpleContentDetector implements ContentDetector {
 
     private static final Map<String, MimeCategory> EXTENSION_MAP = new HashMap<String, MimeCategory>();
     private static final Map<String, ContentCategory> MIME_CATEGORY_MAP = new HashMap<String, ContentCategory>();
     private static final Set<String> SOURCE_EXTENSIONS = new HashSet<String>();
+    private static final String[] HTML_SIGNATURES = {"<!doctype html", "<html", "<head", "<body"};
+    private static final int HTML_SNIFF_LIMIT = 1024;
 
     static {
         // Plain text
@@ -109,6 +114,7 @@ public final class SimpleContentDetector implements ContentDetector {
      *   <li>Magic bytes for strong signatures (e.g. PDF)</li>
      *   <li>Explicit MIME/content-type hint</li>
      *   <li>Filename extension</li>
+     *   <li>Leading HTML markup in the content prefix (only when hints are inconclusive)</li>
      *   <li>Fallback to unknown/octet-stream</li>
      * </ol>
      */
@@ -156,8 +162,65 @@ public final class SimpleContentDetector implements ContentDetector {
             }
         }
 
-        // 4. Fallback
+        // 4. Sniff leading HTML markup; hints that named a type have already won above
+        if (looksLikeHtml(contentPrefix)) {
+            return new DetectedContentType("text/html", ContentCategory.HTML, filenameHint);
+        }
+
+        // 5. Fallback
         return new DetectedContentType("application/octet-stream", ContentCategory.UNKNOWN, filenameHint);
+    }
+
+    /**
+     * Returns {@code true} if the prefix starts with an HTML document signature, ignoring a
+     * UTF-8 byte order mark, leading whitespace, an XML declaration and leading comments.
+     */
+    private static boolean looksLikeHtml(byte[] contentPrefix) {
+        if (contentPrefix == null || contentPrefix.length == 0) {
+            return false;
+        }
+        int offset = 0;
+        if (contentPrefix.length >= 3 && (contentPrefix[0] & 0xFF) == 0xEF
+                && (contentPrefix[1] & 0xFF) == 0xBB && (contentPrefix[2] & 0xFF) == 0xBF) {
+            offset = 3;
+        }
+        int length = Math.min(contentPrefix.length - offset, HTML_SNIFF_LIMIT);
+        // ISO-8859-1 maps every byte to one char, so ASCII markup is read safely from any ASCII-compatible encoding
+        String head = new String(contentPrefix, offset, length, Charset.forName("ISO-8859-1")).toLowerCase(Locale.ROOT);
+        int position = skipWhitespace(head, 0);
+        if (head.startsWith("<?xml", position)) {
+            int end = head.indexOf("?>", position);
+            if (end < 0) {
+                return false;
+            }
+            position = skipWhitespace(head, end + 2);
+        }
+        while (head.startsWith("<!--", position)) {
+            int end = head.indexOf("-->", position + 4);
+            if (end < 0) {
+                return false;
+            }
+            position = skipWhitespace(head, end + 3);
+        }
+        for (String signature : HTML_SIGNATURES) {
+            if (head.startsWith(signature, position)) {
+                int next = position + signature.length();
+                return next == head.length() || isTagNameTerminator(head.charAt(next));
+            }
+        }
+        return false;
+    }
+
+    private static int skipWhitespace(String text, int position) {
+        int index = position;
+        while (index < text.length() && Character.isWhitespace(text.charAt(index))) {
+            index++;
+        }
+        return index;
+    }
+
+    private static boolean isTagNameTerminator(char c) {
+        return c == '>' || c == '/' || Character.isWhitespace(c);
     }
 
     private static String extractExtension(String filename) {
