@@ -489,7 +489,9 @@ public interface ResourceHarborInspection {
 }
 ```
 
-#### Kompositionspunkt `proasteion:application` — Slice 2 (nach ADR-0001; offen)
+#### Kompositionspunkt `proasteion:application` — Slice 2 (nach ADR-0001; ✅ umgesetzt)
+
+> ✅ **Stand #10 Slice 2:** `CorenthComposition.composeLocal(ApplicationSettings)` liefert den unveränderlichen Kontext `CorenthApplication` (Lifecycle, Suche, `MediatedResourceAccess`). Erste produktive `ResourceAccessPolicy` ist `tamias.LocalFileRootsAccessPolicy` (deny by default, `file:` unter konfigurierten Wurzeln, nur Lesepfad) statt einer `PermitAllAccessPolicy`; der Deigma→`ContentInspector`-Adapter liegt paketprivat im Kompositionsmodul. Umsetzung dokumentiert in ADR-0001 („Umsetzung“) und `proasteion/application/README.md`. Die Skizze unten ist damit historisch.
 
 Erklärt: der erste produktive Bootstrap. Bewusst eine einzige Klasse ohne Framework; DI-Container erst bei Bedarf. Verdrahtet werden die in Slice 1 eingeführten Verträge (`MediatedResourceAccess` ← `MediatedResourceService`, `AcquisitionPort` ← `HolkasAcquisitionPort`, `ContentInspector` ← Deigma-Adapter, bestehendes `ResourceArchive`); die erste produktive `ResourceAccessPolicy` muss hier explizit gewählt werden (ADR-0001, Leitplanke 5). `PermitAllAccessPolicy`, `InMemoryResourceLifecycleRepository` und `DeigmaHarborInspection` in der Skizze unten existieren noch nicht, und der skizzierte Coordinator-Aufruf entspricht nicht der umgesetzten Signatur.
 
