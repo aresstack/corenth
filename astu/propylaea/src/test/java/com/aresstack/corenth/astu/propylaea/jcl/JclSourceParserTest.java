@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class JclSourceParserTest {
+public class JclSourceParserTest {
 
     private final JclSourceParser parser = new JclSourceParser();
 

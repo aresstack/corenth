@@ -1,12 +1,18 @@
 package com.aresstack.corenth.astu.propylaea;
 
+import com.aresstack.corenth.astu.propylaea.cobol.CobolSourceParser;
+import com.aresstack.corenth.astu.propylaea.cobol.CobolSourceParserTest;
+import com.aresstack.corenth.astu.propylaea.jcl.JclSourceParser;
+import com.aresstack.corenth.astu.propylaea.jcl.JclSourceParserTest;
 import com.aresstack.corenth.astu.propylaea.natural.NaturalSourceParser;
+import com.aresstack.corenth.astu.propylaea.natural.NaturalSourceParserTest;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import static com.aresstack.corenth.astu.propylaea.StructureText.fixture;
 import static com.aresstack.corenth.astu.propylaea.StructureText.request;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -107,5 +113,24 @@ class SourceParserRegistryTest {
 
         assertEquals(Arrays.asList(SourceLanguage.NATURAL, SourceLanguage.JCL), registry.supportedLanguages());
         assertFalse(registry.supports(SourceLanguage.COBOL));
+    }
+
+    @Test
+    void allReferenceParsers_detectAndParseTheirFixturesWithoutHints() {
+        SourceParserRegistry registry = new SourceParserRegistry(DETECTOR, Arrays.<SourceParser>asList(
+                new NaturalSourceParser(), new JclSourceParser(), new CobolSourceParser()));
+
+        ParsingResult natural = registry.parse(request("CUSTUPD", SourceLanguage.UNKNOWN,
+                fixture(NaturalSourceParserTest.class, "CUSTUPD.NSP")));
+        ParsingResult jcl = registry.parse(request("PAYJOB", SourceLanguage.UNKNOWN,
+                fixture(JclSourceParserTest.class, "PAYJOB.JCL")));
+        ParsingResult cobol = registry.parse(request("ACCTUPD", SourceLanguage.UNKNOWN,
+                fixture(CobolSourceParserTest.class, "ACCTUPD.cbl")));
+
+        assertEquals(SourceLanguage.NATURAL, natural.structure().language());
+        assertEquals(SourceLanguage.JCL, jcl.structure().language());
+        assertEquals(SourceLanguage.COBOL, cobol.structure().language());
+        assertEquals(Arrays.asList(SourceLanguage.NATURAL, SourceLanguage.COBOL, SourceLanguage.JCL),
+                registry.supportedLanguages());
     }
 }
