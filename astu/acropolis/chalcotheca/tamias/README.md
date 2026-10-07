@@ -31,6 +31,43 @@ Every operation requested by a caller (user, bot, service) passes through Tamias
 | `AcceptanceDecision` | ACCEPT or DENY for indexing |
 | `PolicyReason` | Reason for an indexing decision |
 
+## Lifecycle policies (#5)
+
+Tamias decides what should happen to a resource from facts it is handed; it reads no archive, holds no payload, no history and no cache presence, and executes nothing. Chalcotheca (#33) owns the facts, Acropolis (#10) maps them into the inputs below and executes the resulting decisions.
+
+Tamias does not import Chalcotheca (`TAMIAS_MUST_STAY_POLICY_STEWARD`; the Gradle dependency already runs from Chalcotheca to Tamias). The inputs are therefore a small, immutable, non-persisted projection, and digest comparison stays with the canonical `ResourceDigest` equality on the Chalcotheca side.
+
+### Scope, traversal and size (`tamias.scope`)
+
+| Type | Purpose |
+|------|---------|
+| `ResourceScope` | Subtree at and below one root `BookmarkUri`; lexical containment on scheme, authority and whole path segments; depth below the root |
+| `TraversalPolicy` | Maximum depth below a scope root (`evaluate` for a resource, `evaluateDescent` for listing a container's children) |
+| `ResourceSizePolicy` | Size limit for one operation; an unknown size is `UNDETERMINED`, never zero bytes |
+| `ScopeDecision` / `ScopeReasonCode` / `ScopeVerdict` | Immutable outcome; each reason code implies one verdict (`ADMIT`, `REJECT`, `UNDETERMINED`) |
+
+Include/exclude patterns stay with `PatternResourcePolicy`/`IndexingRule`; callers compose scope, patterns and size. `IndexingRule.maxBytes` keeps its semantics until #10 Slice 5 replaces it with `ResourceSizePolicy`.
+
+### Change detection (`tamias.change`)
+
+| Type | Purpose |
+|------|---------|
+| `ResourceRecordFacts` | Projection of an `ArchivedResource`: latest observed sequence, indexed sequence or `NOT_INDEXED`, removed at source |
+| `SourceObservation` / `ContentComparison` | Present (with the digest comparison against the latest observed version, computed by #10) or absent |
+| `ChangeDetectionStrategy` / `DigestChangeDetection` | Pure decision `NEW`, `UNCHANGED`, `CHANGED`, `REMOVED`, `NOT_FOUND` |
+| `ChangeDecision` / `ChangeReasonCode` / `ChangeKind` | Immutable outcome carrying its inputs; each reason code implies one kind |
+
+Change is measured against the latest **observed** version, not the indexed one. `UNCHANGED` is a statement about content only and does not mean "nothing to do".
+
+### Derivative disposition (`tamias.disposition`)
+
+| Type | Purpose |
+|------|---------|
+| `DerivativeDispositionPolicy` | Maps a `ChangeDecision` to separate cache and index decisions |
+| `DerivativeDisposition` | Immutable plan: `CacheAction` (`RETAIN`, `REFRESH`, `INVALIDATE`) and `IndexAction` (`INDEX`, `REINDEX`, `RETAIN`, `WITHDRAW`, `NONE`) with `CacheReasonCode`/`IndexReasonCode` |
+
+Key cases: unchanged content without an indexed fact, or with an older indexed version, requires `REINDEX`; a tombstoned resource is withdrawn only if a version is still indexed.
+
 ## Architecture rule
 
 Do **not** expose Holkas as a general client-facing API. Callers must access resources through the Chalcotheca mediated resource service, which uses Tamias for every access decision.
