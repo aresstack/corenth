@@ -15,7 +15,9 @@ import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ActorIdentity;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ActorType;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessRequest;
 import com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceOperation;
+import com.aresstack.corenth.astu.acropolis.chalcotheca.BronzeContent;
 import org.junit.After;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -146,6 +148,42 @@ public class CorenthCompositionTest {
     }
 
     @Test
+    public void symlinksInsideTheRootCannotEscapeItThroughTheComposedMediatedPath() throws IOException {
+        Path privateDir = tempFolder.newFolder("private").toPath();
+        write(privateDir.resolve("secret.txt"), "not for the index");
+        write(root.resolve("a.txt"), "a");
+        Path dirLink = symlink(root.resolve("link"), privateDir);
+        Path fileLink = symlink(root.resolve("secret-link.txt"), privateDir.resolve("secret.txt"));
+        CorenthApplication application = compose(settings().build());
+        MediatedResourceAccess access = application.mediatedResourceAccess();
+        ActorIdentity human = new ActorIdentity("angelo", ActorType.HUMAN);
+
+        MediatedResult<BronzeListing> rootListing = access.listChildren(new ResourceAccessRequest(
+                human, uri(root), ResourceOperation.LIST_CHILDREN));
+        assertTrue("the root itself stays listable", rootListing.isSuccess());
+
+        MediatedResult<BronzeListing> linkListing = access.listChildren(new ResourceAccessRequest(
+                human, uri(dirLink), ResourceOperation.LIST_CHILDREN));
+        assertFalse(linkListing.isSuccess());
+        assertEquals(AccessReasonCode.NOT_WHITELISTED, linkListing.decision().reasonCode());
+
+        for (Path escaping : Arrays.asList(dirLink.resolve("secret.txt"), fileLink)) {
+            MediatedResult<BronzeContent> read = access.readContent(new ResourceAccessRequest(
+                    human, uri(escaping), ResourceOperation.READ_CONTENT));
+            assertFalse(escaping.toString(), read.isSuccess());
+            assertEquals(escaping.toString(), AccessReasonCode.NOT_WHITELISTED, read.decision().reasonCode());
+
+            ProcessingResult processed = application.resourceLifecycle().process(ref(escaping));
+            assertEquals(escaping.toString(), ProcessingResult.Status.DENIED, processed.status());
+        }
+        assertTrue(application.search().search("index", 10).isEmpty());
+
+        MediatedResult<BronzeContent> regular = access.readContent(new ResourceAccessRequest(
+                human, uri(root.resolve("a.txt")), ResourceOperation.READ_CONTENT));
+        assertTrue("a regular file inside the root stays readable", regular.isSuccess());
+    }
+
+    @Test
     public void contentInspectorIsWiredProductivelyToDeigma() throws Exception {
         CorenthApplication application = compose(settings().build());
 
@@ -249,6 +287,22 @@ public class CorenthCompositionTest {
 
     private static VirtualResourceRef ref(Path path) {
         return new VirtualResourceRef(BookmarkUri.parse(path.toUri().toString()), VirtualResourceKind.FILE);
+    }
+
+    private static BookmarkUri uri(Path path) {
+        return BookmarkUri.parse(path.toUri().toString());
+    }
+
+    /** Creates a symbolic link; skips the test where the platform or account cannot create one. */
+    private static Path symlink(Path link, Path target) {
+        try {
+            return Files.createSymbolicLink(link, target);
+        } catch (IOException e) {
+            Assume.assumeNoException("symbolic links are not available here", e);
+        } catch (UnsupportedOperationException e) {
+            Assume.assumeNoException("symbolic links are not supported here", e);
+        }
+        throw new AssertionError("unreachable");
     }
 
     private static Path write(Path path, String content) throws IOException {
