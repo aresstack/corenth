@@ -1,7 +1,10 @@
 package de.bund.zrb.net;
 
 import de.bund.zrb.model.Settings;
-import com.aresstack.winproxy.PacUrlSource;
+import com.aresstack.winproxy.ProxyBypassMatcher;
+import com.aresstack.winproxy.ProxyConfiguration;
+import com.aresstack.winproxy.ProxyMode;
+import com.aresstack.winproxy.StaticProxySettingsResolver;
 import com.aresstack.winproxy.WindowsProxyResolver;
 
 import java.io.BufferedReader;
@@ -116,21 +119,54 @@ public class ProxyResolver {
         return resolveViaRegistry(url);
     }
 
-    // ── Registry proxy detection — delegates to win-proxy module ──
+    // ── Registry proxy detection — delegates to win-proxy-java ──
 
     /**
-     * Delegates to {@link WindowsProxyResolver#resolve(String)} and adapts the result.
+     * PAC/WPAD from the Windows settings (AutoConfigURL in all hives with GPO first, the PAC URL in
+     * DefaultConnectionSettings, then WPAD auto-detect), like the auto-detection of
+     * win-proxy-java 1.0.0-beta.1. One instance for the whole application, so the PAC URL and
+     * script are kept (since 0.3.0) instead of being loaded on every request.
+     */
+    private static final WindowsProxyResolver REGISTRY_PAC = new WindowsProxyResolver(
+            ProxyConfiguration.builder().mode(ProxyMode.PAC_URL_WINDOWS_SETTINGS).build());
+
+    /** Static ProxyServer/ProxyOverride from the Windows registry. */
+    private static final StaticProxySettingsResolver REGISTRY_STATIC = new StaticProxySettingsResolver();
+
+    /**
+     * Automatic detection from the Windows settings: PAC/WPAD first; if no PAC URL is configured
+     * or the PAC cannot be used, the static proxy settings (as in beta.1).
      */
     private static ProxyResolution resolveViaRegistry(String url) {
-        com.aresstack.winproxy.ProxyResult result = WindowsProxyResolver.resolve(url);
-        return adaptResult(result, "registry");
+        com.aresstack.winproxy.ProxyResult pac = REGISTRY_PAC.resolve(url);
+        if (!pac.isError() && !pac.isNotImplemented()) {
+            return adaptResult(pac, "registry-pac");
+        }
+        if (!"pac-url-not-found".equals(pac.getReason())) {
+            LOG.fine("[Proxy] Windows PAC unusable (" + pac.getReason() + "), using static settings");
+        }
+        return adaptResult(REGISTRY_STATIC.resolve(url), "registry");
     }
 
-    // ── Explicit PAC URL — delegates to win-proxy module ────────
+    // ── Explicit PAC URL — delegates to win-proxy-java ──────────
 
     /**
-     * Downloads and evaluates a PAC URL via {@link WindowsProxyResolver#resolve(String, PacUrlSource, String)}.
-     * Used when the user has manually configured the PAC URL or a discovery script (Mode PAC_URL).
+     * One {@link WindowsProxyResolver} per PAC URL or discovery script: since win-proxy-java 0.3.0
+     * it keeps the PAC URL and PAC script (lifetime from the PAC server's cache headers, otherwise
+     * 12 h; on a failed reload the last good script stays in use). A new resolver per request
+     * would download the PAC file for every request again.
+     */
+    private static final java.util.Map<String, WindowsProxyResolver> PAC_RESOLVERS =
+            new java.util.LinkedHashMap<String, WindowsProxyResolver>(8, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, WindowsProxyResolver> eldest) {
+                    return size() > 8;
+                }
+            };
+
+    /**
+     * Downloads and evaluates a PAC URL (Mode PAC_URL), or first runs a PowerShell discovery
+     * command whose output is the PAC URL.
      *
      * @param fromScript if {@code true}, {@code pacUrlOrScript} is a PowerShell command
      *                   whose output is the actual PAC URL
@@ -139,31 +175,81 @@ public class ProxyResolver {
         if (pacUrlOrScript == null || pacUrlOrScript.trim().isEmpty()) {
             return ProxyResolution.direct("pac-url-empty");
         }
-
-        PacUrlSource source = fromScript ? PacUrlSource.POWERSHELL : PacUrlSource.DIRECT;
-        com.aresstack.winproxy.ProxyResult result =
-                WindowsProxyResolver.resolve(url, source, pacUrlOrScript.trim());
+        com.aresstack.winproxy.ProxyResult result = pacResolver(pacUrlOrScript.trim(), fromScript).resolve(url);
         return adaptResult(result, "pac-url");
     }
 
+    private static WindowsProxyResolver pacResolver(String pacUrlOrScript, boolean fromScript) {
+        String key = (fromScript ? "script:" : "url:") + pacUrlOrScript;
+        synchronized (PAC_RESOLVERS) {
+            WindowsProxyResolver resolver = PAC_RESOLVERS.get(key);
+            if (resolver == null) {
+                ProxyConfiguration.Builder builder = ProxyConfiguration.builder();
+                if (fromScript) {
+                    builder.mode(ProxyMode.PAC_URL_POWERSHELL).pacUrlDiscoveryScript(pacUrlOrScript);
+                } else {
+                    builder.mode(ProxyMode.PAC_URL_MANUAL).pacUrl(pacUrlOrScript);
+                }
+                resolver = new WindowsProxyResolver(builder.build());
+                PAC_RESOLVERS.put(key, resolver);
+            }
+            return resolver;
+        }
+    }
+
     /**
-     * Adapts a {@link com.aresstack.winproxy.ProxyResult} to a {@link ProxyResolution}.
+     * Adapts a {@link com.aresstack.winproxy.ProxyResult} to a {@link ProxyResolution}. As with the
+     * previous win-proxy-java version, a failed resolution falls back to DIRECT; the reason names it.
      */
     private static ProxyResolution adaptResult(com.aresstack.winproxy.ProxyResult result, String prefix) {
+        if (result.isProxy()) {
+            return ProxyResolution.proxy(result.toJavaProxy(), prefix + "-" + result.getReason());
+        }
         if (result.isDirect()) {
             return ProxyResolution.direct(prefix + "-" + result.getReason());
         }
-        return ProxyResolution.proxy(result.toJavaProxy(), prefix + "-" + result.getReason());
+        String detail = result.getDetail() == null ? "" : ": " + result.getDetail();
+        LOG.warning("Proxy resolution (" + prefix + ") failed, using DIRECT: " + result.getReason() + detail);
+        return ProxyResolution.direct(prefix + "-" + result.getReason());
     }
 
-    /** Queries a single registry value via {@link WindowsProxyResolver#readRegistryValue}. */
+    /** Queries a single registry value with {@code reg.exe}; {@code null} if missing or not on Windows. */
     static String regQueryValue(String key, String valueName) {
-        return WindowsProxyResolver.readRegistryValue(key, valueName);
+        try {
+            Process process = new ProcessBuilder("reg", "query", key, "/v", valueName).redirectErrorStream(true).start();
+            StringBuilder out = new StringBuilder();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+            try {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    out.append(line).append('\n');
+                }
+            } finally {
+                reader.close();
+            }
+            if (!process.waitFor(10, TimeUnit.SECONDS) || process.exitValue() != 0) {
+                return null;
+            }
+            for (String line : out.toString().split("\n")) {
+                String trimmed = line.trim();
+                if (trimmed.startsWith(valueName + " ")) {
+                    String[] parts = trimmed.split("\\s{2,}|\\t", 3);
+                    return parts.length == 3 ? parts[2].trim() : null;
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
-    /** Delegates to {@link WindowsProxyResolver#isBypassed(String, String)}. */
+    /** Delegates to {@link ProxyBypassMatcher#isBypassed(String, String)}. */
     static boolean isHostBypassed(String host, String proxyOverride) {
-        return WindowsProxyResolver.isBypassed(host, proxyOverride);
+        if (host == null || host.trim().isEmpty()) {
+            return false;
+        }
+        String literal = host.indexOf(':') >= 0 && !host.startsWith("[") ? "[" + host + "]" : host;
+        return new ProxyBypassMatcher().isBypassed("http://" + literal + "/", proxyOverride);
     }
 
     // ── PowerShell PAC/WPAD resolution ──────────────────────────

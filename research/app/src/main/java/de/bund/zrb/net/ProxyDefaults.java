@@ -1,6 +1,6 @@
 package de.bund.zrb.net;
 
-import com.aresstack.winproxy.WindowsProxyResolver;
+
 
 public final class ProxyDefaults {
 
@@ -8,9 +8,9 @@ public final class ProxyDefaults {
 
     /**
      * Default PowerShell command to discover the PAC URL.
-     * Delegates to the canonical constant in {@link WindowsProxyResolver}.
+     * Delegates to the canonical constant in {@link com.aresstack.winproxy.ProxyDefaults}.
      */
-    public static final String DEFAULT_PAC_URL_SCRIPT = WindowsProxyResolver.DEFAULT_PAC_DISCOVERY_SCRIPT;
+    public static final String DEFAULT_PAC_URL_SCRIPT = com.aresstack.winproxy.ProxyDefaults.DEFAULT_PAC_URL_DISCOVERY_SCRIPT;
 
     public static final String DEFAULT_PAC_SCRIPT =
             "param(\n" +

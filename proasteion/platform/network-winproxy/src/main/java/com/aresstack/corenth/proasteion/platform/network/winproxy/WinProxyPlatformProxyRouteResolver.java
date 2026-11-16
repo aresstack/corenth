@@ -17,6 +17,12 @@ import java.net.Proxy;
 public final class WinProxyPlatformProxyRouteResolver implements PlatformProxyRouteResolver {
 
     private final WinProxyConfiguration configuration;
+    /**
+     * Built once per configuration: since win-proxy-java 0.3.0 the resolver keeps the PAC URL and PAC script
+     * (lifetime from the PAC server's cache headers, otherwise 12 h; the last good script on failure). A new
+     * resolver per request would download the PAC file for every request again.
+     */
+    private WindowsProxyResolver resolver;
 
     public WinProxyPlatformProxyRouteResolver(WinProxyConfiguration configuration) {
         if (configuration == null) {
@@ -59,12 +65,17 @@ public final class WinProxyPlatformProxyRouteResolver implements PlatformProxyRo
 
     private ProxyResult resolveWithWinProxyJava(String targetUrl) throws NetworkRoutingException {
         try {
-            ProxyConfiguration proxyConfiguration = createWinProxyConfiguration();
-            WindowsProxyResolver resolver = new WindowsProxyResolver(proxyConfiguration);
-            return resolver.resolve(targetUrl);
+            return resolver().resolve(targetUrl);
         } catch (RuntimeException e) {
             throw new NetworkRoutingException("Windows proxy resolution failed", e);
         }
+    }
+
+    private synchronized WindowsProxyResolver resolver() throws NetworkRoutingException {
+        if (resolver == null) {
+            resolver = new WindowsProxyResolver(createWinProxyConfiguration());
+        }
+        return resolver;
     }
 
     private ProxyConfiguration createWinProxyConfiguration() throws NetworkRoutingException {
