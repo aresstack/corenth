@@ -121,15 +121,31 @@ public class ProxyResolver {
 
     // ── Registry proxy detection — delegates to win-proxy-java ──
 
-    private static final StaticProxySettingsResolver REGISTRY = new StaticProxySettingsResolver();
+    /**
+     * PAC/WPAD from the Windows settings (AutoConfigURL in all hives with GPO first, the PAC URL in
+     * DefaultConnectionSettings, then WPAD auto-detect), like the auto-detection of
+     * win-proxy-java 1.0.0-beta.1. One instance for the whole application, so the PAC URL and
+     * script are kept (since 0.3.0) instead of being loaded on every request.
+     */
+    private static final WindowsProxyResolver REGISTRY_PAC = new WindowsProxyResolver(
+            ProxyConfiguration.builder().mode(ProxyMode.PAC_URL_WINDOWS_SETTINGS).build());
+
+    /** Static ProxyServer/ProxyOverride from the Windows registry. */
+    private static final StaticProxySettingsResolver REGISTRY_STATIC = new StaticProxySettingsResolver();
 
     /**
-     * Static proxy from the Windows registry via {@link StaticProxySettingsResolver}, adapted to a
-     * {@link ProxyResolution}.
+     * Automatic detection from the Windows settings: PAC/WPAD first; if no PAC URL is configured
+     * or the PAC cannot be used, the static proxy settings (as in beta.1).
      */
     private static ProxyResolution resolveViaRegistry(String url) {
-        com.aresstack.winproxy.ProxyResult result = REGISTRY.resolve(url);
-        return adaptResult(result, "registry");
+        com.aresstack.winproxy.ProxyResult pac = REGISTRY_PAC.resolve(url);
+        if (!pac.isError() && !pac.isNotImplemented()) {
+            return adaptResult(pac, "registry-pac");
+        }
+        if (!"pac-url-not-found".equals(pac.getReason())) {
+            LOG.fine("[Proxy] Windows PAC unusable (" + pac.getReason() + "), using static settings");
+        }
+        return adaptResult(REGISTRY_STATIC.resolve(url), "registry");
     }
 
     // ── Explicit PAC URL — delegates to win-proxy-java ──────────
