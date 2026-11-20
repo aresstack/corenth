@@ -23,6 +23,7 @@ import static com.tngtech.archunit.base.DescribedPredicate.not;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAPackage;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAnyPackage;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.fields;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noMethods;
 import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices;
@@ -34,15 +35,19 @@ import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.sli
  * <ul>
  *   <li>The production classes under test come from the explicit {@code architectureProjects}
  *       list in {@code architecture-tests/build.gradle}. A Gradle project missing from that list
- *       fails the build configuration, so new modules (for example the bootstrap module decided
- *       in {@code docs/adr/0001-composition-root.md}) must be added there deliberately.</li>
+ *       fails the build configuration, so new modules must be added there deliberately (as
+ *       {@code :proasteion:application} was in #10 Slice 2).</li>
  *   <li>The secret-containment rules whitelist the vault and the trusted secret adapters by
  *       package ({@link #PLATFORM_SECURITY_KEEPASSRPC}, {@link #PLATFORM_NETWORK}). Every new
  *       secret-source adapter from #43 (prompt, encrypted store, DPAPI) must be added to these
  *       whitelists explicitly; otherwise its use of {@code SecretMaterial} fails these rules.</li>
- *   <li>A future outer bootstrap module may depend on every adapter and on the inner city, but it
- *       must stay free of UI technology and must not be depended upon by the inner city; extend
- *       {@link #CORE_MUST_NOT_DEPEND_ON_UI_TECHNOLOGY}-style rules when it is introduced.</li>
+ *   <li>The outer composition root {@code proasteion.application} (ADR-0001) may depend on every
+ *       adapter and on the inner city. {@link #APPLICATION_MUST_STAY_HEADLESS},
+ *       {@link #ONLY_HOSTS_MAY_DEPEND_ON_APPLICATION}, {@link #APPLICATION_MUST_NOT_DECIDE_POLICIES}
+ *       and {@link #APPLICATION_MUST_NOT_HOLD_STATIC_STATE} keep it headless, consumed only by
+ *       hosts, policy-free and free of global state; {@link #ACQUISITION_BRIDGE_IS_WIRED_ONLY_AT_COMPOSITION_ROOT}
+ *       makes it the only place that plugs Holkas into the archive counter. A new host module is
+ *       added to the consumers by leaving it out of {@link #ONLY_HOSTS_MAY_DEPEND_ON_APPLICATION}.</li>
  *   <li>{@link #ACROPOLIS_LIFECYCLE_MUST_ACQUIRE_THROUGH_MEDIATED_ACCESS} covers every package of
  *       the {@code astu:acropolis} module except the nested {@code chalcotheca} registers, so new
  *       acropolis sub-packages (e.g. a run model) are covered automatically.
@@ -60,6 +65,9 @@ public class CorenthArchitectureRulesTest {
     private static final String ACROPOLIS_ROOT = "com.aresstack.corenth.astu.acropolis";
     private static final String PROASTEION = "com.aresstack.corenth.proasteion..";
     private static final String EXEDRA = "com.aresstack.corenth.proasteion.exedra..";
+    private static final String APPLICATION = "com.aresstack.corenth.proasteion.application..";
+    private static final String EMPORION = "com.aresstack.corenth.proasteion.emporion..";
+    private static final String PLATFORM = "com.aresstack.corenth.proasteion.platform..";
     private static final String KATAGOGION = "com.aresstack.corenth.proasteion.katagogion..";
     private static final String HOLKAS = "com.aresstack.corenth.proasteion.emporion.holkas..";
     private static final String DEIGMA = "com.aresstack.corenth.proasteion.emporion.deigma..";
@@ -73,6 +81,9 @@ public class CorenthArchitectureRulesTest {
     private static final String MEDIATED_RESOURCE_SERVICE = "com.aresstack.corenth.astu.acropolis.chalcotheca.MediatedResourceService";
     private static final String ACQUISITION_PORT = "com.aresstack.corenth.astu.acropolis.chalcotheca.AcquisitionPort";
     private static final String CONTENT_INSPECTOR = "com.aresstack.corenth.astu.acropolis.ContentInspector";
+    private static final String HOLKAS_ACQUISITION_PORT = "com.aresstack.corenth.proasteion.emporion.holkas.HolkasAcquisitionPort";
+    private static final String RESOURCE_ACCESS_POLICY = "com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourceAccessPolicy";
+    private static final String RESOURCE_POLICY = "com.aresstack.corenth.astu.acropolis.chalcotheca.tamias.ResourcePolicy";
 
     private static JavaClasses corenthClasses;
 
@@ -177,6 +188,39 @@ public class CorenthArchitectureRulesTest {
                     ADYTON)
             .because("Exedra is a concrete Swing shell and must not own acquisition, extraction, indexing, policy, or credential flow");
 
+    private static final ArchRule APPLICATION_MUST_STAY_HEADLESS = noClasses()
+            .that().resideInAnyPackage(APPLICATION)
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "javax.swing..",
+                    "java.awt..",
+                    "javafx..",
+                    EXEDRA)
+            .because("the composition root must run in CI, tests and future CLI/server hosts without a display (ADR-0001)");
+
+    private static final ArchRule ONLY_HOSTS_MAY_DEPEND_ON_APPLICATION = noClasses()
+            .that().resideInAnyPackage(ADYTON, ASTU, EMPORION, PLATFORM, KATAGOGION)
+            .should().dependOnClassesThat().resideInAnyPackage(APPLICATION)
+            .because("the composition root depends inward on contracts and adapters; only hosts such as Exedra may consume it (ADR-0001)");
+
+    private static final ArchRule ACQUISITION_BRIDGE_IS_WIRED_ONLY_AT_COMPOSITION_ROOT = noClasses()
+            .that().resideOutsideOfPackages(HOLKAS, APPLICATION)
+            .should().dependOnClassesThat(haveFullyQualifiedNames(HOLKAS_ACQUISITION_PORT))
+            .because("the concrete Holkas AcquisitionPort bridge is plugged into the archive counter only by the outer composition root");
+
+    private static final ArchRule APPLICATION_MUST_NOT_DECIDE_POLICIES = noClasses()
+            .that().resideInAnyPackage(APPLICATION)
+            .should().implement(RESOURCE_ACCESS_POLICY)
+            .orShould().implement(RESOURCE_POLICY)
+            .because("the composition root selects and parameterises Tamias policies but never decides access or indexing itself");
+
+    private static final ArchRule APPLICATION_MUST_NOT_HOLD_STATIC_STATE = fields()
+            .that().areDeclaredInClassesThat().resideInAnyPackage(APPLICATION)
+            .and().areStatic()
+            .should().beFinal()
+            .andShould().haveRawType(constantTypes())
+            .because("the composition root is instantiated explicitly; no global singletons or static registries (ADR-0001)")
+            .allowEmptyShould(true);
+
     private static final ArchRule RAW_SECRET_MATERIAL_MUST_STAY_INSIDE_VAULT_OR_TRUSTED_SECRET_ADAPTER = noClasses()
             .that().resideOutsideOfPackages(ADYTON, PLATFORM_SECURITY_KEEPASSRPC)
             .should().dependOnClassesThat(secretMaterialTypes())
@@ -276,6 +320,31 @@ public class CorenthArchitectureRulesTest {
     }
 
     @Test
+    public void applicationMustStayHeadless() {
+        APPLICATION_MUST_STAY_HEADLESS.check(corenthClasses);
+    }
+
+    @Test
+    public void onlyHostsMayDependOnApplication() {
+        ONLY_HOSTS_MAY_DEPEND_ON_APPLICATION.check(corenthClasses);
+    }
+
+    @Test
+    public void acquisitionBridgeIsWiredOnlyAtCompositionRoot() {
+        ACQUISITION_BRIDGE_IS_WIRED_ONLY_AT_COMPOSITION_ROOT.check(corenthClasses);
+    }
+
+    @Test
+    public void applicationMustNotDecidePolicies() {
+        APPLICATION_MUST_NOT_DECIDE_POLICIES.check(corenthClasses);
+    }
+
+    @Test
+    public void applicationMustNotHoldStaticState() {
+        APPLICATION_MUST_NOT_HOLD_STATIC_STATE.check(corenthClasses);
+    }
+
+    @Test
     public void rawSecretMaterialMustStayInsideVaultOrTrustedSecretAdapter() {
         RAW_SECRET_MATERIAL_MUST_STAY_INSIDE_VAULT_OR_TRUSTED_SECRET_ADAPTER.check(corenthClasses);
     }
@@ -339,6 +408,11 @@ public class CorenthArchitectureRulesTest {
         return haveFullyQualifiedNames(
                 "com.aresstack.corenth.adyton.SecretRef",
                 "com.aresstack.corenth.adyton.CredentialRef");
+    }
+
+    private static DescribedPredicate<JavaClass> constantTypes() {
+        return DescribedPredicate.describe("a primitive or String constant type",
+                javaClass -> javaClass.isPrimitive() || javaClass.getName().equals(String.class.getName()));
     }
 
     private static DescribedPredicate<JavaClass> haveFullyQualifiedNames(String... fullyQualifiedNames) {

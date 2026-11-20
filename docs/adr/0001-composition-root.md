@@ -1,6 +1,6 @@
 # ADR-0001: Ort des produktiven Kompositionspunkts
 
-**Status:** angenommen (Session 0, 2026-10-06) · **Bezug:** Issue #10 (Pflicht-Entscheidung vor Slice 2), `proasteion/README.md` (#13-YAGNI-Entscheidung), `docs/architecture-notes.md`
+**Status:** angenommen (Session 0, 2026-10-06), umgesetzt in #10 Slice 2 (siehe „Umsetzung“) · **Bezug:** Issue #10 (Pflicht-Entscheidung vor Slice 2), `proasteion/README.md` (#13-YAGNI-Entscheidung), `docs/architecture-notes.md`
 
 ## Kontext
 
@@ -64,3 +64,15 @@ Leitplanken für Slice 2:
 ## Ausdrücklich nicht Teil dieser Entscheidung
 
 Diese ADR legt den Ort fest. Sie erzeugt kein Modul und keinen Bootstrap-Code; beides ist #10 Slice 2. Die Adyton-Station (Slice 3), das Run-/Plan/Step-Modell (Slice 4) und die Konsolidierung der Chalcotheca-Caches gegen #33/#5 (Slice 5) bleiben davon unberührt.
+
+## Umsetzung (#10 Slice 2)
+
+Die Entscheidung bleibt unverändert; dieser Abschnitt dokumentiert nur, wie sie umgesetzt wurde.
+
+- **Modul:** `proasteion:application`, Paket `com.aresstack.corenth.proasteion.application`, in `settings.gradle` und in `architectureProjects` eingetragen. Abhängigkeiten: `api` auf `astu:acropolis` (innere Verträge), `implementation` auf `emporion:holkas` und `emporion:deigma`.
+- **Öffentliche API (Leitplanken 2 und 4):** `CorenthComposition` (explizit instanziiert, zustandslos) mit `composeLocal(ApplicationSettings)`; Ergebnis ist der unveränderliche, schließbare Kontext `CorenthApplication` mit `resourceLifecycle()`, `search()` und `mediatedResourceAccess()`. Kein Holkas-, Deigma-, Tamias-Implementierungs- oder Adyton-Typ ist über diese API erreichbar.
+- **Verdrahtung:** `LocalFileRootsAccessPolicy` → `MediatedResourceService` (als `MediatedResourceAccess`) → `HolkasAcquisitionPort` mit `FileSystemResourceConnector`; `DeigmaContentInspector` (paketprivat, `SimpleContentDetector` + PlainText-/Markdown-Extraktor) als `ContentInspector`; `PatternResourcePolicy` aus den Host-Einstellungen; `LuceneLexicalIndex` + `NlpTextChunker`; `ResourceLifecycleCoordinator` und `SearchCoordinator`. Ein `InMemoryResourceArchive` wird als heutige `ResourceArchive`-Kompatibilitätsfassade von Schalter und Lifecycle gemeinsam genutzt.
+- **Policy (Leitplanke 5):** Die erste produktive `ResourceAccessPolicy` ist `tamias.LocalFileRootsAccessPolicy`: deny by default, nur `file:`, nur unterhalb explizit konfigurierter Wurzeln, nur der Lesepfad (`LIST_CHILDREN`, `READ_METADATA`, `READ_CONTENT`, `FETCH_EXTERNAL`). Sie ist bewusst keine „erlaube alles“-Policy; akteurspezifische Regeln und Change-Detection-Policies liefert #5.
+- **Deigma-Adapter:** liegt im Kompositionsmodul, nicht in Deigma, weil `ContentInspector` ein Lifecycle-Port ist und Deigma laut `DEIGMA_MUST_STAY_SHALLOW_EXTRACTION` ohne Lifecycle-Kopplung bleibt.
+- **ArchUnit:** neue Regeln `APPLICATION_MUST_STAY_HEADLESS`, `ONLY_HOSTS_MAY_DEPEND_ON_APPLICATION` (für `adyton`, `astu`, `emporion`, `platform`, `katagogion`), `ACQUISITION_BRIDGE_IS_WIRED_ONLY_AT_COMPOSITION_ROOT`, `APPLICATION_MUST_NOT_DECIDE_POLICIES`, `APPLICATION_MUST_NOT_HOLD_STATIC_STATE`. Bestehende Regeln, inklusive Secret-Containment, sind unverändert.
+- **Leitplanke 6 (Secret-Quellen)** ist noch nicht umgesetzt: `file:` braucht keine Credentials; die Adyton-Station folgt in Slice 3.
